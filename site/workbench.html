@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="both">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工作台 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<!--
+  ============================================================
+  工作台 —— 「让 AI 生产工作台」（第 41 轮立的形态，第 43 轮清完其余页签）
+  ------------------------------------------------------------
+  用户原话（把方向一次说清的那句）：
+  「不是，不是让你做个我已经有的工作台，我是让你做个让 ai 生产工作台」
+
+  🔴 所以本页**只有这一件事**：说清想要什么 → AI 现场写一个 → 打开就能用。
+     ⚠️ 前两轮把它理解成了「照抄账本/校园事务台的形态」，都不对 —— 要的是**能力**，不是形态。
+
+  🔴 已按用户要求整体移除（**别再摆回来**）：
+     · 第 38 轮的「教学模拟」（一句话生成学科交互页，下发给学生玩）
+     · 第 40 轮的「事务台」（批改/审核/发布那种清单面板，`st_desk`）
+     移除记录见 `.workbuddy/memory/ROUNDS.md`。
+
+  页面结构就三块：
+    ① 生成区   需求输入 + 示例 chips + 「让 AI 造一个」+ 进度/如实拒绝
+    ② 列表     老师：我造的工作台（打开/下发/改名/删除）
+               学生：老师发来的 + 我自己造的（只打开）
+    ③ 弹窗     打开（同源沙箱 iframe，数据存得住）/ 看代码 / 下发给学生
+
+  🔴 数据来源：`nav.js`（`st_sim` 键 —— 名字是历史遗留，现在只存工作台）。
+     生成走 `generateSimHtml(goal,{kind:"workbench"})`，页面不发请求、不写提示词。
+  ============================================================
+-->
+<style>
+  /* ============================================================
+     工作台（AI 工作台）—— 布局与配色
+     ------------------------------------------------------------
+     🔴 本页**只有这一件事**：说清想要什么 → AI 现场写一个 → 打开就能用。
+        第 38 轮的「教学模拟」与第 40 轮的「事务台」已按用户要求整体移除
+        （数据层见 nav.js 的说明）。**别再摆回来。**
+     🔴 用 design.css 的语义令牌（--card/--border/--primary…），
+        **不要写死颜色**，否则切主题（Cream/默认/深色）会有一块不合群
+     ============================================================ */
+  .work-wrap { padding: 0; max-width: none; }
+  .dk { padding: 16px 18px 40px; box-sizing: border-box; }
+
+  .dk-card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 15px; }
+  .dk-card + .dk-card { margin-top: 14px; }
+  .dk-card h2 { margin: 0 0 12px; font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .dk-card .sub { font-size: 12px; font-weight: 400; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+
+  .dk-list-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .dk-empty { text-align: center; color: var(--muted-foreground); font-size: 13px; padding: 34px 18px; border: 1px dashed var(--border); border-radius: 12px; }
+  .dk-hint { font-size: 12px; color: var(--muted-foreground); margin: 8px 0 0; }
+  .dk-hint.err { color: var(--destructive); }
+
+  /* 弹窗里的就地输入框（改名用） */
+  .dk-fld { display: block; margin-bottom: 10px; }
+  .dk-fld .lab { display: block; font-size: 12px; color: var(--muted-foreground); margin-bottom: 5px; }
+  .dk-fld input {
+    width: 100%; box-sizing: border-box; font-family: inherit; font-size: 13px;
+    background: var(--background); color: var(--foreground);
+    border: 1px solid var(--input); border-radius: 9px; padding: 8px 10px; outline: none;
+  }
+  .dk-fld input:focus { border-color: var(--ring); }
+
+  /* 轻提示（toast）：顶部一条横幅，几秒后自己收 */
+  .dk-banner {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px;
+    padding: 10px 13px; border-radius: 11px; margin-bottom: 13px;
+    background: var(--info-surface); border: 1px solid color-mix(in srgb, var(--info) 26%, transparent); color: var(--info-foreground);
+  }
+  .dk-banner .tx { flex: 1 1 auto; min-width: 0; }
+
+  /* ---------- 生成区 ---------- */
+  .app-ask-card h2 { margin-bottom: 6px; }
+  .sm-lead { color: var(--muted-foreground); font-size: 12.5px; line-height: 1.7; margin: 6px 0 10px; }
+  .app-ask {
+    width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; line-height: 1.65;
+    color: var(--foreground); background: var(--background); border: 1px solid var(--border);
+    border-radius: 11px; padding: 12px 14px; resize: vertical; min-height: 78px; margin-bottom: 10px;
+  }
+  .app-ask:focus { outline: none; border-color: var(--primary); }
+  .app-egs { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 13px; }
+  .app-eg {
+    font-size: 12.5px; padding: 5px 12px; border-radius: 99px; cursor: pointer;
+    background: var(--muted); color: var(--muted-foreground); border: 1px solid transparent;
+    font-family: inherit; text-align: left;
+  }
+  .app-eg:hover { color: var(--foreground); border-color: var(--border); }
+  .app-eg:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  .sm-make-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  /* 生成进度：绝不留给用户一片空白 */
+  .sm-progress {
+    margin-top: 12px; padding: 11px 13px; border-radius: 11px; font-size: 12.5px; line-height: 1.6;
+    background: var(--info-surface); border: 1px solid color-mix(in srgb, var(--info) 26%, transparent); color: var(--info-foreground);
+  }
+  .sm-progress.err { background: color-mix(in srgb, var(--destructive) 9%, transparent); border-color: color-mix(in srgb, var(--destructive) 32%, transparent); color: var(--destructive); }
+  .sm-dots::after { content: "…"; animation: smDots 1.2s steps(4, end) infinite; }
+  @keyframes smDots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+
+  /* ---------- 工作台卡片 ---------- */
+  .sm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(228px, 1fr)); gap: 11px; }
+  .sm-grid-title {
+    grid-column: 1 / -1; margin: 2px 0 -3px; font-size: 12.5px; font-weight: 700;
+    color: var(--muted-foreground); letter-spacing: .2px;
+  }
+  .sm-card { background: var(--background); border: 1px solid var(--border); border-radius: 12px; padding: 12px 13px; display: flex; flex-direction: column; gap: 8px; }
+  .sm-card h3 { margin: 0; font-size: 13.5px; font-weight: 700; }
+  .sm-card .sm-goal { font-size: 12px; color: var(--muted-foreground); line-height: 1.6; min-height: 2.4em; }
+  .sm-card .sm-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted-foreground); }
+  .sm-card .sm-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+  .sm-chip { font-size: 11.5px; padding: 2px 9px; border-radius: 20px; background: var(--muted); color: var(--muted-foreground); font-weight: 600; }
+  .sm-chip.ok    { background: var(--success-surface); color: var(--success-foreground); }
+  .sm-chip.warnb { background: var(--warning-surface); color: var(--warning-foreground); }
+
+  /* ---------- 打开工作台的弹窗（沙箱 iframe） ---------- */
+  .sm-modal { display: flex; flex-direction: column; gap: 11px; }
+  .sm-frame { width: 100%; height: 420px; border: 1px solid var(--border); border-radius: 11px; background: #fff; }
+  .sm-code { max-height: 300px; overflow: auto; font-size: 11.5px; line-height: 1.55; background: var(--muted); padding: 11px; border-radius: 10px; white-space: pre-wrap; word-break: break-all; }
+
+  /* ---------- 下发名单 ---------- */
+  .sm-people { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow: auto; }
+  .sm-person { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; font-size: 13px; }
+  .sm-person:hover { background: var(--background); }
+  .sm-person input { width: auto; margin: 0; accent-color: var(--primary); }
+  .sm-person .k { margin-left: auto; color: var(--muted-foreground); font-size: 11.5px; }
+
+  .dk-foot { color: var(--muted-foreground); font-size: 12px; line-height: 1.7; margin-top: 22px; }
+  .dk-foot code { font-size: 11.5px; background: var(--muted); padding: 1px 5px; border-radius: 5px; }
+
+  @media (max-width: 520px) {
+    .sm-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<div class="page-wrap work-wrap">
+  <div class="page dk">
+    <div id="appBannerBox"></div>
+
+    <!-- ⓐ AI 工作台（第 41 轮核心）：说一句想要什么 → AI 现场写一个 → 打开就能用 -->
+    <div id="tabApps">
+
+      <section class="dk-card app-ask-card">
+        <h2>说一句你想要的 <span class="sub">AI 现场给你写一个能用的工作台</span></h2>
+        <p class="sm-lead">不用挑模板。说清「管什么、要看到什么」，它会写成一个带数据存储的小工具 ——
+          能加、能勾、能删，刷新不丢。</p>
+        <textarea id="appAsk" class="app-ask" rows="3" maxlength="500"
+                  placeholder="例：我要一个跟踪全班作业提交情况的面板，能勾谁交了、一眼看出还差几个人"></textarea>
+        <div class="app-egs" id="appExamples"></div>
+        <div class="sm-make-row">
+          <button class="btn btn-primary" id="appMake" type="button">让 AI 造一个</button>
+          <button class="btn" id="appGoSettings" type="button" hidden>去设置填 Key</button>
+          <span class="dk-hint" id="appMakeHint">生成要等十几秒 —— 期间别刷新页面。</span>
+        </div>
+        <div class="sm-progress" id="appProgress" hidden></div>
+      </section>
+
+      <section class="dk-card">
+        <div class="dk-list-head">
+          <h2 style="margin:0"><span id="appListTitle">我的工作台</span> <span class="sub" id="appCount">0 个</span></h2>
+        </div>
+        <div id="appGrid" class="sm-grid"></div>
+      </section>
+
+      <p class="dk-foot">
+        工作台是 AI 按你的描述现写的单文件页面，数据存在它自己的浏览器存储里（不经过任何服务器）。<br>
+        它跑在同源沙箱里，所以能存住数据；但生成前请确认你已经接入了自己的模型 Key。
+      </p>
+    </div><!-- /#tabApps -->
+
+  </div>
+</div>
+
+<!-- 就地编辑 / 确认弹窗的宿主（内容页自己的，不能用壳的） -->
+<div id="modalHost" hidden></div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+/* ============================================================
+   工作台 —— 页面逻辑（第 41 轮起：**让 AI 生产工作台**）
+   ------------------------------------------------------------
+   本页只做一件事：**说清想要什么 → AI 现场写一个工作台 → 打开就能用**。
+
+   🔴 四条纪律（验证器断言）
+    1. **生成走 nav.js 的调用层**：`generateSimHtml(goal, { kind:"workbench" })`
+       —— 页面自己不发请求，也不写提示词
+    2. **落库走数据层**（`createSim` / `updateSim` / `deleteSim` / `sendSimTo`…），
+       页面**不许直接碰 localStorage**
+    3. **未接模型时如实拒绝**（未接模型/没 Key/失败 → 说清原因 + 指路设置），
+       **绝不塞一个假的工作台**
+    4. **学生手里那份是老师发来的**：取数用 `simOfAnywhere()`、写反馈用 `simWriteTo()`，
+       因为记录不在学生的桶里（见 nav.js 的下发一节）
+   ============================================================ */
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  /* ---------------- 角色 ---------------- */
+
+  /**
+   * 当前角色。`currentRoleOf()` 来自 nav.js（先看 st_current_user，再看 st_role cookie）。
+   * 🔴 教师端能下发、学生端只看到"老师发来的" —— 全靠这一个值分叉，**别在本页写死**。
+   */
+  var ROLE = (typeof currentRoleOf === "function") ? currentRoleOf() : "teacher";
+  var IS_T = ROLE !== "student";
+
+  /* ---------------- 小工具 ---------------- */
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  /** 轻提示：页面顶部横幅式的短消息（几秒后自己收） */
+  var toastTimer = null;
+  function toast(msg) {
+    var box = $("appBannerBox");
+    var el = document.createElement("div");
+    el.className = "dk-banner";
+    var tx = document.createElement("span");
+    tx.className = "tx";
+    tx.textContent = msg;
+    el.appendChild(tx);
+    box.innerHTML = "";
+    box.appendChild(el);
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { if (box.firstChild === el) box.innerHTML = ""; }, 2600);
+  }
+
+  /* ---------------- 弹窗（内容页自己的宿主） ---------------- */
+
+  /**
+   * 确认框 —— 走 `core.js` 的 `pageModalHost()`。
+   * 🔴 内容页**不能**用壳的 `#modalHost`（那个节点在壳的文档里，iframe 内取不到）。
+   * 返回 Promise<boolean>。
+   */
+  function confirmBox(title, text, okLabel, danger) {
+    return new Promise(function (resolve) {
+      var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+      host.hidden = false;
+      host.className = "modal-host";
+      host.innerHTML =
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          '<div class="modal-head"><b>' + esc(title) + '</b></div>' +
+          '<div class="modal-body"><p style="margin:0;font-size:13px;line-height:1.6">' + esc(text) + '</p></div>' +
+          '<div class="modal-foot">' +
+            '<button class="btn" data-mc="no" type="button">取消</button>' +
+            '<button class="btn btn-primary" data-mc="ok" type="button">' + esc(okLabel || "确认") + '</button>' +
+          '</div>' +
+        '</div>';
+      if (danger) {
+        var ok = host.querySelector('[data-mc="ok"]');
+        if (ok) { ok.className = "btn btn-danger"; }
+      }
+      document.body.classList.add("modal-open");
+
+      function done(v) {
+        host.hidden = true;
+        host.innerHTML = "";
+        document.body.classList.remove("modal-open");
+        host.removeEventListener("click", onClick);
+        document.removeEventListener("keydown", onKey);
+        resolve(v);
+      }
+      function onClick(e) {
+        var b = e.target.closest ? e.target.closest("[data-mc]") : null;
+        if (b) { done(b.getAttribute("data-mc") === "ok"); return; }
+        if (e.target === host) done(false);
+      }
+      function onKey(e) { if (e.key === "Escape") done(false); }
+      host.addEventListener("click", onClick);
+      document.addEventListener("keydown", onKey);
+    });
+  }
+
+  /** 就地编辑输入框（改名 / 改目标用）—— 不调 window.prompt（jsdom 与沙箱里没有） */
+  function askText(title, label, value, placeholder) {
+    return new Promise(function (resolve) {
+      var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+      host.hidden = false;
+      host.className = "modal-host";
+      host.innerHTML =
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          '<div class="modal-head"><b>' + esc(title) + '</b></div>' +
+          '<div class="modal-body">' +
+            '<label class="dk-fld"><span class="lab">' + esc(label) + '</span>' +
+            '<input id="dkAskInput" type="text" value="' + esc(value || "") + '" placeholder="' + esc(placeholder || "") + '"></label>' +
+          '</div>' +
+          '<div class="modal-foot">' +
+            '<button class="btn" data-mc="no" type="button">取消</button>' +
+            '<button class="btn btn-primary" data-mc="ok" type="button">保存</button>' +
+          '</div>' +
+        '</div>';
+      document.body.classList.add("modal-open");
+      var input = host.querySelector("#dkAskInput");
+      if (input) setTimeout(function () { input.focus(); }, 30);
+
+      function done(v) {
+        host.hidden = true;
+        host.innerHTML = "";
+        document.body.classList.remove("modal-open");
+        host.removeEventListener("click", onClick);
+        host.removeEventListener("keydown", onKey);
+        resolve(v);
+      }
+      function onClick(e) {
+        var b = e.target.closest ? e.target.closest("[data-mc]") : null;
+        if (b) {
+          if (b.getAttribute("data-mc") === "ok") done(input ? String(input.value || "").trim() : "");
+          else done(null);
+          return;
+        }
+        if (e.target === host) done(null);
+      }
+      function onKey(e) {
+        if (e.key === "Escape") done(null);
+        if (e.key === "Enter" && e.target === input) { e.preventDefault(); done(String(input.value || "").trim()); }
+      }
+      host.addEventListener("click", onClick);
+      host.addEventListener("keydown", onKey);
+    });
+  }
+
+  function simProviderLabel(s) {
+    var p = (s && s.provider) || "";
+    if (p === "sample") return "预置示例";
+    if (LLM_PROVIDERS[p]) return LLM_PROVIDERS[p].label;
+    return p || "未知来源";
+  }
+
+  function simBtn(label, act, cls) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn btn-sm" + (cls ? " " + cls : "");
+    b.textContent = label;
+    b.setAttribute("data-a", act);
+    return b;
+  }
+
+  /**
+   * 🔴 沙箱 iframe 的公共构造 —— 多处共用，别各写一份（隔离属性容易漏）。
+   * `opts.persist` 决定给不给同源：
+   *   - 教学模拟（默认）：`sandbox="allow-scripts"`，**不给 allow-same-origin**
+   *     —— 那是模型现写、给学生玩的代码，碰不到应用数据才安全
+   *   - AI 工作台（persist:true）：额外给 `allow-same-origin`
+   *     —— 工作台要 localStorage 存自己的数据，刷新不丢（否则一刷新就空）
+   */
+  function simFrameEl(s, opts) {
+    var o = opts || {};
+    var f = document.createElement("iframe");
+    f.className = "sm-frame";
+    f.setAttribute("sandbox", o.persist ? "allow-scripts allow-same-origin" : "allow-scripts");
+    f.setAttribute("referrerpolicy", "no-referrer");
+    f.setAttribute("srcdoc", String(s.html || ""));
+    f.setAttribute("title", s.title || "生成的页面");
+    return f;
+  }
+
+  /** 看代码（生成的源码，别让学生以外的人直接改 —— 只读展示） */
+  function showSimCode(s) {
+    var host = pageModalHost();
+    host.hidden = false;
+    host.className = "modal-host";
+    host.innerHTML =
+      '<div class="modal" role="dialog" aria-modal="true" style="max-width:720px">' +
+        '<div class="modal-head"><b>' + esc(s.title) + ' · 生成的代码</b></div>' +
+        '<div class="modal-body"><div class="sm-code"></div></div>' +
+        '<div class="modal-foot"><button class="btn btn-primary" data-mc="ok" type="button">知道了</button></div>' +
+      '</div>';
+    document.body.classList.add("modal-open");
+    host.querySelector(".sm-code").textContent = String(s.html || "");
+    function close() {
+      host.hidden = true; host.innerHTML = "";
+      document.body.classList.remove("modal-open");
+      host.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    }
+    function onClick(e) {
+      var b = e.target.closest ? e.target.closest("[data-mc]") : null;
+      if (b || e.target === host) close();
+    }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    host.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+  }
+
+  /**
+   * 下发名单 —— 模拟器与工作台共用（第 42 轮泛化）。
+   * 🔴 名单来自 `enrolledStudentsOf(课).key`（`student:xxx`），**不能用裸账号名**，否则学生端对不上。
+   * 🔴 没有在课学生时**说清"为什么发不了"**，不假装发出去了。
+   * 🔴 空名单同样如实报错（`sendSimTo` 会挡）。
+   * `onDone`：发完刷新哪个列表（默认模拟列表；工作台传 `renderAppList`）。
+   */
+  function askSendSim(s, onDone) {
+    var courses = (typeof COURSES !== "undefined" && COURSES) ? COURSES : [];
+    var all = [];
+    courses.forEach(function (c) {
+      var studs = (typeof enrolledStudentsOf === "function") ? enrolledStudentsOf(c.id) : [];
+      studs.forEach(function (st) {
+        all.push({ key: st.key, name: st.name || st.user, course: c.name || c.id });
+      });
+    });
+    // 去重（一个学生可能在多门课里）
+    var seen = {}, people = [];
+    all.forEach(function (p) { if (!seen[p.key]) { seen[p.key] = 1; people.push(p); } });
+
+    // 已经发过的标出来（老师一眼知道谁有谁没有）
+    var sentWho = {};
+    (s.sentTo || []).forEach(function (x) { sentWho[String((x && x.who) || "").toLowerCase()] = 1; });
+
+    var host = pageModalHost();
+    host.hidden = false;
+    host.className = "modal-host";
+
+    if (!people.length) {
+      // 🔴 没有在课学生时说清"为什么发不了"，不假装发出去了
+      host.innerHTML =
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          '<div class="modal-head"><b>下发给学生</b></div>' +
+          '<div class="modal-body"><p style="margin:0;font-size:13px;line-height:1.7">' +
+            '现在还没有学生加入你的课程，所以没有人可以发。<br>' +
+            '先去「教学 · 课程成员」把邀请码给学生，他们加入后这里就能选了。' +
+          '</p></div>' +
+          '<div class="modal-foot"><button class="btn btn-primary" data-mc="ok" type="button">知道了</button></div>' +
+        '</div>';
+      document.body.classList.add("modal-open");
+    } else {
+      var rows = people.map(function (p) {
+        var done = sentWho[String(p.key).toLowerCase()]
+          ? '<span class="sm-chip ok">已发</span>' : '';
+        return '<label class="sm-person"><input type="checkbox" data-who="' + esc(p.key) + '">' +
+          '<span>' + esc(p.name) + '</span>' + done +
+          '<span class="k">' + esc(p.course) + '</span></label>';
+      }).join("");
+      host.innerHTML =
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          '<div class="modal-head"><b>把「' + esc(s.title) + '」发给谁</b></div>' +
+          '<div class="modal-body"><div class="sm-people">' + rows + '</div>' +
+            '<p class="dk-hint" style="margin-top:10px">发给同一个学生不会重复记录，只是刷新一下时间。' +
+            '发出去后，学生打开工作台就能直接用。</p></div>' +
+          '<div class="modal-foot">' +
+            '<button class="btn" data-mc="no" type="button">取消</button>' +
+            '<button class="btn btn-primary" data-mc="ok" type="button">确认下发</button>' +
+          '</div>' +
+        '</div>';
+      document.body.classList.add("modal-open");
+    }
+
+    function close() {
+      host.hidden = true; host.innerHTML = "";
+      document.body.classList.remove("modal-open");
+      host.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    }
+    function onClick(e) {
+      var b = e.target.closest ? e.target.closest("[data-mc]") : null;
+      if (!b) { if (e.target === host) close(); return; }
+      if (b.getAttribute("data-mc") !== "ok") { close(); return; }
+      if (!people.length) { close(); return; }
+      var picked = [];
+      Array.prototype.forEach.call(host.querySelectorAll("[data-who]"), function (i) {
+        if (i.checked) picked.push(i.getAttribute("data-who"));
+      });
+      var r = sendSimTo(s.id, picked);
+      if (!r.ok) { toast(r.error); return; }   // 空名单如实报错，不假装发出去了
+      toast("已下发给 " + (r.added + r.updated) + " 位学生" + (r.updated ? "（其中 " + r.updated + " 位是重发）" : ""));
+      close();
+      if (onDone) onDone();
+    }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    host.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+  }
+
+
+  /** 去设置页 */
+  function goSettings() {
+    if (typeof standaloneGo === "function" && !inShell()) standaloneGo("settings.html");
+    else if (typeof navigate === "function") navigate("settings.html");
+    else window.location.href = "settings.html";
+  }
+
+  /* ============================================================
+     ⓐ AI 工作台（第 41 轮，本页核心）
+     ------------------------------------------------------------
+     用户原话：「不是让你做个我已经有的工作台，我是让你做个让 ai 生产工作台」
+     —— 所以这一页的主交互是：**说清想要什么 → AI 现场写一个 → 打开就能用**。
+
+     🔴 与「教学模拟」的唯一区别：产物是**给自己用的管理面板**，数据要存得住，
+        所以它跑在**同源**沙箱里（allow-same-origin）。
+        教学模拟仍然不给同源（那是模型现写给学生的代码，碰不到应用数据才安全）。
+     ============================================================ */
+
+  var APP_EGS = [
+    "跟踪全班作业提交情况，勾谁交了、一眼看出还差几个人",
+    "记录每节课的课堂表现，能加评语和星级",
+    "整理错题本，按知识点分类、标记已掌握",
+    "排一份复习计划，按天列任务、勾掉完成的",
+    "记录实训器材领用，按小组汇总用量",
+  ];
+
+  /** 示例 chips —— 点一下填进输入框（不自动生成，用户还能改） */
+  function renderAppExamples() {
+    var box = $("appExamples");
+    box.innerHTML = "";
+    APP_EGS.forEach(function (text) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "app-eg";
+      b.textContent = text;
+      b.addEventListener("click", function () {
+        $("appAsk").value = text;
+        $("appAsk").focus();
+      });
+      box.appendChild(b);
+    });
+  }
+
+  /** 跨列的小标题（grid 里分隔两批卡片） */
+  function secTitle(text) {
+    var h = document.createElement("h3");
+    h.className = "sm-grid-title";
+    h.textContent = text;
+    return h;
+  }
+
+  /**
+   * 我的工作台列表。
+   * 🔴 学生端分两批：**老师发来的**（跨账号桶读，第 42 轮修）+ **我自己造的**。
+   *    教师端只有一批（我造的），卡片多一个「下发给学生」。
+   */
+  function renderAppList() {
+    var grid = $("appGrid");
+    grid.innerHTML = "";
+
+    var mine = [], shared = [];
+    if (IS_T) {
+      mine = appsOfKind(SIMS || [], "workbench");
+    } else {
+      var me = currentUserKey();
+      mine = appsOfKind(SIMS || [], "workbench").filter(function (s) {
+        return String(s.createdBy || "").toLowerCase() === String(me).toLowerCase();
+      });
+      var mineIds = {};
+      mine.forEach(function (s) { mineIds[s.id] = 1; });
+      shared = appsOfKind(simsForStudent(me), "workbench").filter(function (s) {
+        return !mineIds[s.id];      // 同 id 去重：种子里两端各存了一份
+      });
+    }
+
+    $("appListTitle").textContent = IS_T ? "我造的工作台" : "我的工作台";
+    $("appCount").textContent = (mine.length + shared.length) + " 个";
+
+    if (!mine.length && !shared.length) {
+      var e = document.createElement("div");
+      e.className = "dk-empty";
+      e.textContent = "还没有工作台。在上面说一句你想要的，AI 会现场给你写一个出来。";
+      /* 万一这个账号有旧存档（第 38-40 轮只有教学模拟），给一个一键看示例的入口，
+         免得第一眼是空的 —— 但**不自动塞**，尊重"存档优先于种子" */
+      var sbtn = document.createElement("button");
+      sbtn.type = "button";
+      sbtn.className = "btn btn-sm";
+      sbtn.style.marginTop = "12px";
+      sbtn.textContent = "先看一个示例工作台";
+      sbtn.setAttribute("data-a", "app-seed");
+      var wrap = document.createElement("div");
+      wrap.appendChild(sbtn);
+      e.appendChild(wrap);
+      grid.appendChild(e);
+      return;
+    }
+
+    if (shared.length) {
+      grid.appendChild(secTitle("老师发来的 · " + shared.length + " 个（打开就能用）"));
+      shared.forEach(function (s) { grid.appendChild(appCard(s, { shared: true })); });
+    }
+    if (mine.length) {
+      grid.appendChild(secTitle((IS_T ? "我造的" : "我自己造的") + " · " + mine.length + " 个"));
+      mine.forEach(function (s) { grid.appendChild(appCard(s)); });
+    }
+  }
+
+  /** 生成区上方那行状态：说清现在到底能不能真生成 */
+  function renderAppHead() {
+    var ok = llmReady();
+    var h = $("appMakeHint");
+    h.textContent = ok
+      ? "已接入 " + llmConfig().cfg.label + "，可以现场生成。"
+      : llmStatusText();
+    h.className = "dk-hint" + (ok ? "" : " err");
+  }
+
+  /**
+   * 一张工作台卡片 —— ⚠️ 子节点逐个 el() + appendChild（桩化 DOM 只还原顶层节点）。
+   * `opts.shared`：学生端「老师发来的」那一批（动作少一个「改名」—— 不是他的东西）。
+   */
+  function appCard(s, opts) {
+    var shared = !!(opts && opts.shared);
+    var card = document.createElement("div");
+    card.className = "sm-card";
+    card.setAttribute("data-app", s.id);
+
+    var h3 = document.createElement("h3");
+    h3.textContent = s.title || "未命名工作台";
+    card.appendChild(h3);
+
+    var goal = document.createElement("div");
+    goal.className = "sm-goal";
+    goal.textContent = s.goal || "";
+    card.appendChild(goal);
+
+    var meta = document.createElement("div");
+    meta.className = "sm-meta";
+    var chip = document.createElement("span");
+    chip.className = "sm-chip ok";
+    chip.textContent = "可打开";
+    meta.appendChild(chip);
+    if (shared) {
+      // 学生端：说清这是谁发来的（不写死"老师"，取真实账号名）
+      var from = document.createElement("span");
+      from.textContent = "由 " + (typeof accountDisplayName === "function"
+        ? accountDisplayName(s.createdBy) : "老师") + " 发来";
+      meta.appendChild(from);
+    } else {
+      var by = document.createElement("span");
+      by.textContent = simProviderLabel(s);
+      meta.appendChild(by);
+    }
+    if (IS_T && s.sentTo && s.sentTo.length) {
+      var sent = document.createElement("span");
+      sent.textContent = "已发 " + s.sentTo.length + " 人";
+      meta.appendChild(sent);
+    }
+    card.appendChild(meta);
+
+    var acts = document.createElement("div");
+    acts.className = "sm-acts";
+    acts.appendChild(simBtn("打开", "app-open", "btn-primary"));
+    if (IS_T) {
+      acts.appendChild(simBtn("下发给学生", "app-send"));
+      acts.appendChild(simBtn("改名", "app-rename"));
+      var del = simBtn("删除", "app-del");
+      del.className = "btn btn-sm dk-danger";
+      acts.appendChild(del);
+    }
+    card.appendChild(acts);
+    return card;
+  }
+
+  /** 打开一个工作台 —— 同源沙箱（它要存自己的数据） */
+  function openApp(id) {
+    var s = simOfAnywhere(id);
+    if (!s) { toast("这个工作台已经不在了"); return; }
+    var host = pageModalHost();
+    host.hidden = false;
+    host.className = "modal-host";
+    host.innerHTML =
+      '<div class="modal sm-modal-host" role="dialog" aria-modal="true">' +
+        '<div class="modal-head"><b>' + esc(s.title) + '</b></div>' +
+        '<div class="modal-body sm-modal">' +
+          '<div class="sm-frame-slot"></div>' +
+          '<p class="dk-hint">这是 AI 按你的描述写的页面；数据存在它自己的浏览器存储里，刷新不丢。</p>' +
+        '</div>' +
+        '<div class="modal-foot">' +
+          '<button class="btn" data-app-act="reload" type="button">重载</button>' +
+          '<button class="btn" data-app-act="code" type="button">看代码</button>' +
+          '<button class="btn" data-app-act="close" type="button">关闭</button>' +
+          (IS_T ? '<button class="btn btn-primary" data-app-act="send" type="button">下发给学生</button>' : '') +
+        '</div>' +
+      '</div>';
+    document.body.classList.add("modal-open");
+    host.querySelector(".sm-frame-slot").appendChild(simFrameEl(s, { persist: true }));
+
+    function close() {
+      host.hidden = true; host.innerHTML = "";
+      document.body.classList.remove("modal-open");
+      host.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    }
+    function onClick(e) {
+      var b = e.target.closest ? e.target.closest("[data-app-act]") : null;
+      if (!b) { if (e.target === host) close(); return; }
+      var a = b.getAttribute("data-app-act");
+      if (a === "close") { close(); return; }
+      if (a === "reload") {
+        var slot = host.querySelector(".sm-frame-slot");
+        slot.innerHTML = "";
+        slot.appendChild(simFrameEl(s, { persist: true }));
+        return;
+      }
+      if (a === "code") { close(); showSimCode(s); return; }
+      if (a === "send") { close(); askSendSim(s, renderAppList); return; }
+    }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    host.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+  }
+
+  /** 生成工作台 —— 🔴 未接模型时如实说明 + 指路，不发请求、不塞假货 */
+  function makeApp() {
+    var goal = String($("appAsk").value || "").trim();
+    var prog = $("appProgress");
+    function showProg(html, isErr) {
+      prog.hidden = false;
+      prog.className = "sm-progress" + (isErr ? " err" : "");
+      prog.innerHTML = html;
+    }
+    if (!goal) {
+      showProg("先说一句你想要什么样的工作台 —— 说清「管什么、要看到什么」就好。", true);
+      $("appAsk").focus();
+      return;
+    }
+    if (!llmReady()) {
+      showProg(esc(llmStatusText()) +
+        '<br><button class="btn btn-sm btn-primary" id="appGoSet2" type="button" style="margin-top:8px">去设置填 Key</button>', true);
+      var g2 = $("appGoSet2");
+      if (g2) g2.addEventListener("click", goSettings);
+      $("appGoSettings").hidden = false;
+      return;
+    }
+    var btn = $("appMake");
+    btn.disabled = true;
+    showProg('<span class="sm-dots">正在让 AI 写这个工作台，要等十几秒</span><br>' +
+      '它会写一个完整的单文件页面（含数据存储、统计、交互）。');
+    $("appGoSettings").hidden = true;
+
+    generateSimHtml(goal, { kind: "workbench" }).then(function (res) {
+      btn.disabled = false;
+      if (!res.ok) {
+        showProg("<b>没能生成。</b>" + esc(res.error || "") + (res.hint ? "<br>" + esc(res.hint) : ""), true);
+        return;
+      }
+      var c = createSim({
+        title: goal.length > 24 ? goal.slice(0, 24) : goal,
+        goal: goal, kind: "workbench", html: res.html,
+        provider: res.provider, model: res.model,
+      });
+      if (!c.ok) { showProg("<b>生成的内容没能通过校验：</b>" + esc(c.error), true); return; }
+      showProg("写好了 —— 已经打开，可以直接用；数据会存在它自己的存储里。", false);
+      $("appAsk").value = "";
+      renderAppList();
+      openApp(c.sim.id);
+    }).catch(function (err) {
+      btn.disabled = false;
+      showProg("<b>出错了：</b>" + esc(String((err && err.message) || err)), true);
+    });
+  }
+
+  $("appMake").addEventListener("click", makeApp);
+  $("appGoSettings").addEventListener("click", goSettings);
+  $("appGrid").addEventListener("click", function (e) {
+    var a = e.target.closest ? e.target.closest("[data-a]") : null;
+    if (!a) return;
+    var act = a.getAttribute("data-a");
+
+    /* 空态那一个「先看一个示例」不在卡片里，先处理掉 */
+    if (act === "app-seed") {
+      var seed = appsOfKind(seedApps(), "workbench")[0];
+      if (!seed) return;
+      var r0 = createSim({
+        title: seed.title, goal: seed.goal, kind: "workbench",
+        html: seed.html, provider: "sample",
+      });
+      if (!r0.ok) { toast(r0.error); return; }
+      renderAppList();
+      openApp(r0.sim.id);
+      return;
+    }
+
+    var card = e.target.closest ? e.target.closest("[data-app]") : null;
+    if (!card) return;
+    var id = card.getAttribute("data-app");
+    var s = simOfAnywhere(id);
+    if (!s) { renderAppList(); return; }
+
+    if (act === "app-open") { openApp(id); return; }
+    if (act === "app-send") { askSendSim(s, renderAppList); return; }
+    if (act === "app-rename") {
+      askText("给工作台改名", "名字", s.title, "例：作业提交跟踪").then(function (v) {
+        if (v == null) return;
+        var r = updateSim(id, { title: v });
+        if (!r.ok) { toast(r.error); return; }
+        toast("改好了");
+        renderAppList();
+      });
+      return;
+    }
+    if (act === "app-del") {
+      confirmBox("删除这个工作台？", "「" + s.title + "」删除后无法恢复。", "删除", true).then(function (ok) {
+        if (!ok) return;
+        deleteSim(id);
+        toast("已删除");
+        renderAppList();
+      });
+      return;
+    }
+  });
+
+
+  /* ============================================================
+     启动
+     ============================================================ */
+  function init() {
+    renderAppExamples();
+    renderAppHead();
+    renderAppList();
+  }
+  init();
+})();
+</script>
+</body>

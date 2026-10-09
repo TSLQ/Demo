@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="teacher">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>实训管理 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  :root { --font-sans: "Inter", system-ui; }
+
+  /* ---------- 工具条 ---------- */
+  .train-bar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 14px; margin-bottom: 16px;
+  }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    border: 1px solid var(--border); border-radius: 999px; background: transparent;
+    color: var(--muted-foreground); font-family: inherit; font-size: 12.5px;
+    padding: 5px 11px; cursor: pointer; transition: background .14s, color .14s, border-color .14s;
+  }
+  .chip:hover { background: var(--secondary); color: var(--foreground); }
+  .chip.on {
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--primary) 32%, transparent);
+    color: var(--foreground);
+  }
+  .tb-spacer { flex: 1 1 auto; }
+  .tb-meta { font-size: 12.5px; color: var(--muted-foreground); }
+
+  /* ---------- 两栏 ---------- */
+  .train-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; }
+  .train-list { padding: 14px; }
+  .tl-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .tl-head h3 { margin: 0; font-size: 13px; font-weight: 500; }
+  .tl-head span { font-size: 12px; color: var(--muted-foreground); }
+
+  .act-list { display: flex; flex-direction: column; gap: 6px; }
+  .act-item {
+    display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left;
+    border: 1px solid transparent; border-radius: 10px; background: transparent;
+    color: var(--foreground); font-family: inherit; cursor: pointer;
+    padding: 10px 11px; transition: background .14s, border-color .14s;
+  }
+  .act-item:hover { background: var(--secondary); }
+  .act-item.on {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    border-color: color-mix(in srgb, var(--primary) 26%, transparent);
+  }
+  .ai-top { display: flex; align-items: flex-start; gap: 8px; }
+  .ai-title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.45; }
+  .ai-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted-foreground); }
+  .ai-time { font-size: 11.5px; color: var(--muted-foreground); }
+  .list-empty { font-size: 12.5px; line-height: 1.8; color: var(--muted-foreground); }
+
+  /* ---------- 右栏 ---------- */
+  .train-pane { padding: 18px; min-height: 320px; }
+  .pane-empty { font-size: 13px; line-height: 1.9; color: var(--muted-foreground); }
+  .pane-empty p { margin: 0 0 9px; }
+
+  .pane-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .ph-main { flex: 1 1 320px; min-width: 0; }
+  .pane-title { width: 100%; font-size: 15px; font-weight: 500; padding: 7px 10px; }
+  .pane-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; font-size: 12.5px; }
+  .muted { color: var(--muted-foreground); font-size: 12.5px; }
+  .ph-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+  .seg-btn {
+    border: 0; background: transparent; color: var(--muted-foreground);
+    font-family: inherit; font-size: 12.5px; padding: 6px 12px; cursor: pointer;
+  }
+  .seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+  .seg-btn:hover { background: var(--secondary); color: var(--foreground); }
+  .seg-btn.on {
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    color: var(--foreground); font-weight: 500;
+  }
+
+  .blk { margin-bottom: 18px; }
+  .blk-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .blk-head h3 { margin: 0; font-size: 13px; font-weight: 500; }
+  .blk-head .hint { font-size: 12px; color: var(--muted-foreground); }
+  .src-line {
+    font-size: 12.5px; color: var(--muted-foreground); line-height: 1.7;
+    padding: 9px 11px; border-radius: 9px; margin-bottom: 10px;
+    background: color-mix(in srgb, var(--primary) 7%, transparent);
+  }
+  .src-line b { color: var(--foreground); font-weight: 500; }
+
+  .stage { border: 1px solid var(--border); border-radius: 11px; padding: 12px; margin-bottom: 9px; }
+  .stage-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  .stage-no {
+    flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; font-variant-numeric: tabular-nums;
+    background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--foreground);
+  }
+  .stage-title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 500; }
+  .stage-tools { display: flex; gap: 3px; flex: 0 0 auto; }
+  .stage-tools .btn { padding: 3px 8px; font-size: 12px; }
+  .stage-tools .btn[disabled] { opacity: .35; cursor: not-allowed; }
+  .stage-del:hover { color: var(--destructive); }
+  .stage-f { display: block; margin-top: 8px; }
+  .stage-f > span { display: block; font-size: 11.5px; color: var(--muted-foreground); margin-bottom: 4px; }
+  .stage-f .input, .stage-f .textarea { width: 100%; font-size: 12.5px; padding: 6px 9px; }
+
+  .switch-row { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; line-height: 1.6; }
+  .switch-row input { margin-top: 3px; flex: 0 0 auto; }
+  .switch-row .sub { display: block; font-size: 12px; color: var(--muted-foreground); margin-top: 3px; }
+
+  .findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .finding { border: 1px solid var(--border); border-left-width: 3px; border-radius: 10px; padding: 10px 11px; }
+  .finding.pinned { border-left-color: var(--success); background: color-mix(in srgb, var(--success) 7%, transparent); }
+  .f-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 5px; font-size: 12.5px; }
+  .f-text { margin: 0 0 8px; font-size: 12.5px; line-height: 1.7; }
+
+  /* ---------- 发布弹窗里的骨架预览 ---------- */
+  .mk-preview { border: 1px solid var(--border); border-radius: 10px; padding: 11px; margin-top: 4px; }
+  .mk-src { font-size: 12.5px; line-height: 1.7; color: var(--muted-foreground); margin-bottom: 8px; }
+  .mk-src b { color: var(--foreground); font-weight: 500; }
+  .mk-steps { display: flex; flex-direction: column; gap: 6px; }
+  .mk-step { font-size: 12.5px; line-height: 1.6; }
+  .mk-step b { font-weight: 500; }
+  .mk-step span { color: var(--muted-foreground); }
+  .mk-empty { font-size: 12.5px; color: var(--muted-foreground); }
+
+  @media (max-width: 900px) {
+    .train-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<div class="page-wrap">
+  <div class="page" style="padding-top:0">
+    <div class="page-head">
+      <div class="crumb">教学 · 实训管理</div>
+      <h1>实训管理</h1>
+      <p>发布探究式实训：把「人类创造它的那条路」提炼成引导骨架，带学生自己走一遍 —— <b>只给路径，不给答案</b>。</p>
+    </div>
+
+    <div class="card train-bar">
+      <div class="chips" id="actFilters"></div>
+      <span class="tb-spacer"></span>
+      <span class="tb-meta" id="actMeta"></span>
+      <button class="btn btn-primary btn-sm" type="button" id="btnNewAct">＋ 发布实训</button>
+    </div>
+
+    <div class="train-grid">
+      <section class="card train-list">
+        <div class="tl-head">
+          <h3>实训活动</h3>
+          <span id="actCount">—</span>
+        </div>
+        <div class="act-list" id="actList"></div>
+      </section>
+
+      <section class="card train-pane" id="actPane"></section>
+    </div>
+
+    <div class="notice notice-info">
+      <span aria-hidden="true">◎</span>
+      <div>
+        <b>为什么是「不给答案，给路径」</b> —— 课程只会讲到结论，但结论是怎么被创造出来的，
+        恰恰是学生最能学东西的地方。所以这里生成的**不是答案卡，是引导骨架**：
+        每一步只给「往哪想」的问题、可查的线索、以及一件能动手做的事。
+        骨架来自 <code>assets/nav.js</code> 的预置路径库（割圆术 / 勾股定理 / 极限思想），
+        没命中关键词就给通用探究骨架。<br>
+        <b>诚实说明</b>：纯静态站不能真的联网检索，「检索创造史」这一步在本版**固化成了本地路径库**，
+        界面上会如实标注命中与否；正式版由模型检索。参与人数与学生「新发现」为<b>预置示例数据</b>。
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+/* ============================================================
+   实训管理（教师端）—— 第 31 轮
+   ------------------------------------------------------------
+   灵感：docs/IDEAS.md
+     · 灵感 01 层 2「实训活动」：教师发布、学生参与、项目制
+     · 灵感 02「学生发起的探究式实训」：发起权不只属于教师；
+       AI 先检索「人类已有的创造路径」→ 提炼成引导骨架 → 带学生自己走完，
+       并允许学生偏离骨架试自己的方向
+
+   🔴 三条不许破的规矩：
+     ① **不给答案**：骨架的每一步只有「问题 / 线索 / 动手做」，
+        终点结论留在 PATH_LIB 的 answerNote 里**只给教师看**（数据层保证不拷进骨架）
+     ② **如实标注来源**：命中路径库 / 通用骨架，都要写在界面上，不假装联网检索过
+     ③ 骨架生成是**本地纯函数**（nav.js 的 draftSkeleton），改一处别处也一致
+
+   数据层全在 nav.js（ACTIVITIES / draftSkeleton / createActivity / updateActivity /
+   deleteActivity / setActivityStatus / addStage / removeStage / moveStageBy …），
+   本页只负责渲染与收集输入 —— 与课程、教案两套保持同一个分工。
+   ============================================================ */
+
+const VIEW = { filter: "all", currentId: "" };
+
+/** 状态筛选条（顺序与 ACTIVITY_STATUS 的语义一致） */
+const FILTERS = [
+  { k: "all",   label: "全部"   },
+  { k: "draft", label: "草案"   },
+  { k: "open",  label: "进行中" },
+  { k: "done",  label: "已归档" },
+];
+
+/* ---------------- 轻提示（样式在 design.css 的 #flash）---------------- */
+let flashTimer = 0;
+function flash(msg, tone) {
+  let box = document.getElementById("flash");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "flash";
+    document.body.appendChild(box);
+  }
+  box.className = tone || "";
+  box.textContent = msg;
+  box.hidden = false;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { box.hidden = true; }, 2800);
+}
+
+/* ---------------- 选择与筛选 ---------------- */
+
+function currentActivity() {
+  return activityOf(VIEW.currentId) || ACTIVITIES[0] || null;
+}
+
+function visibleActivities() {
+  const all = ACTIVITIES.slice();
+  if (VIEW.filter === "all") return all;
+  return all.filter((a) => a.status === VIEW.filter);
+}
+
+/** 当前选中项必须在筛选结果里 —— 否则自动落到第一条（别停在看不见的项上） */
+function ensureCurrent() {
+  const list = visibleActivities();
+  if (list.some((a) => a.id === VIEW.currentId)) return;
+  VIEW.currentId = list.length ? list[0].id : "";
+}
+
+function courseName(id) {
+  const c = (typeof COURSES !== "undefined" ? COURSES : []).find((x) => x.id === id);
+  return c ? c.name : "";
+}
+
+/* ---------------- 渲染：筛选条 / 列表 / 概览 ---------------- */
+
+function renderFilters() {
+  const box = $("#actFilters");
+  if (!box) return;
+  box.innerHTML = FILTERS.map((f) => {
+    const n = f.k === "all" ? ACTIVITIES.length : ACTIVITIES.filter((a) => a.status === f.k).length;
+    return `<button class="chip${VIEW.filter === f.k ? " on" : ""}" type="button"
+                    data-filter="${f.k}" aria-pressed="${VIEW.filter === f.k}">${f.label} ${n}</button>`;
+  }).join("");
+}
+
+function renderMeta() {
+  const meta = $("#actMeta");
+  if (meta) {
+    const pend = pendingStudentActivities();
+    meta.textContent = `共 ${ACTIVITIES.length} 条` +
+      (pend ? ` · ${pend} 条学生发起待确认` : "");
+  }
+  const count = $("#actCount");
+  if (count) {
+    const list = visibleActivities();
+    count.textContent = VIEW.filter === "all"
+      ? `${list.length} 条`
+      : `${list.length} / ${ACTIVITIES.length} 条`;
+  }
+}
+
+function actItemHtml(a) {
+  const st = activityStatus(a.status);
+  const pill = st.tone === "ok" ? "st-ok" : st.tone === "warn" ? "st-warn" : "";
+  const skel = a.skeleton || { stages: [] };
+  return `
+    <button class="act-item${a.id === VIEW.currentId ? " on" : ""}" type="button"
+            data-act-id="${a.id}" aria-current="${a.id === VIEW.currentId}">
+      <span class="ai-top">
+        <span class="ai-title">${escHtml(a.title)}</span>
+        <span class="status-pill ${pill}">${st.label}</span>
+      </span>
+      <span class="ai-meta">
+        <span class="tag${a.origin === "student" ? " tag-warning" : ""}">${activityOrigin(a.origin)}</span>
+        <span>${(skel.stages || []).length} 步</span>
+        <span>${a.participants.length} 人</span>
+        ${a.findings.length ? `<span>${a.findings.length} 条新发现</span>` : ""}
+      </span>
+      <span class="ai-time">${agoText(a.updatedAt, Date.now())}${courseName(a.courseId) ? " · " + escHtml(courseName(a.courseId)) : ""}</span>
+    </button>`;
+}
+
+function renderList() {
+  const box = $("#actList");
+  if (!box) return;
+  const list = visibleActivities();
+  if (!list.length) {
+    box.innerHTML = `<p class="list-empty">${VIEW.filter === "all"
+      ? "还没有实训活动。点右上角「＋ 发布实训」，写一句目标就能生成引导骨架。"
+      : "这个状态下没有实训。"}</p>`;
+    return;
+  }
+  box.innerHTML = list.map(actItemHtml).join("");
+}
+
+/* ---------------- 渲染：右栏详情 ---------------- */
+
+function statusButtonsHtml(a) {
+  const labels = { draft: "草案", open: "进行中", done: "已归档" };
+  return activityStatusKeys().map((k) =>
+    `<button class="seg-btn${a.status === k ? " on" : ""}" type="button"
+             data-status="${k}" aria-pressed="${a.status === k}">${labels[k]}</button>`).join("");
+}
+
+function stageHtml(st, i, last) {
+  return `
+    <div class="stage" data-stage="${st.id}">
+      <div class="stage-head">
+        <span class="stage-no">${i + 1}</span>
+        <input class="input stage-title" data-field="title" value="${escHtml(st.title)}"
+               placeholder="这一步在干什么（给教师看的抓手）" aria-label="第 ${i + 1} 步的标题">
+        <span class="stage-tools">
+          <button class="btn btn-ghost" type="button" data-act="up" ${i === 0 ? "disabled" : ""} title="上移">↑</button>
+          <button class="btn btn-ghost" type="button" data-act="down" ${last ? "disabled" : ""} title="下移">↓</button>
+          <button class="btn btn-ghost" type="button" data-act="add" title="在下面插入一步">＋</button>
+          <button class="btn btn-ghost stage-del" type="button" data-act="del" title="删除这一步">✕</button>
+        </span>
+      </div>
+      <label class="stage-f">
+        <span>引导问题 · 往哪想（只问方向，别问答案）</span>
+        <textarea class="textarea" data-field="prompt" rows="2"
+                  placeholder="例：我们已经能算哪些图形的面积？圆和它们的差别在哪？">${escHtml(st.prompt)}</textarea>
+      </label>
+      <label class="stage-f">
+        <span>线索 · 去哪儿找（给史料 / 事实，不给结论）</span>
+        <input class="input" data-field="clue" value="${escHtml(st.clue)}"
+               placeholder="例：古人先做的是内接正多边形">
+      </label>
+      <label class="stage-f">
+        <span>动手做 · 一件事</span>
+        <input class="input" data-field="tryIt" value="${escHtml(st.tryIt)}"
+               placeholder="例：估一下正六边形占了圆的几分之几">
+      </label>
+    </div>`;
+}
+
+function findingsHtml(a) {
+  if (!a.findings.length) {
+    return `<p class="muted">还没有学生提交「新发现」。学生在自己的实训页标记「这是我的新发现」后会出现在这里。</p>`;
+  }
+  return `<ul class="findings" id="actFindings">` + a.findings.map((f) => `
+    <li class="finding${f.pinned ? " pinned" : ""}">
+      <div class="f-top">
+        <b>${escHtml(f.who)}</b>
+        <span class="muted">${agoText(f.at, Date.now())}</span>
+        ${f.pinned ? `<span class="tag tag-success">推荐方向</span>` : ""}
+      </div>
+      <p class="f-text">${escHtml(f.text)}</p>
+      <button class="btn btn-ghost btn-sm" type="button" data-pin="${f.id}">
+        ${f.pinned ? "取消推荐" : "标记为推荐方向"}
+      </button>
+    </li>`).join("") + `</ul>`;
+}
+
+function renderPane() {
+  const pane = $("#actPane");
+  if (!pane) return;
+  const a = currentActivity();
+
+  if (!a) {
+    pane.innerHTML = `
+      <div class="pane-empty">
+        <h3 style="margin:0 0 8px;font-size:14px;font-weight:500;color:var(--foreground)">还没有选中实训</h3>
+        <p>左边列表里还没有可管理的活动 —— 点右上角「＋ 发布实训」开始：</p>
+        <p>① 写一句目标（例：圆的面积公式是怎么创造出来的）<br>
+           ② 系统先给出<b>引导骨架</b>预览（命中路径库就用它，否则给通用探究骨架）<br>
+           ③ 你把每一步的措辞改成自己班听得懂的话，再发布出去</p>
+      </div>`;
+    return;
+  }
+
+  const st = activityStatus(a.status);
+  const pill = st.tone === "ok" ? "st-ok" : st.tone === "warn" ? "st-warn" : "";
+  const skel = a.skeleton || { stages: [] };
+  const stages = skel.stages || [];
+  const selected = COURSES.some((c) => c.id === a.courseId) ? a.courseId : "";
+
+  pane.innerHTML = `
+    <div class="pane-head">
+      <div class="ph-main">
+        <input class="input pane-title" id="actTitle" value="${escHtml(a.title)}" aria-label="实训标题">
+        <div class="pane-meta">
+          <span class="status-pill ${pill}">${st.label}</span>
+          <span class="tag${a.origin === "student" ? " tag-warning" : ""}">${activityOrigin(a.origin)}</span>
+          <span class="muted">${a.participants.length} 人参与</span>
+          <span class="muted">更新于 ${agoText(a.updatedAt, Date.now())}</span>
+        </div>
+      </div>
+      <div class="ph-acts">
+        <div class="seg">${statusButtonsHtml(a)}</div>
+        <button class="btn btn-ghost btn-sm" type="button" id="actDel">删除实训</button>
+      </div>
+    </div>
+
+    <div class="blk">
+      <div class="blk-head"><h3>实训目标</h3>
+        <span class="hint">学生看到的「我们要探究什么」</span></div>
+      <textarea class="textarea" id="actGoal" rows="2"
+                placeholder="例：课程只讲了 S=πr²，但它到底是怎么来的？">${escHtml(a.goal)}</textarea>
+      <div class="field" style="margin-top:10px;max-width:280px">
+        <label for="actCourse">关联课程</label>
+        <select class="input" id="actCourse">
+          <option value="">不关联课程</option>
+          ${COURSES.map((c) => `<option value="${escHtml(c.id)}"${c.id === selected ? " selected" : ""}>${escHtml(c.name)}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+
+    <div class="blk">
+      <div class="blk-head">
+        <h3>引导骨架 · 共 ${stages.length} 步</h3>
+        <span class="hint">只给路径 —— 每一步「问题 → 线索 → 动手」，结论留给学生自己走到</span>
+      </div>
+      <div class="src-line" id="actSkelSrc">来源：<b>${escHtml(skeletonSourceText(skel))}</b>
+        ${skel.goal ? `<br>生成依据（一句话目标）：${escHtml(skel.goal)}` : ""}</div>
+      <div id="actStages">
+        ${stages.map((s2, i) => stageHtml(s2, i, i === stages.length - 1)).join("")}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-sm" type="button" id="actAddStep">＋ 加一步</button>
+        <button class="btn btn-ghost btn-sm" type="button" id="actRegen">按目标重新生成骨架</button>
+      </div>
+    </div>
+
+    <div class="blk">
+      <div class="blk-head"><h3>开放性</h3><span class="hint">灵感 02 的要点：允许偏离骨架</span></div>
+      <label class="switch-row">
+        <input type="checkbox" id="actOpenEnded" ${a.openEnded ? "checked" : ""}>
+        <span>允许学生偏离骨架、走自己的方向
+          <span class="sub">开启后学生端会出现「我想试另一条路」，走通的方向可以标记为新发现。
+            关掉就退化成"必须按这条路走完"的普通任务。</span>
+        </span>
+      </label>
+    </div>
+
+    <div class="blk">
+      <div class="blk-head">
+        <h3>学生的新发现 · ${a.findings.length} 条</h3>
+        <span class="hint">预置示例数据 · 系统不自动判定"创新"，靠学生主动标记 + 你推荐</span>
+      </div>
+      ${findingsHtml(a)}
+    </div>`;
+}
+
+function renderAll() {
+  ensureCurrent();
+  renderFilters();
+  renderMeta();
+  renderList();
+  renderPane();
+}
+
+/** 结构变了（增删改状态）→ 重渲染 + 通知壳刷新侧栏徽标 */
+function afterStructureChange() {
+  notifyActivitiesChanged();
+  renderAll();
+}
+
+/** 存一次改动；quiet = 不弹提示（连续输入时用） */
+function savePatch(patch, quiet) {
+  const a = currentActivity();
+  if (!a) return false;
+  const r = updateActivity(a.id, patch);
+  if (!r.ok) { flash(r.error, "bad"); return false; }
+  if (!quiet) flash("已保存", "ok");
+  return true;
+}
+
+/* ---------------- 交互：筛选 / 选活动 ---------------- */
+
+$("#actFilters").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-filter]");
+  if (!b) return;
+  VIEW.filter = b.dataset.filter;
+  renderAll();
+});
+
+$("#actList").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-act-id]");
+  if (!b) return;
+  VIEW.currentId = b.dataset.actId;
+  renderAll();
+});
+
+/* ---------------- 交互：右栏（改字段 / 状态 / 步骤 / 推荐） ---------------- */
+
+/** 字段编辑（失焦触发 change）—— 只重渲染必要处，不夺走输入焦点 */
+$("#actPane").addEventListener("change", (e) => {
+  const a = currentActivity();
+  if (!a) return;
+  const t = e.target;
+
+  if (t.id === "actTitle") { if (savePatch({ title: t.value })) { renderMeta(); renderList(); } return; }
+  if (t.id === "actGoal") { savePatch({ goal: t.value }); return; }
+  if (t.id === "actCourse") { savePatch({ courseId: t.value }); renderList(); return; }
+  if (t.id === "actOpenEnded") {
+    if (savePatch({ openEnded: t.checked })) flash(t.checked ? "已开启：学生可以试别的方向" : "已关闭：必须按骨架走完", "ok");
+    return;
+  }
+
+  // 骨架步骤里的字段（用最近的 [data-stage] 找到是哪一步，不用动态 id）
+  const card = t.closest("[data-stage]");
+  const field = t.dataset.field;
+  if (card && field) {
+    const stage = (a.skeleton.stages || []).find((x) => x.id === card.dataset.stage);
+    if (!stage) return;
+    stage[field] = t.value;
+    savePatch({ skeleton: a.skeleton });          // 数据层会深拷贝规整，不会只改到 UI
+  }
+});
+
+$("#actPane").addEventListener("click", (e) => {
+  const a = currentActivity();
+  if (!a) return;
+
+  /* 状态：草案 → 进行中 → 已归档 */
+  const sb = e.target.closest("[data-status]");
+  if (sb) {
+    const r = setActivityStatus(a.id, sb.dataset.status);
+    if (!r.ok) { flash(r.error, "bad"); return; }
+    flash(`状态已改为「${activityStatus(a.status).label}」`, "ok");
+    afterStructureChange();
+    return;
+  }
+
+  /* 推荐方向：学生新发现 */
+  const pin = e.target.closest("[data-pin]");
+  if (pin) {
+    const r = toggleFindingPin(a.id, pin.dataset.pin);
+    if (!r.ok) { flash(r.error, "bad"); return; }
+    flash(r.finding.pinned ? "已标为推荐方向 —— 学生端会看到" : "已取消推荐", "ok");
+    notifyActivitiesChanged();
+    renderPane();
+    return;
+  }
+
+  /* 骨架步骤：上移 / 下移 / 插入 / 删除 */
+  const act = e.target.closest("[data-act]");
+  if (act) {
+    const card = act.closest("[data-stage]");
+    const sid = card ? card.dataset.stage : "";
+
+    if (act.dataset.act === "add") {
+      addStage(a.id, sid);
+      afterStructureChange();
+      flash("已插入一步", "ok");
+      return;
+    }
+    if (act.dataset.act === "del") {
+      const r = removeStage(a.id, sid);
+      if (!r.ok) { flash(r.error, "bad"); return; }
+      afterStructureChange();
+      flash("已删除这一步", "ok");
+      return;
+    }
+    if (act.dataset.act === "up" || act.dataset.act === "down") {
+      const r = moveStageBy(a.id, sid, act.dataset.act === "up" ? -1 : 1);
+      if (!r.ok) { flash(r.error, "bad"); return; }
+      afterStructureChange();
+      return;
+    }
+  }
+
+  /* 加一步 / 重新生成骨架 / 删除实训 */
+  if (e.target.closest("#actAddStep")) {
+    addStage(a.id, null);
+    afterStructureChange();
+    flash("已在末尾加了一步", "ok");
+    return;
+  }
+
+  if (e.target.closest("#actRegen")) {
+    const goal = a.goal || a.title;
+    const next = draftSkeleton(goal);
+    if (!window.confirm(
+      `按「${goal}」重新生成骨架？\n\n` +
+      `新来源：${skeletonSourceText(next)}\n` +
+      `共 ${next.stages.length} 步 —— 会覆盖当前 ${(a.skeleton.stages || []).length} 步（改过的措辞会丢）。`)) return;
+    const r = updateActivity(a.id, { skeleton: next });
+    if (!r.ok) { flash(r.error, "bad"); return; }
+    afterStructureChange();
+    flash("已按目标重新生成骨架", "ok");
+    return;
+  }
+
+  if (e.target.closest("#actDel")) {
+    const n = activityAssetCount(a.id);
+    let msg = `确定删除实训「${a.title}」吗？`;
+    if (n.stages || n.participants || n.findings) {
+      msg += `\n\n这条实训下的内容会一起删除：${n.stages} 步引导骨架、` +
+             `${n.participants} 名参与者记录、${n.findings} 条学生发现。`;
+    }
+    msg += "\n\n删除后无法撤销。";
+    if (!window.confirm(msg)) return;
+    const r = deleteActivity(a.id);
+    if (!r.ok) { flash(r.error, "bad"); return; }
+    VIEW.currentId = "";
+    afterStructureChange();
+    flash(`已删除「${r.activity.title}」`, "ok");
+  }
+});
+
+/* ============================================================
+   发布实训（内容页弹窗）
+   ------------------------------------------------------------
+   🔴 用 core.js 的 pageModalHost() —— 内容页拿不到壳的 #modalHost。
+   亮点在**实时骨架预览**：一边写目标，一边看到「检索到的路径 → 引导骨架」，
+   把灵感 01 说的那段管线（自然语言 → 结构化结果数据）现场展示出来。
+   ============================================================ */
+
+function courseOptionsHtml() {
+  return COURSES.map((c) => `<option value="${escHtml(c.id)}">${escHtml(c.name)}</option>`).join("");
+}
+
+/** 弹窗里的骨架预览（纯本地，即时） */
+function renderPreview() {
+  const goal = ($("#mkGoal").value || "").trim();
+  const box = $("#mkSrc");
+  const steps = $("#mkStages");
+  if (!box || !steps) return;
+
+  if (!goal) {
+    box.innerHTML = `在下面写一句目标 —— 这里会立刻给出<b>引导骨架</b>的样子（只给路径，不给答案）。`;
+    steps.innerHTML = "";
+    return;
+  }
+  const skel = draftSkeleton(goal);
+  box.innerHTML = `来源：<b>${escHtml(skeletonSourceText(skel))}</b>` +
+    (skel.source === "generic" ? `<br>换个说法试试（比如带上课程里的具体名词）：圆面积 / 勾股定理 / 瞬时变化` : "");
+  steps.innerHTML = skel.stages.map((s, i) => `
+    <div class="mk-step"><b>${i + 1}. ${escHtml(s.title)}</b><br>
+      <span>${escHtml(s.prompt)}</span></div>`).join("");
+}
+
+function closeNewAct() {
+  closePageModal();
+}
+
+function openNewAct() {
+  const host = pageModalHost();
+  host.innerHTML = `
+    <div class="modal-scrim" data-close="1"></div>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="mkTitle">
+      <div class="modal-head">
+        <h3 id="mkTitle">发布实训</h3>
+        <button class="modal-x" type="button" data-close="1" aria-label="关闭">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="field">
+          <label for="mkGoal">一句话目标 <span class="req">*</span></label>
+          <textarea class="textarea" id="mkGoal" rows="3"
+                    placeholder="例：圆的面积公式是怎么创造出来的？"></textarea>
+        </div>
+
+        <div class="field">
+          <label for="mkCourse">关联课程</label>
+          <select class="input" id="mkCourse">${courseOptionsHtml()}</select>
+        </div>
+
+        <div class="mk-preview">
+          <div class="mk-src" id="mkSrc"></div>
+          <div class="mk-steps" id="mkStages"></div>
+        </div>
+
+        <p class="login-error" id="mkErr" role="alert" hidden></p>
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn" type="button" data-close="1">取消</button>
+        <button class="btn btn-primary" type="button" id="mkCreate">创建为草案</button>
+      </div>
+    </div>`;
+
+  host.hidden = false;
+  document.body.classList.add("modal-open");
+  host.querySelectorAll("[data-close]").forEach((n) => n.addEventListener("click", closeNewAct));
+  document.addEventListener("keydown", pageModalEsc);
+
+  // 实时预览：输入即算（draftSkeleton 是本地纯函数，不必节流）
+  $("#mkGoal").addEventListener("input", renderPreview);
+  renderPreview();
+  setTimeout(() => $("#mkGoal")?.focus?.(), 0);
+
+  $("#mkCreate").addEventListener("click", () => {
+    const goal = ($("#mkGoal").value || "").trim();
+    const err = $("#mkErr");
+    const r = createActivity({ goal: goal, title: goal, courseId: $("#mkCourse").value });
+    if (!r.ok) {
+      err.textContent = r.error;
+      err.hidden = false;
+      $("#mkGoal")?.focus?.();
+      return;
+    }
+    err.hidden = true;
+    closeNewAct();
+    VIEW.filter = "all";
+    VIEW.currentId = r.activity.id;              // 建完直接选中它去改骨架
+    afterStructureChange();
+    flash(`已创建草案，来源：${skeletonSourceText(r.activity.skeleton)}`, "ok");
+  });
+}
+
+$("#btnNewAct").addEventListener("click", openNewAct);
+
+/* ---------------- 跨 iframe：课程目录变了要跟着刷新下拉 ---------------- */
+document.addEventListener("st:courses-changed", () => {
+  const sel = $("#actCourse");
+  if (sel) {
+    const keep = sel.value;
+    sel.innerHTML = `<option value="">不关联课程</option>` +
+      COURSES.map((c) => `<option value="${escHtml(c.id)}">${escHtml(c.name)}</option>`).join("");
+    sel.value = COURSES.some((c) => c.id === keep) ? keep : "";
+  }
+  renderAll();
+});
+
+/* ---------------- 起手 ---------------- */
+renderAll();
+</script>
+</body>
+</html>

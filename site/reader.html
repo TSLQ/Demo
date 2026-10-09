@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="student">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>课件阅读 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<!--
+  ============================================================
+  课件阅读（第 47 轮：正文不再写死，改成读老师发来的课件）
+  ------------------------------------------------------------
+  老版这一页正文是**写死在 HTML 里**的那 6 段「快排复杂度」——
+  老师那边根本没有"发布课件"，学生看到的也跟老师无关。
+
+  🔴 现在：
+     · 课件来自 `cwsForStudent(currentUserKey())`（**跨账号桶**读老师发的那份）
+     · 段落由 `cwSections(cw)` 渲染 —— 与教师端**同一份切段规则**
+       （两边各写一份迟早对不上：段号错位 = 批注张冠李戴）
+     · 批注按 `notesOfCw(BEHAVIOR, cwId, courseId)` 过滤：
+       标了别的课件 id 的批注不算这一份；老记录没 cwId → 算当前这份（不丢历史）
+
+  🔴 两条纪律（验证器断言）
+    1. 重讲内容对**预置示例**（`cw-seed-1`）用内置 `RETEACH`；对别的课件**如实说
+       "还没预置，正式版接模型现场重讲"**，不假装重讲过了
+    2. 批注 / 阅读 / 重讲 / 朗读都进**行为日志**（`logBehavior`，带 `cwId`），
+       批注列表与学情里的「批注条数」**同一份存储**，不再另存一份
+  ============================================================
+-->
+<style>
+  :root { --font-sans: "Inter", system-ui; }
+  .cw-switch { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .cw-switch button {
+    border: 1px solid var(--border); border-radius: 18px; padding: 5px 13px;
+    background: var(--card); color: var(--foreground); font-size: 12.5px; cursor: pointer;
+  }
+  .cw-switch button:hover { background: var(--secondary); }
+  .cw-switch button.on {
+    border-color: var(--primary); background: var(--primary);
+    color: var(--primary-foreground); font-weight: 600;
+  }
+  .cw-badge {
+    font-size: 11px; padding: 1px 8px; border-radius: 20px;
+    background: var(--warning-surface); color: var(--warning-foreground); margin-left: 8px;
+  }
+</style>
+</head>
+<body>
+
+<div class="page-wrap">
+    <div class="page" style="padding-top:0">
+      <div class="page-head" style="margin-bottom:18px">
+        <div class="crumb" id="crumb">—</div>
+        <h1>课件阅读与批注</h1>
+        <p>点击任意段落可选中、批注，或让 AI 换一种方式重讲 —— 也可以直接朗读</p>
+      </div>
+
+      <!-- 课件切换（多于一份时才出现） -->
+      <div class="cw-switch" id="cwSwitch" hidden></div>
+
+      <div class="reader-grid">
+        <!-- 正文 -->
+        <article class="card card-raised reader-paper" id="paper" aria-label="课件正文">
+          <h2 style="font-size:20px;font-weight:500;margin:0 0 6px" id="paperTitle">—</h2>
+          <div class="reader-meta" id="paperMeta">—</div>
+          <hr class="reader-hr">
+          <div id="paperBody"></div>
+
+          <div class="notice notice-info" style="margin-top:26px">
+            <span aria-hidden="true">ℹ</span>
+            <div>
+              <b>关于 PDF 课件</b> —— PDF 的文本是坐标而非结构化行，
+              因此 PDF 课件支持<b>按页批注</b>，HTML 课件才支持行级批注。
+            </div>
+          </div>
+        </article>
+
+        <!-- 批注面板 -->
+        <aside class="card card-raised notes-panel" aria-label="批注列表">
+          <h3>我的批注 <span style="color:var(--muted-foreground);font-weight:400" id="noteCount">（0）</span></h3>
+          <div id="noteList"></div>
+          <button class="btn btn-sm" style="width:100%;margin-top:6px" id="addNote">＋ 新建批注</button>
+          <div style="font-size:11.5px;color:var(--muted-foreground);margin-top:12px;line-height:1.7">
+            批注与阅读行为都记在本机浏览器<br>教师端「课程成员」点开你就能看到
+          </div>
+        </aside>
+      </div>
+
+      <!-- 重讲浮层 -->
+      <div id="reteachPanel" class="card card-raised" hidden
+           style="margin-top:20px;padding:20px;border-color:var(--primary)">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <div class="msg-avatar" style="background:var(--primary);color:var(--primary-foreground)">智</div>
+          <div style="flex:1">
+            <div style="font-size:13.5px;font-weight:500">换一种方式重讲</div>
+            <div style="font-size:12px;color:var(--muted-foreground)" id="reteachSource"></div>
+          </div>
+          <button class="btn btn-sm btn-ghost" id="closeReteach">收起</button>
+        </div>
+        <div id="reteachBody" style="font-size:14.5px;line-height:1.8"></div>
+      </div>
+    </div>
+  </div>
+
+<!-- 内容页自己的弹窗宿主（写批注走它，不用 window.prompt） -->
+<div id="modalHost" hidden></div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+let selected = null;
+
+/* ============================================================
+   行为记录（第 34 轮）＋ 课件来源（第 47 轮）
+   ------------------------------------------------------------
+   这一页产生的四类行为都记进本机日志：阅读段落 / 写批注 / 请求重讲 / 朗读。
+   🔴 「批注」**只有这一份存储** —— 就是行为日志里 kind === "note" 的条目，
+      侧栏「我的批注」与学情里的「批注条数」都从这里渲染。别在别处再存一份。
+   🔴 现在还要带上 **cwId**（哪一份课件的第几段）—— 光有段号，换一份课件就张冠李戴。
+   ============================================================ */
+
+function currentUser() {
+  return (typeof currentUserKey === "function") ? currentUserKey() : "";
+}
+function receivedList() {
+  return (typeof cwsForStudent === "function") ? cwsForStudent(currentUser()) : [];
+}
+
+const CW_LIST = receivedList();
+let curIdx = 0;
+function currentCw() { return CW_LIST[curIdx] || null; }
+function currentCwId() { var c = currentCw(); return c ? c.id : ""; }
+function currentCourseId() { var c = currentCw(); return c ? c.courseId : ""; }
+
+function rec(kind, label, seg) {
+  if (typeof logBehavior !== "function") return null;
+  return logBehavior({
+    kind: kind, label: label,
+    courseId: currentCourseId(), seg: seg || 0,
+    cwId: currentCwId(),          // 🔴 哪一份课件的第几段
+  });
+}
+
+/** 这一页里已经记过"阅读"的段落（一次会话一段只记一次，别刷屏） */
+const readLogged = new Set();
+
+/* ---------------- 渲染正文 ---------------- */
+
+function renderSwitch() {
+  const box = $("#cwSwitch");
+  box.innerHTML = "";
+  if (CW_LIST.length <= 1) { box.hidden = true; return; }
+  box.hidden = false;
+  CW_LIST.forEach(function (c, i) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = c.title;
+    b.className = i === curIdx ? "on" : "";
+    b.setAttribute("data-i", i);
+    box.appendChild(b);
+  });
+}
+
+function renderPaper() {
+  const c = currentCw();
+  if (!c) {
+    $("#crumb").textContent = "—";
+    $("#paperTitle").textContent = "还没有课件";
+    $("#paperMeta").textContent = "";
+    const body = $("#paperBody");
+    body.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "note-empty";
+    empty.style.padding = "34px 18px";
+    empty.textContent = "老师还没给你发课件。发过来之后，这里就能读、能批注、能逐段「让 AI 再讲一遍」。";
+    body.appendChild(empty);
+    renderNotes();
+    return;
+  }
+
+  const secs = (typeof cwSections === "function") ? cwSections(c) : [];
+  $("#crumb").textContent = (c.courseName || "") + (c.chapters && c.chapters.length ? " › " + c.chapters[0].title : "");
+  $("#paperTitle").textContent = c.title;
+  const srcTag = (c.source === "sample") ? '<span class="cw-badge">预置示例</span>' : "";
+  $("#paperMeta").innerHTML = "共 " + secs.length + " 个可批注段落" + srcTag;
+
+  const body = $("#paperBody");
+  body.innerHTML = "";
+
+  if (!secs.length) {
+    const empty = document.createElement("div");
+    empty.className = "note-empty";
+    empty.style.padding = "20px 14px";
+    empty.textContent = "这份课件正文是空的。";
+    body.appendChild(empty);
+    renderNotes();
+    return;
+  }
+
+  secs.forEach(function (text, i) {
+    const seg = document.createElement("div");
+    seg.className = "annot";
+    seg.setAttribute("tabindex", "0");
+    seg.setAttribute("role", "button");
+    seg.setAttribute("aria-label", "第 " + (i + 1) + " 段");
+    seg.dataset.idx = i + 1;
+
+    // 段内可能是 Markdown —— 用 core.js 的 mdToHtml 渲染（与教师端预览同一套）
+    const p = document.createElement("div");
+    p.style.margin = "0";
+    p.innerHTML = (typeof mdToHtml === "function") ? mdToHtml(text) : escapeHtml(text);
+    seg.appendChild(p);
+
+    const tools = document.createElement("div");
+    tools.className = "annot-tools";
+    [["reteach", "让 AI 再讲一遍", "primary"], ["note", "写批注", ""], ["speak", "朗读这段", ""]]
+      .forEach(function (a) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "tool-btn" + (a[2] ? " " + a[2] : "");
+        b.textContent = a[1];
+        b.setAttribute("data-act", a[0]);
+        tools.appendChild(b);
+      });
+    seg.appendChild(tools);
+    body.appendChild(seg);
+  });
+
+  bindSegments();
+  renderNotes();
+}
+
+/* ---------------- 段落交互 ---------------- */
+
+function bindSegments() {
+  $$("#paperBody .annot").forEach(function (seg) {
+    seg.addEventListener("click", function () { select(seg); });
+    seg.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(seg); }
+    });
+    $$(".tool-btn", seg).forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        const idx = seg.dataset.idx;
+        const text = seg.textContent.trim();
+        if (btn.dataset.act === "reteach") { rec("reteach", "第 " + idx + " 段", Number(idx)); showReteach(idx, text); }
+        if (btn.dataset.act === "note") addNotePrompt(idx);
+        if (btn.dataset.act === "speak") { rec("speak", "第 " + idx + " 段", Number(idx)); speak(text); }
+      });
+    });
+  });
+}
+
+function select(seg) {
+  if (selected === seg) return;
+  if (selected) selected.classList.remove("selected");
+  selected = seg;
+  seg.classList.add("selected");
+  seg.scrollIntoView({ block: "nearest", behavior: "smooth" });
+
+  // 认真读了一段 → 记一次（同一段在一次会话里只记一次）
+  if (!readLogged.has(seg.dataset.idx)) {
+    readLogged.add(seg.dataset.idx);
+    const head = seg.textContent.trim().slice(0, 40) || "";
+    rec("read", "第 " + seg.dataset.idx + " 段 · " + head);
+  }
+}
+
+/* ---------------- 批注（与学情同源） ---------------- */
+
+function renderNotes() {
+  const list = $("#noteList");
+  const c = currentCw();
+  const all = (typeof notesOfCw === "function")
+    ? notesOfCw(BEHAVIOR, currentCwId(), currentCourseId())
+    : [];
+  const mine = all.filter(function (e) { return e.seg > 0; });
+  $("#noteCount").textContent = `（${mine.length}）`;
+
+  if (!mine.length) {
+    list.innerHTML = `<div class="note-empty">还没有批注 —— 点正文任意一段，再点「写批注」。</div>`;
+  } else {
+    list.innerHTML = mine.map(function (n, i) {
+      return `<div class="note-item${i === 0 ? " hl" : ""}">
+        <div class="note-ref">第 ${n.seg} 段 · ${escapeHtml(agoText(n.at, Date.now()))}</div>
+        <div class="note-text"></div>
+      </div>`;
+    }).join("");
+    $$("#noteList .note-text").forEach(function (el2, i) { el2.textContent = mine[i].label; });
+  }
+
+  // 段落上的"已有批注"标记也跟着数据走
+  $$("#paperBody .annot").forEach(function (seg) {
+    const on = mine.some(function (n) { return n.seg === Number(seg.dataset.idx); });
+    seg.classList.toggle("has-note", on);
+  });
+}
+
+/** 写批注 —— 🔴 走 `pageModalHost()` 的输入框，不用 `window.prompt` */
+function addNotePrompt(idx) {
+  const host = (typeof pageModalHost === "function") ? pageModalHost() : $("#modalHost");
+  host.hidden = false;
+  host.className = "modal-host";
+  host.innerHTML =
+    '<div class="modal" role="dialog" aria-modal="true" style="max-width:520px">' +
+      '<div class="modal-head"><b>为第 ' + idx + ' 段写批注</b></div>' +
+      '<div class="modal-body">' +
+        '<textarea class="input" id="noteInput" rows="3" placeholder="写下你的想法、疑问，或提醒自己……"></textarea>' +
+      '</div>' +
+      '<div class="modal-foot">' +
+        '<button class="btn" data-mc="no" type="button">取消</button>' +
+        '<button class="btn btn-primary" data-mc="ok" type="button">保存批注</button>' +
+      '</div>' +
+    '</div>';
+  document.body.classList.add("modal-open");
+  const input = $("#noteInput");
+  if (input) setTimeout(function () { input.focus(); }, 30);
+
+  function close() {
+    host.hidden = true; host.innerHTML = "";
+    document.body.classList.remove("modal-open");
+    host.removeEventListener("click", onClick);
+    document.removeEventListener("keydown", onKey);
+  }
+  function onClick(e) {
+    const b = e.target.closest ? e.target.closest("[data-mc]") : null;
+    if (!b) { if (e.target === host) close(); return; }
+    const isOk = b.getAttribute("data-mc") === "ok";
+    close();
+    if (!isOk) return;
+    const t = (input && input.value ? input.value : "").trim();
+    if (!t) return;
+    saveNote(idx, t);
+  }
+  function onKey(e) { if (e.key === "Escape") close(); }
+  host.addEventListener("click", onClick);
+  document.addEventListener("keydown", onKey);
+}
+
+function saveNote(idx, t) {
+  const seg = $(`.annot[data-idx="${idx}"]`);
+  const topic = typeof topicOf === "function"
+    ? topicOf(t + " " + (seg ? seg.textContent : "")) : "";
+  rec("note", t, Number(idx));
+  if (topic && typeof BEHAVIOR !== "undefined" && BEHAVIOR.length) {
+    BEHAVIOR[BEHAVIOR.length - 1].topic = topic;        // 话题分类结合段落正文更准
+    if (typeof saveBehavior === "function") saveBehavior();
+  }
+  renderNotes();
+}
+
+$("#addNote").addEventListener("click", function () {
+  if (!selected) {
+    const host = (typeof pageModalHost === "function") ? pageModalHost() : $("#modalHost");
+    host.hidden = false; host.className = "modal-host";
+    host.innerHTML =
+      '<div class="modal" role="dialog" aria-modal="true">' +
+        '<div class="modal-head"><b>先选一段</b></div>' +
+        '<div class="modal-body"><p style="margin:0;font-size:13px">请先点击正文中的段落选中它，再写批注。</p></div>' +
+        '<div class="modal-foot"><button class="btn btn-primary" data-mc="ok" type="button">知道了</button></div>' +
+      '</div>';
+    document.body.classList.add("modal-open");
+    function close() {
+      host.hidden = true; host.innerHTML = "";
+      document.body.classList.remove("modal-open");
+      host.removeEventListener("click", onClick);
+    }
+    function onClick(e) {
+      if (e.target.closest && e.target.closest("[data-mc]")) { close(); }
+      else if (e.target === host) close();
+    }
+    host.addEventListener("click", onClick);
+    return;
+  }
+  addNotePrompt(selected.dataset.idx);
+});
+
+/* ---------------- 重讲 ---------------- */
+
+const RETEACH = {
+  1: `换一个角度：把快排想象成**不断把队伍按身高分成两组**。
+
+如果每次分点都恰好在队伍中间，两组人数差不多，你只需要分 log n 轮就能排完 —— 这是 O(n log n)。
+
+但如果每次分点都是**最高的那个人**呢？结果是他一边站，其余所有人都在另一边。队伍只少了一个人，而你还得再分一次。
+
+分 n 轮，每轮还要扫一遍全队 —— 这就是 O(n²)。
+
+**关键不是队伍有多长，而是你每次分得匀不匀。**`,
+  2: `用一句话概括：**pivot 选得越偏，递归树越像一条链表。**
+
+正常情况递归树是"平衡的"，高度 log n，每层总共处理 O(n)，乘起来 O(n log n)。
+
+pivot 每次取到最值时，递归树退化成一条**单链**，高度变成 n，每层还是 O(n)，乘起来 O(n²)。
+
+类比：平衡的树像一颗圆白菜，层层对半；退化的树像一根竹竿，只能一节一节往上爬。`,
+  3: `这里最容易踩的坑是：**很多教材的示例代码恰好取首元素作 pivot**。
+
+而学生做实验时，最常拿"已经排好序的数组"去测试排序算法 —— 于是每次都稳稳地触发最坏情况。
+
+这不是巧合，而是"教学示例代码"与"生产级实现"之间的真实差距。
+
+**工程上没有人会这样写快排。** 标准库的实现都会做随机化或三数取中。`,
+  4: `三种改进，你可以按"解决的问题"来记：
+
+- **随机化 pivot** → 解决"输入刚好有序"的**人为触发**
+- **三数取中** → 解决"有序/逆序"的**系统性问题**，且无随机性开销
+- **三路划分** → 解决"大量重复元素"这个**另一类退化**
+
+前两个是防最坏情况，第三个是防重复元素。**目标不同，可以叠加使用。**
+
+你之前标记过的疑问「随机化 pivot 与洗牌的区别」—— 区别在于：洗牌是**打乱整个数组**（O(n) 开销），随机化只**换一个元素到首位置**（O(1) 开销）。效果类似，成本差很多。`,
+  5: `这是一个典型的**工程权衡**问题。
+
+随机化确实增加了一次交换，但换来的是：**把确定性的最坏情况，变成概率可忽略的最坏情况。**
+
+对绝大多数应用来说，这个交换极其划算 —— 因为真实场景中"输入恰好有序"的概率不低（比如从数据库按主键读出来），而一次交换的成本可以忽略。
+
+**算法工程的核心不是消灭最坏情况，而是让它不再容易被触发。**`,
+  6: `总结成一个判断口诀：
+
+> **看复杂度先看划分，看划分先看 pivot。**
+
+反过来推：
+1. 想知道快排快不快 → 看划分
+2. 划分平不平衡 → 取决于 pivot 怎么选
+3. pivot 选得好不好 → 取决于输入分布 + 你的选择策略
+
+所以优化快排，**本质上是在优化 pivot 的选择策略**。`,
+};
+
+function showReteach(idx, text) {
+  const panel = $("#reteachPanel");
+  $("#reteachSource").textContent = `第 ${idx} 段 · ${text.slice(0, 24)}…`;
+  let body;
+  if (currentCwId() === "cw-seed-1" && RETEACH[idx]) {
+    body = RETEACH[idx];
+  } else {
+    // 🔴 别的课件没有预置重讲 —— 如实说，不假装已经重讲过了
+    body = "这一讲还没有内置的重讲内容。**正式版会接模型，根据上面这段正文现场换一种方式重讲** —— " +
+      "现在先如实告诉你，不假装它已经重讲过了。\n\n> " + text;
+  }
+  $("#reteachBody").innerHTML = mdToHtml(body);
+  panel.hidden = false;
+  panel.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+$("#closeReteach").addEventListener("click", function () { $("#reteachPanel").hidden = true; });
+
+/* ---------------- 朗读 ---------------- */
+
+function speak(text) {
+  if (typeof window.speechSynthesis === "undefined") {
+    const host = (typeof pageModalHost === "function") ? pageModalHost() : $("#modalHost");
+    host.hidden = false; host.className = "modal-host";
+    host.innerHTML =
+      '<div class="modal" role="dialog" aria-modal="true">' +
+        '<div class="modal-head"><b>无法朗读</b></div>' +
+        '<div class="modal-body"><p style="margin:0;font-size:13px">当前浏览器不支持语音朗读。</p></div>' +
+        '<div class="modal-foot"><button class="btn btn-primary" data-mc="ok" type="button">知道了</button></div>' +
+      '</div>';
+    document.body.classList.add("modal-open");
+    function onClick(e) { if (e.target.closest && e.target.closest("[data-mc]")) { host.hidden = true; host.innerHTML = ""; document.body.classList.remove("modal-open"); host.removeEventListener("click", onClick); } }
+    host.addEventListener("click", onClick);
+    return;
+  }
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(String(text).trim());
+  u.lang = "zh-CN";
+  u.rate = 0.95;
+  window.speechSynthesis.speak(u);
+}
+
+/* ---------------- 切换课件 ---------------- */
+
+$("#cwSwitch").addEventListener("click", function (e) {
+  const b = e.target.closest ? e.target.closest("[data-i]") : null;
+  if (!b) return;
+  curIdx = Number(b.getAttribute("data-i")) || 0;
+  selected = null;
+  renderSwitch();
+  renderPaper();
+});
+
+/* ---------------- 启动 ---------------- */
+
+renderSwitch();
+renderPaper();
+</script>
+</body>
+</html>

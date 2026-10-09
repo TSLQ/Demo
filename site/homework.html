@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="student">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>我的作业 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<!--
+  ============================================================
+  我的作业 —— 学生端接收老师发布的试卷并**在线作答提交**
+  ------------------------------------------------------------
+  与教师端「出题与组卷」（exam.html）+「学生管理」（stu.html）配成一条闭环：
+    老师：圈章节 → AI 出题 → 逐题审核 → 组卷 → 发布到班级 → **看谁交了、得几分**
+    学生：**在这里收到** → 作答 → **提交**
+
+  🔴 四条硬规矩
+   1. **跨账号桶读**（`examsForStudent`）—— 卷子记录在**老师**的桶里，
+      学生自己的桶里没有；用 `examOf` 那种"只认本桶"的取法会什么都看不到。
+   2. **提交记录存学生自己的桶**（`submitExamAnswer` → `st_exam_ans:<角色>:<账号>`），
+      记录跟着产生它的人走；老师端跨桶读（`examAnsOfStudent`）。
+   3. **学生端不显示参考答案与解析** —— 只显示"对 / 错"，答案在老师那边。
+   4. ⚠️ **本架构下答案无法对学生真正隐藏**（纯静态，数据里就带着 `answer`）——
+      所以这里的判分是"给自己看的学习反馈"，**不是防作弊的考试系统**，页面上如实说明。
+  ============================================================
+-->
+<style>
+  .hw-wrap { padding: 16px 18px 40px; box-sizing: border-box; }
+  .hw-stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .hw-stat {
+    background: var(--card); border: 1px solid var(--border); border-radius: 11px;
+    padding: 10px 14px; min-width: 108px;
+  }
+  .hw-stat .n { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .hw-stat .l { color: var(--muted-foreground); font-size: 12px; margin-top: 2px; }
+  .hw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 12px; }
+  .hw-card {
+    background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--primary);
+    border-radius: 12px; padding: 14px 15px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .hw-card.done { border-left-color: var(--success); }
+  .hw-card h3 { margin: 0; font-size: 14.5px; font-weight: 600; }
+  .hw-meta { font-size: 12px; color: var(--muted-foreground); line-height: 1.6; }
+  .hw-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .hw-chip {
+    font-size: 11.5px; padding: 1px 8px; border-radius: 20px;
+    background: var(--secondary); color: var(--muted-foreground);
+  }
+  .hw-chip.ok { background: var(--success-surface); color: var(--success); }
+  .hw-chip.warn { background: var(--warning-surface); color: var(--warning); }
+  .hw-acts { display: flex; gap: 7px; margin-top: auto; padding-top: 4px; }
+  .hw-empty {
+    text-align: center; color: var(--muted-foreground); font-size: 13px;
+    padding: 40px 18px; border: 1px dashed var(--border); border-radius: 12px;
+  }
+  .hw-foot { color: var(--muted-foreground); font-size: 12px; line-height: 1.7; margin-top: 22px; }
+  .hw-note {
+    margin-top: 14px; padding: 10px 12px; border-radius: 9px; font-size: 12.5px; line-height: 1.6;
+    background: var(--info-surface); border: 1px solid color-mix(in srgb, var(--info) 26%, transparent);
+    color: var(--info-foreground);
+  }
+  /* ---------- 作答区 ---------- */
+  .q-block { padding: 10px 0; border-bottom: 1px dashed var(--border); }
+  .q-block:last-child { border-bottom: 0; }
+  .q-block h4 { margin: 0 0 6px; font-size: 13px; }
+  .q-block.q-ok { background: var(--success-surface); border-radius: 9px; padding: 10px 10px; }
+  .q-block.q-bad { background: var(--warning-surface); border-radius: 9px; padding: 10px 10px; }
+  .q-block.q-pending { background: var(--info-surface); border-radius: 9px; padding: 10px 10px; }
+  .q-mark { font-size: 11.5px; margin-left: 8px; font-weight: 500; }
+  .q-mark.ok { color: var(--success); }
+  .q-mark.bad { color: var(--warning); }
+  .q-mark.pending { color: var(--info); }
+  .q-text { font-size: 14px; line-height: 1.7; margin-bottom: 6px; }
+  .q-opt { display: block; font-size: 13.5px; line-height: 1.9; cursor: pointer; }
+  .q-opt input { margin-right: 7px; }
+  .q-blanks { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .q-blank-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted-foreground); }
+  .q-input, .q-ta {
+    font: inherit; font-size: 13.5px; padding: 5px 9px; border-radius: 7px;
+    border: 1px solid var(--border); background: var(--background); color: var(--foreground);
+  }
+  .q-input { min-width: 180px; flex: 1; }
+  .q-ta { width: 100%; min-height: 66px; resize: vertical; box-sizing: border-box; }
+  .hw-result {
+    margin-top: 12px; padding: 10px 12px; border-radius: 9px; font-size: 13px; line-height: 1.65;
+    background: var(--secondary); border: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<div class="page-wrap">
+  <div class="page hw-wrap">
+    <div class="page-head">
+      <div class="crumb" id="hwCrumb">我的作业</div>
+      <h1>我的作业</h1>
+      <p>老师发布的试卷会出现在这里 —— 点开就能作答、提交。</p>
+    </div>
+
+    <div class="hw-stats" id="hwStats"></div>
+    <div class="hw-grid" id="hwList"></div>
+
+    <p class="hw-foot">
+      这里显示的是老师发给你**自己**的卷子（按账号分开存，换个账号看到的是自己的）。
+      <br>客观题（单选 / 多选 / 填空）提交后当场判分，简答题由老师批改 —— 只显示对错，不显示正确答案。
+      <br>⚠️ 纯静态站里答案技术上无法对学生完全隐藏，这里的判分是给你自己看的学习反馈，不是防作弊的考试系统。
+    </p>
+  </div>
+</div>
+
+<!-- 内容页自己的弹窗宿主（壳的 #modalHost 在 iframe 里取不到） -->
+<div id="modalHost" hidden></div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function me() { return (typeof currentUserKey === "function") ? currentUserKey() : ""; }
+  function stamp(ts) {
+    if (!ts) return "";
+    if (typeof fmtStamp === "function") return fmtStamp(ts);
+    var d = new Date(ts);
+    return (d.getMonth() + 1) + "月" + d.getDate() + "日";
+  }
+  function typeLabel(t) { return (EXAM_TYPES[t] || EXAM_TYPES.short).label; }
+
+  /** 选项文本 "A　前序…" → 字母 "A"；认不出来就按顺序给 A/B/C… */
+  function optLetter(text, i) {
+    var m = /^\s*([A-Za-z])\s*[、．.:：]?\s*[\u3000\s]/.exec(String(text) + " ");
+    if (m) return m[1].toUpperCase();
+    var m2 = /^\s*([A-Za-z])\s*[、．.:：]/.exec(String(text));
+    if (m2) return m2[1].toUpperCase();
+    return String.fromCharCode(65 + i);
+  }
+
+  /** 🔴 跨账号桶读「老师发给我的」—— 记录在老师的桶里 */
+  function mine() {
+    var u = me();
+    if (!u) return [];
+    return examsForStudent(u).slice().sort(function (a, b) {
+      return (b.publishedAt || 0) - (a.publishedAt || 0);
+    });
+  }
+
+  function render() {
+    var list = mine();
+    var u = me();
+
+    var stats = $("hwStats");
+    stats.innerHTML = "";
+    var totalQ = 0, doneN = 0;
+    list.forEach(function (e) {
+      totalQ += examStats(e).accepted;
+      if (myExamAnsOf(e.id)) doneN += 1;
+    });
+    [["待做", list.length - doneN], ["已交", doneN], ["题目", totalQ],
+     ["课程", new Set(list.map(function (e) { return e.courseId; })).size]]
+      .forEach(function (row) {
+        var d = document.createElement("div");
+        d.className = "hw-stat";
+        var n = document.createElement("div");
+        n.className = "n";
+        n.textContent = row[1];
+        var l = document.createElement("div");
+        l.className = "l";
+        l.textContent = row[0];
+        d.appendChild(n); d.appendChild(l);
+        stats.appendChild(d);
+      });
+
+    var box = $("hwList");
+    box.innerHTML = "";
+
+    if (!u) {
+      var e0 = document.createElement("div");
+      e0.className = "hw-empty";
+      e0.textContent = "没有读到你的账号 —— 从登录页进来才会有作业。";
+      box.appendChild(e0);
+      return;
+    }
+    if (!list.length) {
+      var e1 = document.createElement("div");
+      e1.className = "hw-empty";
+      e1.textContent = "老师还没发卷子给你。发了之后这里会自己出现（换个账号看，看到的是自己的）。";
+      box.appendChild(e1);
+      return;
+    }
+
+    list.forEach(function (ex) {
+      var s = examStats(ex);
+      var prev = myExamAnsOf(ex.id);
+      var card = document.createElement("div");
+      card.className = "hw-card" + (prev ? " done" : "");
+      card.setAttribute("data-id", ex.id);
+
+      var h = document.createElement("h3");
+      h.textContent = ex.title || "未命名试卷";
+      card.appendChild(h);
+
+      var chips = document.createElement("div");
+      chips.className = "hw-chips";
+      [s.accepted + " 题", s.totalScore + " 分", s.duration + " 分钟"].forEach(function (t) {
+        var c = document.createElement("span");
+        c.className = "hw-chip";
+        c.textContent = t;
+        chips.appendChild(c);
+      });
+      if (prev) {
+        var cD = document.createElement("span");
+        cD.className = "hw-chip ok";
+        cD.textContent = prev.pending
+          ? "已交（客观题 " + prev.objectiveGot + "/" + prev.objectiveTotal + "）"
+          : "已交 " + prev.objectiveGot + "/" + prev.objectiveTotal;
+        chips.appendChild(cD);
+      } else {
+        var cN = document.createElement("span");
+        cN.className = "hw-chip warn";
+        cN.textContent = "未交";
+        chips.appendChild(cN);
+      }
+      card.appendChild(chips);
+
+      var meta = document.createElement("div");
+      meta.className = "hw-meta";
+      var by = (typeof accountDisplayName === "function") ? accountDisplayName(ex.createdBy) : "老师";
+      meta.innerHTML = esc(ex.courseName || "（未指定课程）") + "<br>" +
+        "由 " + esc(by) + " 发布 · " + esc(stamp(ex.publishedAt)) + "<br>" +
+        "范围：" + esc((ex.chapters || []).map(function (c) { return c.title; }).join("、") || "—") +
+        (prev ? "<br>上次提交：" + esc(stamp(prev.submittedAt)) + "（第 " + prev.attempts + " 次）" : "");
+      card.appendChild(meta);
+
+      var acts = document.createElement("div");
+      acts.className = "hw-acts";
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn btn-sm " + (prev ? "btn-ghost" : "btn-primary");
+      b.textContent = prev ? "查看 / 重做" : "开始作答";
+      b.setAttribute("data-act", "open");
+      acts.appendChild(b);
+      card.appendChild(acts);
+
+      box.appendChild(card);
+    });
+
+    var c2 = curCourseName(list);
+    $("hwCrumb").textContent = c2 || "我的作业";
+  }
+
+  function curCourseName(list) {
+    var names = [];
+    list.forEach(function (e) {
+      var n = e.courseName || "";
+      if (n && names.indexOf(n) < 0) names.push(n);
+    });
+    return names.length ? names.join(" / ") : "";
+  }
+
+  /** 每题渲染成一块可作答的控件（学生端**不显示答案**） */
+  function questionBlock(q, i, prev) {
+    var a = (prev && prev.answers) ? prev.answers[q.id] : null;
+    var head = "<h4>" + (i + 1) + "．[" + typeLabel(q.type) + "]" +
+      (q.point ? "　" + esc(q.point) : "") + "</h4>";
+    var body = "";
+
+    if (q.type === "single" || q.type === "multi") {
+      var multi = q.type === "multi";
+      var chosen = multi ? (Array.isArray(a) ? a : []) : [String(a || "")];
+      body = '<div class="q-text">' + esc(q.text) + "</div>" +
+        (multi ? '<div class="q-blanks">（多选：选全才算对）</div>' : "") +
+        (q.options || []).map(function (opt, oi) {
+          var letter = optLetter(opt, oi);
+          var label = String(opt).replace(/^\s*[A-Za-z]\s*[、．.:：]?\s*[\u3000\s]*/, "");
+          var ck = chosen.indexOf(letter) >= 0 ? " checked" : "";
+          return '<label class="q-opt"><input type="' + (multi ? "checkbox" : "radio") +
+            '" name="' + q.id + '" value="' + letter + '"' + ck + ">" +
+            letter + "　" + esc(label) + "</label>";
+        }).join("");
+    } else if (q.type === "blank") {
+      var n = (q.blanks && q.blanks.length) || 1;
+      var arr = Array.isArray(a) ? a : [];
+      var rows = "";
+      for (var k = 0; k < n; k++) {
+        rows += '<div class="q-blank-row"><span>第 ' + (k + 1) + ' 空</span>' +
+          '<input class="q-input" type="text" data-blank="' + q.id + "-" + k + '" value="' +
+          esc(arr[k] || "") + '"></div>';
+      }
+      body = '<div class="q-text">' + esc(q.text) + "</div>" +
+        '<div class="q-blanks">（共 ' + n + ' 个空）' + rows + "</div>";
+    } else {
+      body = '<div class="q-text">' + esc(q.text) + "</div>" +
+        '<textarea class="q-ta" data-q="' + q.id + '">' + esc(a || "") + "</textarea>";
+    }
+
+    return '<div class="q-block" data-qbox="' + q.id + '">' + head + body + "</div>";
+  }
+
+  /** 把 DOM 里的作答收集成 `{ qid: 值 }` */
+  function collectAnswers(host, qs) {
+    var ans = {};
+    qs.forEach(function (q) {
+      if (q.type === "single") {
+        var r = host.querySelector('input[name="' + q.id + '"]:checked');
+        ans[q.id] = r ? r.value : "";
+      } else if (q.type === "multi") {
+        var picked = [];
+        var boxes = host.querySelectorAll('input[name="' + q.id + '"]');
+        Array.prototype.forEach.call(boxes, function (el) { if (el.checked) picked.push(el.value); });
+        ans[q.id] = picked;
+      } else if (q.type === "blank") {
+        var n = (q.blanks && q.blanks.length) || 1;
+        var arr = [];
+        for (var k = 0; k < n; k++) {
+          var inp = host.querySelector('input[data-blank="' + q.id + "-" + k + '"]');
+          arr.push(inp ? inp.value : "");
+        }
+        ans[q.id] = arr;
+      } else {
+        var ta = host.querySelector('textarea[data-q="' + q.id + '"]');
+        ans[q.id] = ta ? ta.value : "";
+      }
+    });
+    return ans;
+  }
+
+  /** 提交后逐题标对错（**只标对错、不给答案**） */
+  function markResult(host, grade) {
+    (grade.perQuestion || []).forEach(function (pq) {
+      var box = host.querySelector('[data-qbox="' + pq.id + '"]');
+      if (!box) return;
+      box.classList.remove("q-ok", "q-bad", "q-pending");
+      var mk = document.createElement("span");
+      mk.className = "q-mark";
+      if (!pq.graded) {
+        box.classList.add("q-pending");
+        mk.className += " pending";
+        mk.textContent = pq.answered ? "已答 · 待老师批改" : "未作答";
+      } else {
+        box.classList.add(pq.ok ? "q-ok" : "q-bad");
+        mk.className += pq.ok ? " ok" : " bad";
+        mk.textContent = pq.ok ? "✓ 正确" : "✗ 错误";
+      }
+      var h = box.querySelector("h4");
+      if (h) h.appendChild(mk);
+    });
+  }
+
+  /** 作答 / 重做 —— 学生端不显示答案，只显示对错 */
+  function openPaper(id) {
+    var ex = null;
+    var list = mine();
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) ex = list[i];
+    if (!ex) { render(); return; }
+
+    var qs = (ex.questions || []).filter(function (q) { return q.state === "accepted"; });
+    var prev = myExamAnsOf(ex.id);
+    var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+    host.hidden = false;
+    host.className = "modal-host";
+
+    var head = '<p style="margin:0 0 4px;font-size:13px">' +
+      esc(ex.courseName || "") + "　·　总分 " + ex.paper.totalScore + " 分　·　" + ex.paper.duration + " 分钟</p>" +
+      '<p style="margin:0;font-size:12.5px;color:var(--muted-foreground)">范围：' +
+      esc((ex.chapters || []).map(function (c) { return c.title; }).join("、") || "—") +
+      (prev ? "　·　上次提交 " + esc(stamp(prev.submittedAt)) : "") + "</p>";
+
+    var body = qs.length
+      ? qs.map(function (q, i) { return questionBlock(q, i, prev); }).join("")
+      : '<div class="hw-empty">这份卷子还没有采纳的题目。</div>';
+
+    host.innerHTML =
+      '<div class="modal hw-paper" role="dialog" aria-modal="true" style="max-width:680px">' +
+        '<div class="modal-head"><b>' + esc(ex.title) + "</b></div>" +
+        '<div class="modal-body">' + head + body +
+          '<div class="hw-result" data-result' + (prev ? "" : " hidden") + ">" +
+            (prev ? "你已提交（客观题 " + prev.objectiveGot + "/" + prev.objectiveTotal + " 分）—— 可改答案后重新提交。"
+                  : "") +
+          "</div>" +
+          '<div class="hw-note">客观题（单选 / 多选 / 填空）提交后**当场判分**，简答由老师批改；' +
+          "学生端**不显示正确答案**。⚠️ 纯静态站里答案技术上无法对学生完全隐藏 —— 这里是学习反馈，不是考试系统。</div>" +
+        "</div>" +
+        '<div class="modal-foot">' +
+          '<button class="btn btn-ghost" data-mc="ok" type="button">关闭</button>' +
+          (qs.length ? '<button class="btn btn-primary" data-mc="submit" type="button">' +
+            (prev ? "重新提交" : "提交答卷") + "</button>" : "") +
+        "</div>" +
+      "</div>";
+    document.body.classList.add("modal-open");
+
+    if (prev) {
+      // 打开就先按上次的结果标一遍（让"重做"时能看到上次对错）
+      markResult(host, gradeExamPaper(ex, prev.answers));
+    }
+
+    function submit() {
+      var answers = collectAnswers(host, qs);
+      var r = submitExamAnswer(ex, answers);
+      if (!r.ok) { flashErr(host, r.error); return; }
+      markResult(host, r.grade);
+      var box = host.querySelector("[data-result]");
+      box.hidden = false;
+      box.innerHTML = "<b>已提交。</b>客观题 " + r.grade.objectiveGot + " / " + r.grade.objectiveTotal + " 分" +
+        (r.grade.pending ? "，另有 " + r.grade.pending + " 题简答待老师批改" : "") +
+        "。已答 " + r.grade.answered + " / " + r.grade.questions + " 题。";
+      var btn = host.querySelector('[data-mc="submit"]');
+      if (btn) btn.textContent = "重新提交";
+      host.querySelector(".modal-body").scrollTop = 0;
+      render();     // 更新列表卡片上的"已交"状态
+    }
+
+    function flashErr(hostEl, msg) {
+      var box = hostEl.querySelector("[data-result]");
+      box.hidden = false;
+      box.textContent = msg;
+      box.style.color = "var(--warning)";
+    }
+
+    function close() {
+      host.hidden = true; host.innerHTML = "";
+      document.body.classList.remove("modal-open");
+      host.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    }
+    function onClick(ev) {
+      var b = ev.target.closest ? ev.target.closest("[data-mc]") : null;
+      if (!b) { if (ev.target === host) close(); return; }
+      var mc = b.getAttribute("data-mc");
+      if (mc === "submit") submit();
+      else close();
+    }
+    function onKey(ev) { if (ev.key === "Escape") close(); }
+    host.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+  }
+
+  $("hwList").addEventListener("click", function (ev) {
+    var b = ev.target.closest ? ev.target.closest("[data-act]") : null;
+    if (!b) return;
+    var card = ev.target.closest ? ev.target.closest("[data-id]") : null;
+    if (!card) return;
+    if (b.getAttribute("data-act") === "open") openPaper(card.getAttribute("data-id"));
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

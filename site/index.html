@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="login" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 — 智课助教 SmartTutor CS</title>
+<link rel="stylesheet" href="assets/design.css">
+<style>
+  :root { --font-sans: "Inter", system-ui; }
+</style>
+</head>
+<body>
+<main class="login-shell">
+  <aside class="login-aside">
+    <div class="login-brand">
+      <span class="login-mark">智</span>
+      <span>智课助教</span>
+    </div>
+
+    <h1 class="login-hero">让每个学生都有<br>一个懂他的助教</h1>
+    <p class="login-sub">
+      课件批注 · AI 答疑 · 作业批改 · 章节出题 · 学情分析<br>
+      教师与学生，同一条教学闭环
+    </p>
+
+    <div class="login-feats">
+      <div class="login-feat"><span class="feat-tick">✓</span>键盘全导航，无需鼠标可完成全部操作</div>
+      <div class="login-feat"><span class="feat-tick">✓</span>屏幕朗读支持，课件与讲解均可听</div>
+      <div class="login-feat"><span class="feat-tick">✓</span>对比度达 WCAG 2.1 AA 标准</div>
+      <div class="login-feat"><span class="feat-tick">✓</span>讲解风格随个人习惯持续精进</div>
+    </div>
+
+    <div class="login-foot">
+      <div class="login-foot-line">成都理工大学 · 2026「华为智创杯」AI 应用创新大赛</div>
+
+      <!-- 无障碍阅读模式：默认勾选。⚠️ 与壳内开关同一状态，功能尚未实现 -->
+      <label class="login-a11y" for="a11yReadMode">
+        <input type="checkbox" id="a11yReadMode" checked data-a11y-mode="read">
+        <span>无障碍阅读模式</span>
+      </label>
+    </div>
+  </aside>
+
+  <section class="login-main">
+    <div class="login-box">
+      <div class="login-tabs" role="tablist" aria-label="登录或注册">
+        <button class="login-tab active" id="tabLogin" type="button"
+                role="tab" aria-selected="true" aria-controls="paneLogin">登录</button>
+        <button class="login-tab" id="tabReg" type="button"
+                role="tab" aria-selected="false" aria-controls="paneReg">注册账号</button>
+      </div>
+
+      <h2 class="login-title" id="loginTitle">选择你的身份</h2>
+      <p class="login-lead" id="loginLead">进入后可在设置中随时切换</p>
+
+      <div id="roles">
+        <div class="role-card active" data-role="teacher" role="button" tabindex="0" aria-pressed="true">
+          <div class="role-icon">师</div>
+          <div class="role-body">
+            <p class="role-title">教师</p>
+            <p class="role-desc">发布课件与作业 · 圈定章节出题并审核 · 查看班级学情</p>
+          </div>
+          <div class="role-check">✓</div>
+        </div>
+
+        <div class="role-card" data-role="student" role="button" tabindex="0" aria-pressed="false">
+          <div class="role-icon">生</div>
+          <div class="role-body">
+            <p class="role-title">学生</p>
+            <p class="role-desc">阅读课件并批注 · 选中让 AI 重讲 · 提交作业 · 查看学情</p>
+          </div>
+          <div class="role-check">✓</div>
+        </div>
+      </div>
+
+      <!-- ================= 登录 ================= -->
+      <form class="login-form" id="loginForm" novalidate>
+        <div class="field">
+          <label for="account">账号</label>
+          <input class="input" id="account" name="account" type="text"
+                 autocomplete="username" autocapitalize="off" spellcheck="false"
+                 placeholder="teacher">
+        </div>
+
+        <div class="field">
+          <label for="password">密码</label>
+          <div class="pwd-wrap">
+            <input class="input" id="password" name="password" type="password"
+                   autocomplete="current-password" placeholder="cdut@2026">
+            <button class="pwd-eye" id="pwdEye" type="button"
+                    aria-label="显示密码" aria-pressed="false">显示</button>
+          </div>
+        </div>
+
+        <p class="login-hint" id="loginHint">
+          <span class="hint-mark" aria-hidden="true">i</span>
+          <span id="hintText">本机已有预置账号，可直接登录 ——
+            <code>teacher</code> / <code>cdut@2026</code></span>
+        </p>
+
+        <p class="login-error" id="loginError" role="alert" hidden></p>
+
+        <div style="display:flex;gap:10px;margin-top:18px">
+          <button class="btn btn-primary btn-lg" id="enterBtn" type="submit" style="flex:1">以教师身份进入</button>
+          <button class="btn btn-lg" id="demoBtn" type="button">快速进入</button>
+        </div>
+      </form>
+
+      <!-- ================= 注册 ================= -->
+      <form class="login-form" id="regForm" novalidate hidden>
+        <div class="field">
+          <label for="regName">姓名</label>
+          <input class="input" id="regName" name="regName" type="text"
+                 autocomplete="name" placeholder="张明">
+        </div>
+
+        <div class="field">
+          <label for="regUser">账号</label>
+          <input class="input" id="regUser" name="regUser" type="text"
+                 autocomplete="off" autocapitalize="off" spellcheck="false"
+                 placeholder="字母或数字，3–20 位">
+        </div>
+
+        <div class="field">
+          <label for="regPass">密码</label>
+          <div class="pwd-wrap">
+            <input class="input" id="regPass" name="regPass" type="password"
+                   autocomplete="new-password" placeholder="至少 6 位">
+            <button class="pwd-eye" id="regEye" type="button"
+                    aria-label="显示密码" aria-pressed="false">显示</button>
+          </div>
+        </div>
+
+        <p class="login-hint">
+          <span class="hint-mark" aria-hidden="true">i</span>
+          <span>账号与密码保存在<b>本机浏览器</b>，不会上传。换台电脑需要重新注册。</span>
+        </p>
+
+        <p class="login-error" id="regError" role="alert" hidden></p>
+
+        <div style="display:flex;gap:10px;margin-top:18px">
+          <button class="btn btn-primary btn-lg" id="regBtn" type="submit" style="flex:1">注册并进入</button>
+        </div>
+      </form>
+    </div>
+  </section>
+</main>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+const ROLE_META = {
+  teacher: { label: "教师", home: "class.html" },
+  student: { label: "学生", home: "chat.html" },
+};
+
+let role = currentRole();
+
+/* ============================================================
+   本地账号库（st_accounts）
+   ⚠️ 纯静态站无法真正鉴权，这是「校园内网系统」的模拟。
+   ============================================================ */
+const ACCOUNTS_KEY = (typeof ACCOUNT_KEY !== "undefined") ? ACCOUNT_KEY : "st_accounts";
+const SEED = (typeof SEED_ACCOUNTS !== "undefined") ? SEED_ACCOUNTS : [];
+const PERSONA = (typeof ROLE_PERSONA !== "undefined") ? ROLE_PERSONA : {};
+
+/** 读账号库；首次打开时写入预置账号，保证观众不必先注册 */
+function loadAccounts() {
+  let list = null;
+  try {
+    const raw = LS.raw(ACCOUNTS_KEY);
+    if (raw) list = JSON.parse(raw);
+  } catch (_) { list = null; }
+  if (!Array.isArray(list)) list = [];
+  return list;
+}
+
+function saveAccounts(list) {
+  LS.set(ACCOUNTS_KEY, list);
+}
+
+/** 首次打开自动预置账号（只在账号库为空时执行一次） */
+function seedAccounts() {
+  const list = loadAccounts();
+  if (list.length) return list;
+  const now = Date.now();
+  const seeded = SEED.map((a, i) => ({ ...a, createdAt: now + i }));
+  saveAccounts(seeded);
+  return seeded;
+}
+
+function findAccount(roleId, user) {
+  const key = String(user || "").trim().toLowerCase();
+  return loadAccounts().find(
+    (a) => a.role === roleId && String(a.user).toLowerCase() === key
+  );
+}
+
+function userTaken(user) {
+  const key = String(user || "").trim().toLowerCase();
+  return loadAccounts().some((a) => String(a.user).toLowerCase() === key);
+}
+
+/** 该身份在本机已注册的账号数 */
+function countByRole(roleId) {
+  return loadAccounts().filter((a) => a.role === roleId).length;
+}
+
+/* ---------- 提示条 ---------- */
+function hintFor(next) {
+  const list = loadAccounts().filter((a) => a.role === next);
+  const who = ROLE_META[next].label;
+  if (!list.length) {
+    return `本机还没有${who}账号 —— 切到「注册账号」建一个即可，账号只存在这台电脑上。`;
+  }
+  const a = list[0];
+  return `本机已有${who}账号 ${list.length} 个 —— 例如 <code>${a.user}</code> / <code>${a.pass}</code>`;
+}
+
+function syncAccountForm(next) {
+  const hint = $("#hintText");
+  if (hint) hint.innerHTML = hintFor(next);
+  // 账号框的提示用本机已注册的第一个账号，没有则给通用引导
+  const first = loadAccounts().find((a) => a.role === next);
+  const acc = $("#account");
+  if (acc) acc.placeholder = first ? first.user : "请输入账号";
+  hideError();
+}
+
+function showError(id, msg) {
+  const box = $(id);
+  if (!box) return;
+  box.textContent = msg;
+  box.hidden = false;
+}
+function hideError() {
+  ["#loginError", "#regError"].forEach((id) => {
+    const box = $(id);
+    if (box) box.hidden = true;
+  });
+}
+
+/* ---------- 选角色 ---------- */
+function selectRole(next) {
+  role = next;
+  $$(".role-card").forEach((c) => {
+    const on = c.dataset.role === next;
+    c.classList.toggle("active", on);
+    c.setAttribute("aria-pressed", String(on));
+  });
+  $("#enterBtn").textContent = `以${ROLE_META[next].label}身份进入`;
+  $("#regBtn").textContent = `注册${ROLE_META[next].label}账号并进入`;
+  syncAccountForm(next);
+}
+
+$$(".role-card").forEach((card) => {
+  card.addEventListener("click", () => selectRole(card.dataset.role));
+  card.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      selectRole(card.dataset.role);
+    }
+  });
+});
+
+/* ---------- 登录 / 注册 切换 ---------- */
+let tab = "login";
+
+function setTab(next) {
+  tab = next;
+  const isLogin = next === "login";
+  $("#tabLogin").classList.toggle("active", isLogin);
+  $("#tabReg").classList.toggle("active", !isLogin);
+  $("#tabLogin").setAttribute("aria-selected", String(isLogin));
+  $("#tabReg").setAttribute("aria-selected", String(!isLogin));
+  $("#loginForm").hidden = !isLogin;
+  $("#regForm").hidden = isLogin;
+  $("#loginTitle").textContent = isLogin ? "选择你的身份" : "注册新账号";
+  $("#loginLead").textContent = isLogin
+    ? "进入后可在设置中随时切换"
+    : "账号保存在本机浏览器，随时可删";
+  hideError();
+  (isLogin ? $("#account") : $("#regName")).focus?.();
+}
+
+$("#tabLogin").addEventListener("click", () => setTab("login"));
+$("#tabReg").addEventListener("click", () => setTab("reg"));
+
+/* ---------- 显示 / 隐藏密码 ---------- */
+function wireEye(btnId, inputId) {
+  const btn = $(btnId);
+  const inp = $(inputId);
+  if (!btn || !inp) return;
+  btn.addEventListener("click", () => {
+    const show = inp.type === "password";
+    inp.type = show ? "text" : "password";
+    btn.textContent = show ? "隐藏" : "显示";
+    btn.setAttribute("aria-pressed", String(show));
+    btn.setAttribute("aria-label", show ? "隐藏密码" : "显示密码");
+  });
+}
+wireEye("#pwdEye", "#password");
+wireEye("#regEye", "#regPass");
+
+/* ---------- 登录校验 ---------- */
+function verify() {
+  const u = $("#account").value.trim();
+  const p = $("#password").value;
+
+  if (!u) { showError("#loginError", "请先填写账号"); $("#account").focus(); return false; }
+  if (!p) { showError("#loginError", "请先填写密码"); $("#password").focus(); return false; }
+
+  const hit = findAccount(role, u);
+  if (!hit) {
+    // 提供了更友好的引导：如果这个账号在另一端存在，明确指出身份不符
+    const other = role === "teacher" ? "student" : "teacher";
+    if (findAccount(other, u)) {
+      showError("#loginError",
+        `该账号已注册为${ROLE_META[other].label}，请在上方改选「${ROLE_META[other].label}」后登录`);
+    } else {
+      showError("#loginError", "本机没有这个账号，请先点「注册账号」新建一个");
+    }
+    return false;
+  }
+  if (hit.pass !== p) {
+    showError("#loginError", "密码不正确，请重新输入");
+    $("#password").select?.();
+    return false;
+  }
+  return true;
+}
+
+/* ---------- 注册校验 ---------- */
+function verifyReg() {
+  const name = $("#regName").value.trim();
+  const user = $("#regUser").value.trim();
+  const pass = $("#regPass").value;
+
+  if (!name) { showError("#regError", "请填写姓名"); $("#regName").focus(); return null; }
+  if (!/^[A-Za-z0-9_]{3,20}$/.test(user)) {
+    showError("#regError", "账号需为 3–20 位字母、数字或下划线");
+    $("#regUser").focus();
+    return null;
+  }
+  if (userTaken(user)) {
+    showError("#regError", `账号「${user}」已被占用，换一个吧`);
+    $("#regUser").select?.();
+    return null;
+  }
+  if (pass.length < 6) {
+    showError("#regError", "密码至少 6 位");
+    $("#regPass").focus();
+    return null;
+  }
+  return { role, user, pass, name };
+}
+
+/* ---------- 进入应用壳 ---------- */
+/**
+ * @param displayName 展示用的姓名
+ * @param account     登录账号（用于把数据按账号分开存，如「我的课程」）
+ *
+ * 🔴 必须把**账号**也记下来：课程之类的数据是按账号分开存的
+ *    （`st_courses:teacher:zhangsan`）。只记角色的话，换账号登录
+ *    会看到上一个人的课程。
+ */
+function enter(displayName, account) {
+  hideError();
+  Cookie.set("st_role", role, 30);
+  LS.rawSet("st_role", role);
+  const user = String(account || "").trim().toLowerCase();
+  LS.rawSet("st_current_user", user ? (role + ":" + user) : "");
+  const fallback = PERSONA[role] || ROLE_META[role].label;
+  LS.rawSet("st_display_name", displayName || fallback);
+  location.href = "app.html#" + ROLE_META[role].home;
+}
+
+$("#loginForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (!verify()) return;
+  const typed = $("#account").value.trim();
+  const hit = findAccount(role, typed);
+  enter(hit ? hit.name : "", hit ? hit.user : typed);
+});
+
+$("#regForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const acc = verifyReg();
+  if (!acc) return;
+  const list = loadAccounts();
+  list.push({ ...acc, createdAt: Date.now() });
+  saveAccounts(list);
+  enter(acc.name, acc.user);
+});
+
+/* 「快速进入」= 快捷通道：直接用本机已有的预置账号进，跳过输入 */
+$("#demoBtn").addEventListener("click", () => {
+  const hit = findAccount(role, SEED.find((s) => s.role === role)?.user || "")
+    || loadAccounts().find((a) => a.role === role);
+  if (!hit) {
+    showError("#loginError", "本机还没有账号，请先点「注册账号」新建一个");
+    setTab("reg");
+    return;
+  }
+  enter(hit.name, hit.user);
+});
+
+/* ---------- 首屏 ---------- */
+seedAccounts();                                        // 首次打开预置账号
+if (Cookie.get("st_role")) role = currentRole();
+setTab("login");
+selectRole(role || "teacher");
+</script>
+</body>
+</html>

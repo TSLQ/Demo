@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="teacher">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>发布课件作业 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<!--
+  ============================================================
+  发布课件作业（第 47 轮：从死入口改成真能用）
+  ------------------------------------------------------------
+  背景：菜单里「发布课件作业」一直挂着 `page: null`（点不动的死入口），
+  而 AI 助手的「读课件」技能早就写着"课件由老师在发布课件作业页上传" ——
+  这一页就是那个缺口。学生端 `reader.html` 原来那份正文是**写死在 HTML 里**的。
+
+  🔴 数据来源（不许在本页再写一份）
+     · 章节范围 → `syllabusOf(course).chapters`（**真实教案大纲**）
+     · 增删改   → `createCw` / `updateCw` / `deleteCw`（`nav.js` 唯一实现）
+     · 发布/撤回 → `publishCw` / `recallCwFrom`
+     · 发布对象 → `enrolledStudentsOf(course).key`（**真实的在课学生**，不是编的名单）
+     · 分段     → `cwSections(body)`（**唯一的分段实现** —— 学生端按同一份切段，
+                  两边各写一份迟早对不上：段号错位 = 批注张冠李戴）
+     · HTML 清洗 → `cwTextFromHtml(raw)`（**必须剥 script/style**，见下）
+
+  🔴 三条纪律（验证器断言）
+    1. **不许用 `window.alert` / `window.prompt`** —— 一律走 `pageModalHost()`
+    2. 🔴 **上传的文件是不可信输入**：正文必须过 `cwTextFromHtml`（剥 script / style），
+       不许把老师传上来的 HTML 原样塞进页面（那是 XSS）
+    3. 🔴 **草稿不许被学生读到**：新建的课件一律 `draft`，发布是**另一个动作**；
+       正文为空拒绝保存、拒绝发布
+  ============================================================
+-->
+<style>
+  /* 只补全局 CSS 里没有的几样；卡片 / 章节项 / 弹窗都复用 design.css 的既有类 */
+  .cw-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  .cw-head h3 { margin: 0; font-size: 14px; font-weight: 500; display: flex; align-items: center; }
+  .cw-sub { font-size: 12.5px; color: var(--muted-foreground); }
+  .cw-src {
+    font-size: 11.5px; padding: 2px 9px; border-radius: 20px; font-weight: 600;
+    background: var(--warning-surface); color: var(--warning-foreground);
+  }
+  .cw-progress {
+    margin-top: 12px; padding: 11px 13px; border-radius: 10px; font-size: 12.5px; line-height: 1.65;
+    background: var(--info-surface); border: 1px solid color-mix(in srgb, var(--info) 26%, transparent); color: var(--info-foreground);
+  }
+  .cw-progress.err {
+    background: color-mix(in srgb, var(--destructive) 9%, transparent);
+    border-color: color-mix(in srgb, var(--destructive) 32%, transparent); color: var(--destructive);
+  }
+  .cw-empty {
+    text-align: center; color: var(--muted-foreground); font-size: 13px;
+    padding: 34px 18px; border: 1px dashed var(--border); border-radius: 10px;
+  }
+  .cw-chip {
+    font-size: 11.5px; padding: 1px 8px; border-radius: 20px;
+    background: var(--secondary); color: var(--muted-foreground);
+  }
+  .cw-people { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto; }
+  .cw-person {
+    display: flex; align-items: center; gap: 9px; padding: 7px 10px;
+    border: 1px solid var(--border); border-radius: 9px; font-size: 13px;
+  }
+  .cw-person input { width: auto; margin: 0; accent-color: var(--primary); }
+  .cw-person .k { margin-left: auto; color: var(--muted-foreground); font-size: 11.5px; }
+
+  /* 正文编辑区 */
+  #cwBody { min-height: 260px; line-height: 1.75; resize: vertical; font-size: 13.5px; }
+  .cw-tools { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .cw-note { font-size: 12px; color: var(--muted-foreground); line-height: 1.7; }
+
+  /* 段落预览（老师看到的切段结果 = 学生看到的可批注段落） */
+  .cw-secs { margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 12px; }
+  .cw-sec {
+    font-size: 12.5px; line-height: 1.6; padding: 8px 10px; border-radius: 8px;
+    background: var(--secondary); margin-bottom: 7px;
+  }
+  .cw-sec .idx { color: var(--muted-foreground); font-size: 11px; margin-right: 6px; }
+  .cw-sec-empty { font-size: 12px; color: var(--muted-foreground); }
+
+  /* 课件卡 */
+  .cw-card {
+    border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
+    background: var(--card); margin-bottom: 11px;
+  }
+  .cw-card h4 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+  .cw-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .cw-body-pv {
+    font-size: 12.5px; line-height: 1.7; color: var(--muted-foreground);
+    max-height: 92px; overflow: hidden; margin-bottom: 10px;
+  }
+  .cw-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<div class="page-wrap">
+  <div class="page" style="padding-top:0">
+    <div class="page-head">
+      <div class="crumb" id="cwCrumb">—</div>
+      <h1>发布课件作业</h1>
+      <p>写一份课件（或把已经做好的文件传上来），按空行切成可批注的段落，再发布给班上的学生 ——
+        <b>草稿只有你自己看得到</b>。</p>
+    </div>
+
+    <div class="exam-grid">
+      <!-- 第一步 -->
+      <section class="card card-raised panel" aria-label="第一步 圈定范围">
+        <h3><span class="step">1</span>圈定范围</h3>
+
+        <div class="field" style="margin-bottom:15px">
+          <label for="courseSel">课程</label>
+          <select class="select" id="courseSel"></select>
+        </div>
+
+        <label style="display:block;font-size:12px;color:var(--muted-foreground);margin-bottom:7px">
+          对应章节（点击切换，可多选）
+        </label>
+        <div id="cwChapters"></div>
+
+        <div class="notice notice-info" style="margin-top:15px;margin-bottom:0;font-size:12px;padding:11px 13px">
+          <span aria-hidden="true">ℹ</span>
+          <div id="cwScopeNote">—</div>
+        </div>
+      </section>
+
+      <!-- 第二 / 三步 -->
+      <section>
+        <div class="cw-head">
+          <h3><span class="step">2</span>写课件</h3>
+          <span class="cw-sub" id="cwEditLine">新建</span>
+          <span class="cw-src" id="cwSrcTag" hidden>上传的文件</span>
+        </div>
+
+        <div class="card card-raised" style="padding:18px">
+          <div class="field" style="margin-bottom:14px">
+            <label for="cwTitle">课件标题</label>
+            <input class="input" id="cwTitle" maxlength="60" placeholder="例：7.2 快速排序的复杂度分析">
+          </div>
+
+          <div class="field" style="margin-bottom:10px">
+            <label for="cwBody">正文</label>
+            <textarea class="input" id="cwBody" placeholder="在这里写正文。**空行分段** —— 每一段都会变成学生在课件页可以批注、可以「让 AI 再讲一遍」的段落。&#10;&#10;支持 Markdown：**加粗**、`代码`、#### 小标题、- 列表、``` 代码块。"></textarea>
+          </div>
+
+          <div class="cw-tools">
+            <button class="btn btn-sm" id="cwUploadBtn" type="button">上传文件（.md / .html / .txt）</button>
+            <span class="cw-note" id="cwSrcNote">现在是「页面上写的」</span>
+          </div>
+          <input id="cwFile" type="file" accept=".md,.markdown,.html,.htm,.txt,text/plain,text/markdown,text/html" hidden>
+
+          <div class="cw-secs" id="cwSecs"></div>
+
+          <div class="notice notice-info" style="margin-top:16px;font-size:12px;padding:11px 13px">
+            <span aria-hidden="true">ℹ</span>
+            <div>
+              切段的规则是<b>空行</b> —— 段内换行不会拆段。<br>
+              传上来的 HTML 会先<b>剥掉 script / style</b> 再转成正文（只留文字与小标题、列表）。
+            </div>
+          </div>
+
+          <div class="cw-tools" style="margin-top:16px">
+            <button class="btn btn-primary" id="cwSaveBtn" type="button">保存为草稿</button>
+            <button class="btn" id="cwPreviewBtn" type="button">预览</button>
+            <button class="btn btn-ghost" id="cwCancelEdit" type="button" hidden>取消编辑</button>
+          </div>
+          <div id="cwProgress" hidden></div>
+        </div>
+
+        <div class="cw-head" style="margin-top:20px">
+          <h3><span class="step">3</span>我的课件</h3>
+          <span class="cw-sub" id="cwCountNote">—</span>
+        </div>
+        <div id="cwList"></div>
+      </section>
+    </div>
+
+    <p class="cw-note" style="margin-top:22px">
+      学生端读的是<b>同一份记录</b> —— 你在这里改了正文，学生刷新课件页看到的就是改后的；
+      撤回之后他那边就不显示了。纯静态站没有真服务端，同浏览器换账号登录才能走完"老师发布 → 学生批注"整条闭环。
+    </p>
+  </div>
+</div>
+
+<!-- 内容页自己的弹窗宿主（壳的 #modalHost 在 iframe 里取不到） -->
+<div id="modalHost" hidden></div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  /* ---------------- 小工具 ---------------- */
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  var toastTimer = null;
+  function toast(msg) {
+    var box = $("cwBanner");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "cwBanner";
+      var host = document.querySelector(".page-head");
+      if (host && host.parentNode) host.parentNode.insertBefore(box, host.nextSibling);
+    }
+    box.innerHTML = "";
+    var el = document.createElement("div");
+    el.className = "notice notice-info";
+    el.style.margin = "0 0 14px";
+    el.style.fontSize = "12.5px";
+    el.textContent = msg;
+    box.appendChild(el);
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { if (box.firstChild === el) box.innerHTML = ""; }, 2800);
+  }
+
+  /** 确认框 —— 🔴 走 `core.js` 的 `pageModalHost()`，不用 window.confirm */
+  function confirmBox(title, text, okLabel, danger) {
+    return new Promise(function (resolve) {
+      var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+      host.hidden = false;
+      host.className = "modal-host";
+      host.innerHTML =
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          '<div class="modal-head"><b>' + esc(title) + '</b></div>' +
+          '<div class="modal-body"><p style="margin:0;font-size:13px;line-height:1.7">' + esc(text) + '</p></div>' +
+          '<div class="modal-foot">' +
+            '<button class="btn" data-mc="no" type="button">取消</button>' +
+            '<button class="btn btn-primary" data-mc="ok" type="button">' + esc(okLabel || "确认") + '</button>' +
+          '</div>' +
+        '</div>';
+      if (danger) {
+        var ok = host.querySelector('[data-mc="ok"]');
+        if (ok) ok.className = "btn btn-danger";
+      }
+      document.body.classList.add("modal-open");
+      function done(v) {
+        host.hidden = true; host.innerHTML = "";
+        document.body.classList.remove("modal-open");
+        host.removeEventListener("click", onClick);
+        document.removeEventListener("keydown", onKey);
+        resolve(v);
+      }
+      function onClick(e) {
+        var b = e.target.closest ? e.target.closest("[data-mc]") : null;
+        if (b) { done(b.getAttribute("data-mc") === "ok"); return; }
+        if (e.target === host) done(false);
+      }
+      function onKey(e) { if (e.key === "Escape") done(false); }
+      host.addEventListener("click", onClick);
+      document.addEventListener("keydown", onKey);
+    });
+  }
+
+  function goSettings() {
+    if (typeof standaloneGo === "function" && typeof inShell === "function" && !inShell()) standaloneGo("settings.html");
+    else if (typeof navigate === "function") navigate("settings.html");
+    else window.location.href = "settings.html";
+  }
+
+  /* ---------------- 状态 ---------------- */
+
+  var state = {
+    courseId: "",
+    picked: {},          // 章节 id -> true
+    cwId: null,          // 正在编辑的课件（null = 新建）
+    src: "write",        // 当前正文来源：write / upload
+  };
+
+  function courseList() {
+    return (typeof COURSES !== "undefined" && Array.isArray(COURSES)) ? COURSES : [];
+  }
+  function curCourse() {
+    var list = courseList();
+    for (var i = 0; i < list.length; i++) if (list[i].id === state.courseId) return list[i];
+    return list[0] || null;
+  }
+  function curCw() { return state.cwId ? cwOf(state.cwId) : null; }
+
+  /** 章节来自**真实教案大纲**；没有大纲就如实说，不编 */
+  function chaptersOf(courseId) {
+    if (typeof syllabusOf !== "function") return null;
+    var syl = syllabusOf(courseId);
+    if (!syl) return null;
+    return (syl.chapters || []).map(function (c) {
+      return {
+        id: String(c.id),
+        title: String(c.title || "（未命名章节）"),
+        points: (typeof splitPoints === "function") ? splitPoints(c.points) : [],
+      };
+    });
+  }
+
+  function pickedChapters() {
+    var chs = chaptersOf(state.courseId) || [];
+    return chs.filter(function (c) { return state.picked[c.id]; });
+  }
+
+  /* ---------------- 渲染：范围 ---------------- */
+
+  function renderCourse() {
+    var list = courseList();
+    var sel = $("courseSel");
+    sel.innerHTML = "";
+    if (!list.length) {
+      var o = document.createElement("option");
+      o.value = "";
+      o.textContent = "（还没有课程）";
+      sel.appendChild(o);
+    } else {
+      list.forEach(function (c) {
+        var op = document.createElement("option");
+        op.value = c.id;
+        op.textContent = c.name || c.id;
+        sel.appendChild(op);
+      });
+      sel.value = state.courseId;
+    }
+    var c = curCourse();
+    $("cwCrumb").textContent = c ? (c.name || c.id) + (c.term ? " · " + c.term : "") : "—";
+  }
+
+  function renderChapters() {
+    var box = $("cwChapters");
+    var chs = chaptersOf(state.courseId);
+    box.innerHTML = "";
+
+    if (chs === null) {
+      var e = document.createElement("div");
+      e.className = "cw-empty";
+      e.textContent = "这门课还没有教案大纲。先去「教案」把章节建起来 —— 课件挂到哪一章要从大纲来，我不会凭空编章节。";
+      box.appendChild(e);
+      renderScope();
+      return;
+    }
+    if (!chs.length) {
+      var e2 = document.createElement("div");
+      e2.className = "cw-empty";
+      e2.textContent = "大纲里还没有章节，先去「教案」加几章。";
+      box.appendChild(e2);
+      renderScope();
+      return;
+    }
+
+    chs.forEach(function (c) {
+      var on = !!state.picked[c.id];
+      var el = document.createElement("div");
+      el.className = "chap-item" + (on ? " on" : "");
+      el.setAttribute("data-id", c.id);
+      el.setAttribute("role", "checkbox");
+      el.setAttribute("aria-checked", on ? "true" : "false");
+      el.setAttribute("tabindex", "0");
+      el.textContent = c.title;
+      box.appendChild(el);
+    });
+    renderScope();
+  }
+
+  function renderScope() {
+    var picked = pickedChapters();
+    var n = picked.reduce(function (s, c) { return s + (c.points || []).length; }, 0);
+    $("cwScopeNote").textContent = picked.length
+      ? "已选 " + picked.length + " 章，覆盖 " + n + " 个知识点"
+      : "还没选章节 —— 不选也能发，但课件就不会挂在任何章节下";
+  }
+
+  /* ---------------- 渲染：正文与切段预览 ---------------- */
+
+  function curBody() { return $("cwBody").value || ""; }
+
+  function renderSecs() {
+    var box = $("cwSecs");
+    var secs = (typeof cwSections === "function") ? cwSections(curBody()) : [];
+    box.innerHTML = "";
+    if (!secs.length) {
+      var d = document.createElement("div");
+      d.className = "cw-sec-empty";
+      d.textContent = "还没有正文 —— 上面写点什么，或者传一个文件上来。";
+      box.appendChild(d);
+      return;
+    }
+    var head = document.createElement("div");
+    head.className = "cw-note";
+    head.style.marginBottom = "8px";
+    head.textContent = "会切成 " + secs.length + " 段（学生看到的就是这几段，每段都可批注）：";
+    box.appendChild(head);
+
+    var st = cwStats({ body: curBody() });
+    secs.forEach(function (t, i) {
+      var el = document.createElement("div");
+      el.className = "cw-sec";
+      var idx = document.createElement("span");
+      idx.className = "idx";
+      idx.textContent = "第 " + (i + 1) + " 段";
+      el.appendChild(idx);
+      // 段内可能是 Markdown —— 用 core.js 的 mdToHtml 渲染，跟学生端保持同一套
+      var body = document.createElement("span");
+      body.innerHTML = (typeof mdToHtml === "function") ? mdToHtml(t) : esc(t);
+      el.appendChild(body);
+      box.appendChild(el);
+    });
+
+    var tail = document.createElement("div");
+    tail.className = "cw-note";
+    tail.textContent = "共约 " + st.chars + " 字，朗读约 " + st.minutes + " 分钟。";
+    box.appendChild(tail);
+  }
+
+  function renderEditHead() {
+    var c = curCw();
+    $("cwEditLine").textContent = c ? "正在改「" + c.title + "」" : "新建";
+    $("cwSaveBtn").textContent = c ? "保存修改" : "保存为草稿";
+    $("cwCancelEdit").hidden = !c;
+    var tag = $("cwSrcTag");
+    if (c && c.source === "upload") { tag.hidden = false; tag.textContent = "上传的文件"; }
+    else if (c && c.source === "sample") { tag.hidden = false; tag.textContent = "预置示例"; }
+    else tag.hidden = true;
+    $("cwSrcNote").textContent = state.src === "upload" ? "现在是「上传的文件」" : "现在是「页面上写的」";
+  }
+
+  function showProgress(html, isErr) {
+    var p = $("cwProgress");
+    p.hidden = false;
+    p.className = "cw-progress" + (isErr ? " err" : "");
+    p.innerHTML = html;
+  }
+  function clearProgress() { var p = $("cwProgress"); p.hidden = true; p.innerHTML = ""; }
+
+  /* ---------------- 渲染：课件列表 ---------------- */
+
+  function srcLabel(c) {
+    return (CW_SOURCE[c.source] || CW_SOURCE.write).label;
+  }
+
+  function cwCard(c) {
+    var st = cwStats(c);
+    var secs = cwSections(c);
+    var card = document.createElement("div");
+    card.className = "cw-card";
+    card.setAttribute("data-cw", c.id);
+
+    var h = document.createElement("h4");
+    h.textContent = c.title;
+    card.appendChild(h);
+
+    var meta = document.createElement("div");
+    meta.className = "cw-meta";
+    meta.innerHTML =
+      '<span class="status-pill ' + (st.published ? "st-ok" : "st-warn") + '">' +
+        (st.published ? "已发布" : "草稿") + "</span>" +
+      '<span class="cw-chip">' + esc(srcLabel(c)) + "</span>" +
+      '<span class="cw-chip">' + st.sections + " 段 · 约 " + st.chars + " 字</span>" +
+      (c.chapters && c.chapters.length
+        ? '<span class="cw-chip">' + esc(c.chapters.map(function (x) { return x.title; }).join("、")) + "</span>"
+        : "") +
+      (st.sentCount ? '<span class="cw-chip">已发 ' + st.sentCount + " 人</span>" : "");
+    card.appendChild(meta);
+
+    var pv = document.createElement("div");
+    pv.className = "cw-body-pv";
+    pv.textContent = secs.length ? secs[0].slice(0, 90) + (secs[0].length > 90 ? "…" : "") : "（正文是空的）";
+    card.appendChild(pv);
+
+    var acts = document.createElement("div");
+    acts.className = "cw-acts";
+    [["edit", "编辑", ""], ["preview", "预览", ""],
+     ["publish", "发布到班级", "btn-primary"], ["readers", "已发给谁", ""], ["del", "删除", "dk-danger"]]
+      .forEach(function (a) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn btn-sm" + (a[2] ? " " + a[2] : "");
+        b.textContent = a[1];
+        b.setAttribute("data-act", a[0]);
+        acts.appendChild(b);
+      });
+    card.appendChild(acts);
+    return card;
+  }
+
+  function renderList() {
+    var box = $("cwList");
+    box.innerHTML = "";
+    var list = (typeof CWS !== "undefined" && Array.isArray(CWS)) ? CWS : [];
+    $("cwCountNote").textContent = list.length
+      ? "共 " + list.length + " 份（" + list.filter(function (c) { return c.status === "published"; }).length + " 份已发布）"
+      : "还没有课件";
+
+    if (!list.length) {
+      var e = document.createElement("div");
+      e.className = "cw-empty";
+      e.textContent = "还没有课件。在上面写好正文，点「保存为草稿」—— 确认没问题再发布给学生。";
+      box.appendChild(e);
+      return;
+    }
+    list.forEach(function (c) { box.appendChild(cwCard(c)); });
+  }
+
+  /* ---------------- 保存 / 编辑 ---------------- */
+
+  function saveCwFlow() {
+    var body = curBody().trim();
+    var title = $("cwTitle").value.trim();
+    if (!body) { showProgress("<b>正文还是空的。</b>写点什么，或者传一个文件上来 —— 空课件发出去学生什么也看不到。", true); return; }
+    if (!title) { showProgress("<b>课件标题还没填。</b>", true); return; }
+
+    var picked = pickedChapters();
+    var c = curCourse();
+    var payload = {
+      title: title,
+      body: body,
+      courseId: state.courseId,
+      courseName: c ? (c.name || c.id) : "",
+      chapters: picked.map(function (ch) { return { id: ch.id, title: ch.title }; }),
+    };
+
+    var cur = curCw();
+    var r;
+    if (cur) {
+      r = updateCw(cur.id, payload);
+      if (r.ok) { r.cw.updatedAt = Date.now(); }
+    } else {
+      payload.source = state.src;
+      r = createCw(payload);
+    }
+    if (!r.ok) { showProgress("<b>没保存成：</b>" + esc(r.error), true); return; }
+
+    state.cwId = r.cw.id;
+    clearProgress();
+    toast(cur ? "改好了 —— 学生刷新就能看到新正文" : "已保存为草稿（还没发出去）");
+    renderEditHead();
+    renderSecs();
+    renderList();
+  }
+
+  function editCw(id) {
+    var c = cwOf(id);
+    if (!c) { toast("这份课件已经不在了"); renderList(); return; }
+    state.cwId = c.id;
+    state.src = c.source;
+    if (c.courseId) {
+      state.courseId = c.courseId;
+      renderCourse();
+    }
+    state.picked = {};
+    (c.chapters || []).forEach(function (x) { if (x.id) state.picked[x.id] = true; });
+    $("cwTitle").value = c.title;
+    $("cwBody").value = c.body;
+    renderChapters();
+    renderEditHead();
+    renderSecs();
+    clearProgress();
+    toast("可以改了 —— 改完记得保存");
+    var panel = $("cwTitle");
+    if (panel && panel.scrollIntoView) panel.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  function cancelEdit() {
+    state.cwId = null;
+    $("cwTitle").value = "";
+    $("cwBody").value = "";
+    state.src = "write";
+    renderEditHead();
+    renderSecs();
+    clearProgress();
+  }
+
+  /* ---------------- 预览 ---------------- */
+
+  function previewFlow() {
+    var body = curBody().trim();
+    if (!body) { toast("正文还是空的，没什么可预览的"); return; }
+    var secs = cwSections(body);
+    var st = cwStats({ body: body });
+    var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+    host.hidden = false;
+    host.className = "modal-host";
+
+    var head = '<p style="margin:0 0 4px;font-size:13px">' +
+        esc($("cwTitle").value.trim() || "未命名课件") + "　·　" + secs.length + " 段　·　约 " + st.chars + " 字</p>" +
+      '<p class="cw-sub" style="margin:0">这是学生看到的样子 —— 每段都能选中、批注、"让 AI 再讲一遍"。</p>';
+
+    var bodyHtml = '<div class="ex-preview">' + secs.map(function (t, i) {
+      return '<div class="cw-sec"><span class="idx">第 ' + (i + 1) + " 段</span>" +
+        ((typeof mdToHtml === "function") ? mdToHtml(t) : esc(t)) + "</div>";
+    }).join("") + "</div>";
+
+    host.innerHTML =
+      '<div class="modal" role="dialog" aria-modal="true" style="max-width:680px">' +
+        '<div class="modal-head"><b>课件预览</b></div>' +
+        '<div class="modal-body">' + head + bodyHtml + "</div>" +
+        '<div class="modal-foot"><button class="btn btn-primary" data-mc="ok" type="button">知道了</button></div>' +
+      "</div>";
+    document.body.classList.add("modal-open");
+
+    function close() {
+      host.hidden = true; host.innerHTML = "";
+      document.body.classList.remove("modal-open");
+      host.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    }
+    function onClick(e) {
+      var b = e.target.closest ? e.target.closest("[data-mc]") : null;
+      if (b) { close(); return; }
+      if (e.target === host) close();
+    }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    host.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+  }
+
+  /* ---------------- 发布 / 撤回 / 删除 ---------------- */
+
+  /** 发布名单 —— 🔴 来自 `enrolledStudentsOf(course).key`（真实的在课学生） */
+  function publishFlow(id) {
+    var c = cwOf(id);
+    if (!c) { toast("这份课件已经不在了"); renderList(); return; }
+    var st = cwStats(c);
+    if (!st.sections) { toast("正文是空的 —— 先写点内容再发布"); return; }
+
+    var studs = (typeof enrolledStudentsOf === "function") ? enrolledStudentsOf(c.courseId) : [];
+    var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+    host.hidden = false;
+    host.className = "modal-host";
+
+    if (!studs.length) {
+      // 🔴 没有在课学生时说清"为什么发不了"，不假装发出去了
+      host.innerHTML =
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          '<div class="modal-head"><b>发布到班级</b></div>' +
+          '<div class="modal-body"><p style="margin:0;font-size:13px;line-height:1.7">' +
+            "「" + esc(c.courseName || "这门课") + "」现在还没有学生加入，所以没有人可以发。<br>" +
+            '先去「教学 · 课程成员」把邀请码给学生，他们加入后这里就能选了。' +
+          "</p></div>" +
+          '<div class="modal-foot"><button class="btn btn-primary" data-mc="ok" type="button">知道了</button></div>' +
+        "</div>";
+    } else {
+      var sent = {};
+      (c.publishedTo || []).forEach(function (x) { sent[x.who] = 1; });
+      var rows = studs.map(function (s) {
+        var done = sent[s.key] ? '<span class="status-pill st-ok">已发</span>' : "";
+        return '<label class="cw-person"><input type="checkbox" data-who="' + esc(s.key) + '">' +
+          "<span>" + esc(s.name || s.user) + "</span>" + done + "</label>";
+      }).join("");
+      host.innerHTML =
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          '<div class="modal-head"><b>把「' + esc(c.title) + "」发给谁（" + st.sections + " 段）</b></div>" +
+          '<div class="modal-body"><div class="cw-people">' + rows + "</div>" +
+            '<p class="cw-sub" style="margin-top:10px">发给同一个学生不会重复记录，只是刷新一下时间。</p></div>' +
+          '<div class="modal-foot">' +
+            '<button class="btn" data-mc="no" type="button">取消</button>' +
+            '<button class="btn btn-primary" data-mc="ok" type="button">确认发布</button>' +
+          "</div>" +
+        "</div>";
+    }
+    document.body.classList.add("modal-open");
+
+    function close() {
+      host.hidden = true; host.innerHTML = "";
+      document.body.classList.remove("modal-open");
+      host.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    }
+    function onClick(e) {
+      var b = e.target.closest ? e.target.closest("[data-mc]") : null;
+      if (!b) { if (e.target === host) close(); return; }
+      if (b.getAttribute("data-mc") !== "ok") { close(); return; }
+      if (!studs.length) { close(); return; }
+      var picked = [];
+      Array.prototype.forEach.call(host.querySelectorAll("[data-who]"), function (el) {
+        if (el.checked) picked.push(el.getAttribute("data-who"));
+      });
+      var r = publishCw(c.id, picked);
+      if (!r.ok) { toast(r.error); return; }
+      toast("已发布给 " + (r.added + r.updated) + " 位学生" + (r.updated ? "（" + r.updated + " 位是重发）" : ""));
+      close();
+      renderList();
+    }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    host.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+  }
+
+  /** 已发给谁 —— 逐人撤回（撤回后学生那边就不显示了） */
+  function readersFlow(id) {
+    var c = cwOf(id);
+    if (!c) { toast("这份课件已经不在了"); renderList(); return; }
+    var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+    host.hidden = false;
+    host.className = "modal-host";
+    document.body.classList.add("modal-open");
+
+    function nameOf(who) {
+      var list = (typeof enrolledStudentsOf === "function") ? enrolledStudentsOf(c.courseId) : [];
+      for (var i = 0; i < list.length; i++) if (list[i].key === who) return list[i].name || list[i].user;
+      return who;
+    }
+    function draw() {
+      var cur = cwOf(id) || c;
+      var rows = (cur.publishedTo || []).map(function (x) {
+        return '<div class="cw-person"><span>' + esc(nameOf(x.who)) + "</span>" +
+          '<span class="k">' + esc(whoText(x.at)) + "</span>" +
+          '<button class="btn btn-sm dk-danger" data-recall="' + esc(x.who) + '" type="button">撤回</button></div>';
+      }).join("");
+      host.innerHTML =
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          '<div class="modal-head"><b>「' + esc(cur.title) + "」发给了谁</b></div>" +
+          '<div class="modal-body">' +
+            (rows || '<p style="margin:0;font-size:13px">还没有发给任何人。</p>') +
+            '<p class="cw-sub" style="margin-top:10px">撤回后学生那边就不显示了 —— 他不会收到任何通知（纯静态站没有推送）。</p>' +
+          "</div>" +
+          '<div class="modal-foot"><button class="btn btn-primary" data-mc="ok" type="button">关闭</button></div>' +
+        "</div>";
+    }
+    function whoText(at) {
+      var d = Math.max(0, Date.now() - (Number(at) || 0));
+      var m = Math.floor(d / 60000);
+      if (m < 1) return "刚刚";
+      if (m < 60) return m + " 分钟前";
+      var h = Math.floor(m / 60);
+      if (h < 24) return h + " 小时前";
+      return Math.floor(h / 24) + " 天前";
+    }
+    draw();
+
+    function close() {
+      host.hidden = true; host.innerHTML = "";
+      document.body.classList.remove("modal-open");
+      host.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    }
+    function onClick(e) {
+      var rc = e.target.closest ? e.target.closest("[data-recall]") : null;
+      if (rc) {
+        var r = recallCwFrom(id, rc.getAttribute("data-recall"));
+        toast(r.ok ? "已撤回（他那边不再显示）" : r.error);
+        draw();
+        renderList();
+        return;
+      }
+      var b = e.target.closest ? e.target.closest("[data-mc]") : null;
+      if (b) { close(); return; }
+      if (e.target === host) close();
+    }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    host.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+  }
+
+  function delFlow(id) {
+    var c = cwOf(id);
+    if (!c) { toast("这份课件已经不在了"); renderList(); return; }
+    confirmBox("删除这份课件？", "「" + c.title + "」" + cwAssetCount(id) + "。删除后无法恢复。", "删除", true)
+      .then(function (ok) {
+        if (!ok) return;
+        deleteCw(id);
+        if (state.cwId === id) cancelEdit();
+        toast("已删除");
+        renderList();
+      });
+  }
+
+  /* ---------------- 上传文件 ---------------- */
+
+  /**
+   * 🔴 上传的文件是**不可信输入** —— 正文一律过 `cwTextFromHtml`（剥 script / style）。
+   * `.md` / `.txt` 直接当文本用；`.html` / `.htm` 先转成 Markdown 文本。
+   */
+  function onFile(file) {
+    if (!file) return;
+    if (typeof FileReader !== "function") {
+      showProgress("<b>这个浏览器读不了本地文件。</b>可以直接把正文粘到上面的输入框里。", true);
+      return;
+    }
+    var reader = new FileReader();
+    reader.onerror = function () { showProgress("<b>文件读失败了。</b>换个文件，或者直接把正文粘上来。", true); };
+    reader.onload = function () {
+      var raw = String(reader.result || "");
+      var isHtml = /\.html?$/i.test(file.name || "");
+      var text = isHtml ? cwTextFromHtml(raw) : raw;
+      if (!String(text).trim()) {
+        showProgress("<b>这个文件里没有可用的正文</b>（可能全被剥掉了，或者本来就是空的）。", true);
+        return;
+      }
+      $("cwBody").value = text;
+      if (!$("cwTitle").value.trim()) {
+        $("cwTitle").value = String(file.name || "").replace(/\.[^.]+$/, "");
+      }
+      state.src = "upload";
+      clearProgress();
+      renderEditHead();
+      renderSecs();
+      toast("已读入「" + (file.name || "文件") + "」" + (isHtml ? "（已剥掉脚本与样式）" : "") + " —— 检查一下再保存");
+    };
+    reader.readAsText(file);
+  }
+
+  /* ---------------- 事件 ---------------- */
+
+  $("courseSel").addEventListener("change", function () {
+    state.courseId = this.value;
+    state.picked = {};
+    renderCourse();
+    renderChapters();
+  });
+
+  $("cwChapters").addEventListener("click", function (e) {
+    var it = e.target.closest ? e.target.closest(".chap-item") : null;
+    if (!it) return;
+    var id = it.getAttribute("data-id");
+    if (state.picked[id]) delete state.picked[id]; else state.picked[id] = true;
+    renderChapters();
+  });
+
+  $("cwBody").addEventListener("input", renderSecs);
+  $("cwSaveBtn").addEventListener("click", saveCwFlow);
+  $("cwPreviewBtn").addEventListener("click", previewFlow);
+  $("cwCancelEdit").addEventListener("click", cancelEdit);
+
+  $("cwUploadBtn").addEventListener("click", function () { $("cwFile").click(); });
+  $("cwFile").addEventListener("change", function () {
+    var f = this.files && this.files[0];
+    onFile(f);
+    this.value = "";               // 同一个文件再传一次也要触发 change
+  });
+
+  $("cwList").addEventListener("click", function (e) {
+    var a = e.target.closest ? e.target.closest("[data-act]") : null;
+    if (!a) return;
+    var card = e.target.closest ? e.target.closest("[data-cw]") : null;
+    if (!card) return;
+    var id = card.getAttribute("data-cw");
+    var act = a.getAttribute("data-act");
+    if (act === "edit") { editCw(id); return; }
+    if (act === "preview") {
+      var c = cwOf(id);
+      if (!c) { toast("这份课件已经不在了"); renderList(); return; }
+      // 预览走同一套渲染：临时把正文放进编辑区前先记住原内容
+      var keepId = state.cwId, keepTitle = $("cwTitle").value, keepBody = $("cwBody").value, keepSrc = state.src;
+      state.cwId = id; $("cwTitle").value = c.title; $("cwBody").value = c.body;
+      previewFlow();
+      state.cwId = keepId; $("cwTitle").value = keepTitle; $("cwBody").value = keepBody; state.src = keepSrc;
+      return;
+    }
+    if (act === "publish") { publishFlow(id); return; }
+    if (act === "readers") { readersFlow(id); return; }
+    if (act === "del") { delFlow(id); return; }
+  });
+
+  /* ---------------- 启动 ---------------- */
+
+  function init() {
+    var list = courseList();
+    state.courseId = list.length ? list[0].id : "";
+
+    // 有草稿就接着改那份（不要每次都从零开始），没有就空着新建
+    var latest = (typeof CWS !== "undefined" && CWS.length)
+      ? (CWS.filter(function (c) { return c.status === "draft"; })[0] || null)
+      : null;
+
+    renderCourse();
+    renderChapters();
+    renderEditHead();
+    renderSecs();
+    renderList();
+
+    if (latest) editCw(latest.id);
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

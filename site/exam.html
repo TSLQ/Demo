@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="teacher">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>出题与组卷 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<!--
+  ============================================================
+  出题与组卷（第 44 轮：从静态壳改成真能用）
+  ------------------------------------------------------------
+  用户原话：「实现一下出卷出题吧」。
+
+  🔴 老版这一页是**纯静态壳**，六个问题全在"假"上：
+     · 章节写死 4 条（与真实教案大纲无关）
+     · 题目写死 4 道
+     · 「生成题目」只是 `setTimeout` 假装（**假装生成了**）
+     · 预览 / 发布用 `alert()`（假弹窗）
+     · 「修改题干」用 `prompt()`
+     · 采纳/弃用只改内存，刷新就回原样
+     这六条现在全部改成真的：真章节 / 真模型 / 真落库 / 真发布 / 走 pageModalHost。
+
+  🔴 数据来源（不许在本页再写一份）
+     · 章节范围 → `syllabusOf(course).chapters`（**真实教案大纲**）
+     · 出题     → `generateExamQuestions(scope, cfg)`（真接模型）
+     · 增删改审 → `createExam` / `updateExam` / `setQuestionState` / `updateQuestion` /
+                  `replaceQuestion` / `publishExam` / `deleteExam`（`nav.js` 唯一实现）
+     · 发布对象 → `enrolledStudentsOf(course).key`（**真实的在课学生**，不是编的名单）
+
+  🔴 三条纪律（验证器断言）
+    1. **不许用 `window.alert` / `window.prompt`** —— 一律走 `pageModalHost()`
+    2. **未接模型时如实拒绝**（说清原因 + 指路设置），**绝不拼假题冒充 AI 出的**
+    3. **没采纳的题不进卷子**；发布前至少要有 1 道「已采纳」
+  ============================================================
+-->
+<style>
+  /* 只补全局 CSS 里没有的几样；卡片 / 章节项 / 题目卡都复用 design.css 的既有类 */
+  .ex-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  .ex-head h3 { margin: 0; font-size: 14px; font-weight: 500; display: flex; align-items: center; }
+  .ex-sub { font-size: 12.5px; color: var(--muted-foreground); }
+  .ex-src {
+    font-size: 11.5px; padding: 2px 9px; border-radius: 20px; font-weight: 600;
+    background: var(--warning-surface); color: var(--warning-foreground);
+  }
+  .ex-progress {
+    margin-top: 12px; padding: 11px 13px; border-radius: 10px; font-size: 12.5px; line-height: 1.65;
+    background: var(--info-surface); border: 1px solid color-mix(in srgb, var(--info) 26%, transparent); color: var(--info-foreground);
+  }
+  .ex-progress.err {
+    background: color-mix(in srgb, var(--destructive) 9%, transparent);
+    border-color: color-mix(in srgb, var(--destructive) 32%, transparent); color: var(--destructive);
+  }
+  .ex-empty {
+    text-align: center; color: var(--muted-foreground); font-size: 13px;
+    padding: 34px 18px; border: 1px dashed var(--border); border-radius: 10px;
+  }
+  .ex-row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+  .ex-chip {
+    font-size: 11.5px; padding: 1px 8px; border-radius: 20px;
+    background: var(--secondary); color: var(--muted-foreground);
+  }
+  .ex-fb { font-size: 13px; line-height: 1.6; }
+  .ex-people { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto; }
+  .ex-person {
+    display: flex; align-items: center; gap: 9px; padding: 7px 10px;
+    border: 1px solid var(--border); border-radius: 9px; cursor: pointer; font-size: 13px;
+  }
+  .ex-person:hover { background: var(--secondary); }
+  .ex-person input { width: auto; margin: 0; accent-color: var(--primary); }
+  .ex-person .k { margin-left: auto; color: var(--muted-foreground); font-size: 11.5px; }
+  .ex-preview h4 { margin: 14px 0 6px; font-size: 13px; }
+  .ex-preview .q-text { margin-bottom: 4px; }
+
+  /* 题型勾选（交互照章节项，但更紧凑） */
+  .ex-types { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .ex-type {
+    padding: 6px 13px; border: 1px solid var(--border); border-radius: 18px;
+    background: var(--card); color: var(--foreground); font-size: 12.5px; cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  .ex-type:hover { background: var(--secondary); }
+  .ex-type.on {
+    border-color: var(--primary); background: var(--primary);
+    color: var(--primary-foreground); font-weight: 600;
+  }
+  .ex-type:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  .ex-type .n { opacity: .72; font-size: 11.5px; margin-left: 5px; font-weight: 400; }
+
+  /* 填空题：空的个数提示 */
+  .q-blanks { font-size: 12px; color: var(--muted-foreground); margin-top: 4px; }
+  /* 多选：答案行前面挂一个提示 */
+  .q-ans-tip { font-size: 11.5px; color: var(--muted-foreground); margin-left: 6px; font-weight: 400; }
+
+  /* 列表下方的「添加一题」 */
+  .ex-addq { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<div class="page-wrap">
+  <div class="page" style="padding-top:0">
+    <div class="page-head">
+      <div class="crumb" id="exCrumb">—</div>
+      <h1>出题与组卷</h1>
+      <p>圈定讲过的章节范围，AI 从该范围出题；逐题审核后组卷发布 —— <b>没采纳的题不会进卷子</b>。</p>
+    </div>
+
+    <div class="exam-grid">
+      <!-- 第一步 -->
+      <section class="card card-raised panel" aria-label="第一步 圈定范围">
+        <h3><span class="step">1</span>圈定范围</h3>
+
+        <div class="field" style="margin-bottom:15px">
+          <label for="courseSel">课程</label>
+          <select class="select" id="courseSel"></select>
+        </div>
+
+        <label style="display:block;font-size:12px;color:var(--muted-foreground);margin-bottom:7px">
+          选择章节（点击切换）
+        </label>
+        <div id="chapters"></div>
+
+        <div class="field-row" style="margin-top:16px">
+          <div class="field" style="max-width:180px">
+            <label for="numQ">题目数量（1–30）</label>
+            <input class="input" id="numQ" type="number" min="1" max="30" step="1" value="8"
+                   inputmode="numeric" autocomplete="off">
+          </div>
+        </div>
+        <div class="field" style="margin-bottom:16px">
+          <label for="diff">难度分布</label>
+          <select class="select" id="diff">
+            <option value="basic">基础为主</option>
+            <option value="mid" selected>均衡</option>
+            <option value="hard">偏难</option>
+          </select>
+        </div>
+
+        <label style="display:block;font-size:12px;color:var(--muted-foreground);margin-bottom:7px">
+          题型（点一下切换，可多选）
+        </label>
+        <div id="qtypes" class="ex-types" role="group" aria-label="出题题型"></div>
+
+        <div class="notice notice-info" style="margin-bottom:15px;font-size:12px;padding:11px 13px">
+          <span aria-hidden="true">ℹ</span>
+          <div id="scopeNote">—</div>
+        </div>
+
+        <button class="btn btn-primary" style="width:100%" id="genBtn">生成题目</button>
+        <button class="btn btn-sm" style="width:100%;margin-top:8px" id="sampleBtn" hidden>先看一套示例题</button>
+        <button class="btn btn-sm" style="width:100%;margin-top:8px" id="goSettings" hidden>去设置填 Key</button>
+        <div id="exProgress" hidden></div>
+      </section>
+
+      <!-- 第二 / 三步 -->
+      <section>
+        <div class="ex-head">
+          <h3><span class="step">2</span>审核题目</h3>
+          <span class="ex-sub" id="accLine">—</span>
+          <span class="ex-src" id="srcTag" hidden>预置示例</span>
+          <span class="ex-chip" id="modelTag" hidden></span>
+        </div>
+
+        <div id="qList"></div>
+
+        <div class="ex-addq">
+          <button class="btn" id="addQBtn" type="button">添加一题</button>
+          <span class="ex-sub" id="qCountNote">—</span>
+        </div>
+
+        <div class="card card-raised" style="padding:18px;margin-top:16px">
+          <h3 style="margin:0 0 14px;font-size:14px;font-weight:500">
+            <span class="step" style="display:inline-grid;place-items:center;width:19px;height:19px;border-radius:50%;background:var(--primary);color:var(--primary-foreground);font-size:11px;margin-right:7px">3</span>
+            组卷与发布
+          </h3>
+          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:16px">
+            <div class="field" style="max-width:170px">
+              <label for="examTitle">卷子名称</label>
+              <input class="input" id="examTitle" maxlength="40" placeholder="未命名试卷">
+            </div>
+            <div class="field" style="max-width:130px">
+              <label for="totalScore">总分</label>
+              <input class="input" id="totalScore" type="number" min="1" max="500" value="100">
+            </div>
+            <div class="field" style="max-width:140px">
+              <label for="duration">时长（分钟）</label>
+              <input class="input" id="duration" type="number" min="1" max="600" value="90">
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn" id="savePaperBtn">保存设置</button>
+            <button class="btn" id="previewBtn">预览试卷</button>
+            <button class="btn btn-primary" id="publishBtn">发布到班级</button>
+            <button class="btn btn-ghost" id="delExamBtn">删除这份卷</button>
+          </div>
+          <div class="ex-sub" id="pubLine" style="margin-top:10px">—</div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- 内容页自己的弹窗宿主（壳的 #modalHost 在 iframe 里取不到） -->
+<div id="modalHost" hidden></div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  /* ---------------- 小工具 ---------------- */
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  var toastTimer = null;
+  function toast(msg) {
+    var box = $("exBanner") || (function () {
+      var b = document.createElement("div");
+      b.id = "exBanner";
+      var host = document.querySelector(".page-head");
+      if (host && host.parentNode) host.parentNode.insertBefore(b, host.nextSibling);
+      return b;
+    })();
+    box.innerHTML = "";
+    var el = document.createElement("div");
+    el.className = "notice notice-info";
+    el.style.margin = "0 0 14px";
+    el.style.fontSize = "12.5px";
+    el.textContent = msg;
+    box.appendChild(el);
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { if (box.firstChild === el) box.innerHTML = ""; }, 2600);
+  }
+
+  /** 确认框 —— 🔴 走 `core.js` 的 `pageModalHost()`，不用 window.confirm */
+  function confirmBox(title, text, okLabel, danger) {
+    return new Promise(function (resolve) {
+      var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+      host.hidden = false;
+      host.className = "modal-host";
+      host.innerHTML =
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          '<div class="modal-head"><b>' + esc(title) + '</b></div>' +
+          '<div class="modal-body"><p style="margin:0;font-size:13px;line-height:1.6">' + esc(text) + '</p></div>' +
+          '<div class="modal-foot">' +
+            '<button class="btn" data-mc="no" type="button">取消</button>' +
+            '<button class="btn btn-primary" data-mc="ok" type="button">' + esc(okLabel || "确认") + '</button>' +
+          '</div>' +
+        '</div>';
+      if (danger) {
+        var ok = host.querySelector('[data-mc="ok"]');
+        if (ok) ok.className = "btn btn-danger";
+      }
+      document.body.classList.add("modal-open");
+      function done(v) {
+        host.hidden = true; host.innerHTML = "";
+        document.body.classList.remove("modal-open");
+        host.removeEventListener("click", onClick);
+        document.removeEventListener("keydown", onKey);
+        resolve(v);
+      }
+      function onClick(e) {
+        var b = e.target.closest ? e.target.closest("[data-mc]") : null;
+        if (b) { done(b.getAttribute("data-mc") === "ok"); return; }
+        if (e.target === host) done(false);
+      }
+      function onKey(e) { if (e.key === "Escape") done(false); }
+      host.addEventListener("click", onClick);
+      document.addEventListener("keydown", onKey);
+    });
+  }
+
+  /** 就地输入框（改名 / 改题干）—— 🔴 不用 `window.prompt` */
+  function askText(title, fields, okLabel) {
+    return new Promise(function (resolve) {
+      var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+      host.hidden = false;
+      host.className = "modal-host";
+      var body = fields.map(function (f) {
+        var tag;
+        if (f.options && f.options.length) {
+          // 下拉字段（如「添加一题」里的题型选择）—— 选项由调用方传，不在本函数里写死
+          tag = '<select class="select" data-f="' + f.key + '">' +
+            f.options.map(function (o) {
+              var v = Array.isArray(o) ? o[0] : o;
+              var lb = Array.isArray(o) ? o[1] : o;
+              return '<option value="' + esc(v) + '"' +
+                (String(f.value == null ? "" : f.value) === String(v) ? " selected" : "") + ">" +
+                esc(lb) + "</option>";
+            }).join("") + "</select>";
+        } else if (f.multiline) {
+          tag = '<textarea class="input" data-f="' + f.key + '" rows="' + (f.rows || 3) + '">' + esc(f.value || "") + "</textarea>";
+        } else {
+          tag = '<input class="input" data-f="' + f.key + '" type="text" value="' + esc(f.value || "") + '" placeholder="' + esc(f.ph || "") + '">';
+        }
+        return '<label class="field" style="display:block;margin-bottom:12px">' +
+          '<span style="display:block;font-size:12px;color:var(--muted-foreground);margin-bottom:5px">' + esc(f.label) + "</span>" +
+          tag + "</label>";
+      }).join("");
+      host.innerHTML =
+        '<div class="modal" role="dialog" aria-modal="true" style="max-width:560px">' +
+          '<div class="modal-head"><b>' + esc(title) + '</b></div>' +
+          '<div class="modal-body">' + body + '</div>' +
+          '<div class="modal-foot">' +
+            '<button class="btn" data-mc="no" type="button">取消</button>' +
+            '<button class="btn btn-primary" data-mc="ok" type="button">' + esc(okLabel || "保存") + '</button>' +
+          '</div>' +
+        '</div>';
+      document.body.classList.add("modal-open");
+      var first = host.querySelector("[data-f]");
+      if (first) setTimeout(function () { first.focus(); }, 30);
+
+      function close(v) {
+        host.hidden = true; host.innerHTML = "";
+        document.body.classList.remove("modal-open");
+        host.removeEventListener("click", onClick);
+        host.removeEventListener("keydown", onKey);
+        resolve(v);
+      }
+      function collect() {
+        var out = {};
+        Array.prototype.forEach.call(host.querySelectorAll("[data-f]"), function (el) {
+          out[el.getAttribute("data-f")] = String(el.value || "").trim();
+        });
+        return out;
+      }
+      function onClick(e) {
+        var b = e.target.closest ? e.target.closest("[data-mc]") : null;
+        if (b) { close(b.getAttribute("data-mc") === "ok" ? collect() : null); return; }
+        if (e.target === host) close(null);
+      }
+      function onKey(e) {
+        if (e.key === "Escape") close(null);
+        if (e.key === "Enter" && e.target === first && !first.tagName.match(/TEXTAREA/)) { e.preventDefault(); close(collect()); }
+      }
+      host.addEventListener("click", onClick);
+      host.addEventListener("keydown", onKey);
+    });
+  }
+
+  /* ---------------- 状态 ---------------- */
+
+  var state = {
+    courseId: "",
+    picked: {},          // 章节 id -> true
+    types: (typeof examPickTypes === "function") ? examPickTypes() : ["single", "multi", "blank"],
+                         // 🔴 勾选的题型（默认单选 / 多选 / 填空），出题时只出这几种
+    examId: null,        // 当前在编辑的试卷（草稿）
+    now: Date.now(),
+  };
+
+  function courseList() {
+    return (typeof COURSES !== "undefined" && Array.isArray(COURSES)) ? COURSES : [];
+  }
+  function curCourse() {
+    var list = courseList();
+    for (var i = 0; i < list.length; i++) if (list[i].id === state.courseId) return list[i];
+    return list[0] || null;
+  }
+  function curExam() { return state.examId ? examOf(state.examId) : null; }
+
+  /**
+   * 章节来自**真实教案大纲**；没有大纲就如实说，不编。
+   * ⚠️ 大纲里 `points` 是**顿号分隔的字符串**，用 `splitPoints` 切 —— 别直接 `.slice()`（字符串也有 slice）。
+   */
+  function chaptersOf(courseId) {
+    if (typeof syllabusOf !== "function") return null;
+    var syl = syllabusOf(courseId);
+    if (!syl) return null;
+    return (syl.chapters || []).map(function (c) {
+      return {
+        id: String(c.id),
+        title: String(c.title || "（未命名章节）"),
+        points: (typeof splitPoints === "function") ? splitPoints(c.points) : [],
+      };
+    });
+  }
+
+  /* ---------------- 渲染：范围 ---------------- */
+
+  function renderCourse() {
+    var list = courseList();
+    var sel = $("courseSel");
+    sel.innerHTML = "";
+    if (!list.length) {
+      var o = document.createElement("option");
+      o.value = "";
+      o.textContent = "（还没有课程）";
+      sel.appendChild(o);
+      return;
+    }
+    list.forEach(function (c) {
+      var op = document.createElement("option");
+      op.value = c.id;
+      op.textContent = c.name || c.id;
+      sel.appendChild(op);
+    });
+    sel.value = state.courseId;
+    var c = curCourse();
+    $("exCrumb").textContent = c ? (c.name || c.id) + (c.term ? " · " + c.term : "") : "—";
+  }
+
+  function renderChapters() {
+    var box = $("chapters");
+    var chs = chaptersOf(state.courseId);
+    box.innerHTML = "";
+
+    if (chs === null) {
+      var e = document.createElement("div");
+      e.className = "ex-empty";
+      e.textContent = "这门课还没有教案大纲。先去「教案」把章节建起来 —— 出题的范围要从大纲来，我不会凭空编章节。";
+      box.appendChild(e);
+      renderScope();
+      return;
+    }
+    if (!chs.length) {
+      var e2 = document.createElement("div");
+      e2.className = "ex-empty";
+      e2.textContent = "大纲里还没有章节，先去「教案」加几章。";
+      box.appendChild(e2);
+      renderScope();
+      return;
+    }
+
+    chs.forEach(function (c) {
+      var on = !!state.picked[c.id];
+      var el = document.createElement("div");
+      el.className = "chap-item" + (on ? " on" : "");
+      el.setAttribute("data-id", c.id);
+      el.setAttribute("role", "checkbox");
+      el.setAttribute("aria-checked", on ? "true" : "false");
+      el.setAttribute("tabindex", "0");
+      el.title = c.points && c.points.length ? ("知识点：" + c.points.join(" / ")) : "";
+      var nm = document.createElement("span");
+      nm.textContent = c.title;
+      el.appendChild(nm);
+      if (on) {
+        var ck = document.createElement("span");
+        ck.className = "chk";
+        ck.textContent = "✓";
+        el.appendChild(ck);
+      }
+      var toggle = function () {
+        state.picked[c.id] = !state.picked[c.id];
+        if (!state.picked[c.id]) delete state.picked[c.id];
+        renderChapters();
+      };
+      el.addEventListener("click", toggle);
+      el.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); }
+      });
+      box.appendChild(el);
+    });
+    renderScope();
+  }
+
+  function pickedChapters() {
+    var chs = chaptersOf(state.courseId) || [];
+    return chs.filter(function (c) { return state.picked[c.id]; });
+  }
+
+  /* ---------------- 渲染：题型 ---------------- */
+
+  /**
+   * 题型勾选 —— 条目来自 `nav.js` 的 `EXAM_QTYPES`（**唯一来源**，本页不写死列表）。
+   * 默认勾上的就是用户要的 单选 / 多选 / 填空 三种。
+   */
+  function renderTypes() {
+    var box = $("qtypes");
+    box.innerHTML = "";
+    (EXAM_QTYPES || []).forEach(function (t) {
+      var on = state.types.indexOf(t.key) >= 0;
+      var el = document.createElement("button");
+      el.type = "button";
+      el.className = "ex-type" + (on ? " on" : "");
+      el.setAttribute("data-type", t.key);
+      el.setAttribute("aria-pressed", on ? "true" : "false");
+      el.textContent = t.label;
+      box.appendChild(el);
+    });
+  }
+
+  /** 点一下切换。🔴 至少留一种 —— 一种都不勾就没法出题，这里直接拦下来说清楚 */
+  function toggleType(key) {
+    if (!(EXAM_TYPES && EXAM_TYPES[key])) return;
+    var i = state.types.indexOf(key);
+    if (i >= 0) {
+      if (state.types.length <= 1) { toast("至少留一种题型 —— 一种都不选就没法出题了"); return; }
+      state.types.splice(i, 1);
+    } else {
+      state.types.push(key);
+    }
+    // 按 EXAM_QTYPES 的原始顺序排一遍，读起来顺、也便于断言
+    state.types = (EXAM_QTYPES || []).filter(function (t) { return state.types.indexOf(t.key) >= 0; })
+                                     .map(function (t) { return t.key; });
+    renderTypes();
+  }
+
+  function renderScope() {
+    var picked = pickedChapters();
+    var pts = {};
+    picked.forEach(function (c) { (c.points || []).forEach(function (p) { pts[p] = 1; }); });
+    var n = Object.keys(pts).length;
+    $("scopeNote").textContent = picked.length
+      ? "已选 " + picked.length + " 章，覆盖 " + n + " 个知识点　·　题型：" +
+        state.types.map(function (k) { return examTypeLabel(k); }).join(" / ")
+      : "还没选章节 —— 至少选一章，AI 才知道从哪儿出题";
+    $("genBtn").textContent = curExam() ? "重新生成一套" : "生成题目";
+  }
+
+  /* ---------------- 渲染：题目 ---------------- */
+
+  function renderHead() {
+    var e = curExam();
+    var s = e ? examStats(e) : null;
+    $("accLine").textContent = s
+      ? "已采纳 " + s.accepted + " / " + s.total + " — 逐题把关后再组卷"
+      : "还没有题 —— 先在左边圈范围、点「生成题目」";
+    var tag = $("srcTag");
+    if (e && e.source === "sample") {
+      tag.hidden = false;
+      tag.textContent = "预置示例（不是 AI 现出的）";
+    } else {
+      tag.hidden = true;
+    }
+    var mt = $("modelTag");
+    if (e && e.source === "ai" && e.provider && LLM_PROVIDERS[e.provider]) {
+      mt.hidden = false;
+      mt.textContent = "由 " + LLM_PROVIDERS[e.provider].label + " 生成";
+    } else {
+      mt.hidden = true;
+    }
+  }
+
+  /** 一道题的答案该怎么写出来 —— **填空题按空的先后顺序编号**，其余原样 */
+  function answerText(q) {
+    if (q.type === "blank" && q.blanks && q.blanks.length) {
+      return q.blanks.map(function (b, i) {
+        return (q.blanks.length > 1 ? (i + 1) + "）" : "") + b;
+      }).join("　");
+    }
+    return q.answer || "";
+  }
+
+  function renderQuestions() {
+    var e = curExam();
+    var box = $("qList");
+    box.innerHTML = "";
+    if (!e) {
+      var em = document.createElement("div");
+      em.className = "ex-empty";
+      em.textContent = "还没有卷子。在左边圈好章节、点「生成题目」，或者用下面的「添加一题」自己出一道。";
+      box.appendChild(em);
+      renderPaper();
+      renderHead();
+      $("qCountNote").textContent = "";
+      return;
+    }
+
+    e.questions.forEach(function (q, i) {
+      var card = document.createElement("article");
+      card.className = "q-card " + q.state;
+      card.setAttribute("data-i", String(i));
+
+      var top = document.createElement("div");
+      top.className = "q-top";
+      var t1 = document.createElement("span");
+      t1.className = "tag tag-primary";
+      t1.textContent = (EXAM_TYPES[q.type] || EXAM_TYPES.short).label;
+      top.appendChild(t1);
+      var t2 = document.createElement("span");
+      t2.className = "q-type";
+      t2.textContent = [(EXAM_DIFF[q.diff] || EXAM_DIFF.mid).label, q.point].filter(Boolean).join(" · ");
+      top.appendChild(t2);
+      var st = document.createElement("span");
+      st.className = "status-pill" + (q.state === "accepted" ? " st-ok" : (q.state === "flagged" ? " st-warn" : ""));
+      st.textContent = (EXAM_QSTATE[q.state] || EXAM_QSTATE.pending).label;
+      top.appendChild(st);
+      card.appendChild(top);
+
+      var tx = document.createElement("div");
+      tx.className = "q-text";
+      tx.textContent = (i + 1) + ". " + q.text;
+      card.appendChild(tx);
+
+      if (q.options && q.options.length) {
+        var op = document.createElement("div");
+        op.className = "q-opts";
+        q.options.forEach(function (o) {
+          var line = document.createElement("div");
+          line.textContent = o;
+          op.appendChild(line);
+        });
+        card.appendChild(op);
+      }
+      if (q.answer || (q.blanks && q.blanks.length)) {
+        var ans = document.createElement("div");
+        ans.className = "q-key";
+        ans.textContent = "参考答案：" + answerText(q) +
+          (q.type === "multi" ? "（多选，答全才给分）" : "");
+        card.appendChild(ans);
+      }
+      if (q.type === "blank") {
+        var nb = document.createElement("div");
+        nb.className = "q-blanks";
+        var bn = (q.blanks || []).length;
+        nb.textContent = bn > 1 ? "共 " + bn + " 个空 —— 答案按空的先后顺序对齐" : "1 个空";
+        card.appendChild(nb);
+      }
+      if (q.key) {
+        var k = document.createElement("div");
+        k.className = "q-key";
+        k.textContent = "解析：" + q.key;
+        card.appendChild(k);
+      }
+      if (q.warn) {
+        var w = document.createElement("div");
+        w.className = "q-warn";
+        w.textContent = q.warn;
+        card.appendChild(w);
+      }
+
+      var acts = document.createElement("div");
+      acts.className = "q-actions";
+      /* 🔴 「弃用」与「删除」是两件事：弃用＝留着但不进卷子（可反悔）；删除＝移出列表。 */
+      [["accept", "采纳", "btn-primary"], ["edit", "修改", ""], ["redo", "换一题", ""],
+       ["drop", "弃用", "btn-ghost"], ["del", "删除", "btn-ghost"]]
+        .forEach(function (a) {
+          var b = document.createElement("button");
+          b.type = "button";
+          b.className = "btn btn-sm" + (a[2] ? " " + a[2] : "");
+          b.textContent = a[1];
+          b.setAttribute("data-act", a[0]);
+          acts.appendChild(b);
+        });
+      card.appendChild(acts);
+      box.appendChild(card);
+    });
+
+    renderPaper();
+    renderHead();
+    // 列表下方那句「共 N 题 / 已采纳 M 题」—— 从 examStats 来，页面不自己算
+    var note = $("qCountNote");
+    if (note) {
+      var st = examStats(e);
+      note.textContent = "共 " + st.total + " 题，已采纳 " + st.accepted + " 题";
+    }
+  }
+
+  function renderPaper() {
+    var e = curExam();
+    if (!e) {
+      $("examTitle").value = "";
+      $("pubLine").textContent = "—";
+      return;
+    }
+    $("examTitle").value = e.title || "";
+    $("totalScore").value = e.paper.totalScore;
+    $("duration").value = e.paper.duration;
+    var s = examStats(e);
+    var parts = [];
+    parts.push(e.status === "published" ? "已发布" : "草稿");
+    if (s.sentCount) parts.push("已发给 " + s.sentCount + " 位学生");
+    else parts.push("还没发出去");
+    parts.push("采纳 " + s.accepted + " 题");
+    if (s.flagged) parts.push("有 " + s.flagged + " 题待确认");
+    $("pubLine").textContent = parts.join(" · ");
+  }
+
+  /* ---------------- 生成 ---------------- */
+
+  function showProgress(html, isErr) {
+    var p = $("exProgress");
+    p.hidden = false;
+    p.className = "ex-progress" + (isErr ? " err" : "");
+    p.innerHTML = html;
+  }
+
+  function goSettings() {
+    if (typeof standaloneGo === "function" && typeof inShell === "function" && !inShell()) standaloneGo("settings.html");
+    else if (typeof navigate === "function") navigate("settings.html");
+    else window.location.href = "settings.html";
+  }
+
+  function makeScope() {
+    var c = curCourse();
+    return {
+      courseId: state.courseId,
+      courseName: c ? (c.name || c.id) : "",
+      chapters: pickedChapters().map(function (ch) {
+        return { id: ch.id, title: ch.title, points: ch.points || [] };
+      }),
+    };
+  }
+
+  function makeCfg() {
+    var n = Math.round(Number($("numQ").value) || 8);
+    n = Math.max(1, Math.min(30, n));   // 🔴 输入框能乱填（0 / 空 / 999），这里再兜一道
+    $("numQ").value = n;                // 顺手写回，让人看到自己被纠正成几
+    return {
+      count: n,
+      difficulty: $("diff").value || "mid",
+      types: state.types.slice(),      // 🔴 只出勾选的题型（单选 / 多选 / 填空 / 简答）
+    };
+  }
+
+  /**
+   * 出题范围校验 —— 返回错误文案（没问题返回空串）。
+   * 🔴 「整卷生成」与「AI 补一题」共用这一份，别各写一遍（写歪一处就会有一边漏校验）。
+   */
+  function scopeError() {
+    if (!state.courseId) return "先在左边选一门课程。";
+    if (chaptersOf(state.courseId) === null) return "这门课还没有教案大纲 —— 出题范围要从大纲来，先去「教案」建章节。";
+    if (!pickedChapters().length) return "至少选一章，AI 才知道从哪出题。";
+    return "";
+  }
+
+  function genQuestions() {
+    var picked = pickedChapters();
+    var cfg = makeCfg();
+    var scope = makeScope();
+
+    var err = scopeError();
+    if (err) { showProgress(err, true); return; }
+    if (!state.types.length) { showProgress("至少勾一种题型。", true); return; }
+
+    if (!llmReady()) {
+      // 🔴 如实拒绝：说清原因 + 给能点的下一步。**绝不拼一份假题冒充 AI 出的**
+      showProgress(
+        esc(llmStatusText()) +
+        '<div class="ex-row" style="margin-top:10px">' +
+          '<button class="btn btn-sm btn-primary" id="goSet2" type="button">去设置填 Key</button>' +
+          '<button class="btn btn-sm" id="sample2" type="button">先看一套示例题</button>' +
+        "</div>", true);
+      var g = $("goSet2");
+      if (g) g.addEventListener("click", goSettings);
+      var s2 = $("sample2");
+      if (s2) s2.addEventListener("click", loadSample);
+      $("goSettings").hidden = false;
+      $("sampleBtn").hidden = false;
+      return;
+    }
+
+    var btn = $("genBtn");
+    btn.disabled = true;
+    $("sampleBtn").hidden = true;
+    $("goSettings").hidden = true;
+    showProgress("正在按「" + picked.length + " 章 · " + cfg.count + " 题 · " +
+      state.types.map(function (k) { return examTypeLabel(k); }).join("/") + " · " +
+      (EXAM_DIFF[cfg.difficulty] || EXAM_DIFF.mid).label + "」出题… 要等十几秒。");
+
+    generateExamQuestions(scope, cfg).then(function (r) {
+      btn.disabled = false;
+      if (!r.ok) {
+        showProgress("<b>没能出题。</b>" + esc(r.error || "") + (r.hint ? "<br>" + esc(r.hint) : ""), true);
+        return;
+      }
+      var c = createExam({
+        title: (curCourse() ? curCourse().name : "") + " · " + picked.map(function (c2) { return c2.title; }).slice(0, 2).join("、"),
+        courseId: scope.courseId,
+        courseName: scope.courseName,
+        chapters: scope.chapters,
+        config: cfg,
+        questions: r.questions,
+        source: "ai",
+      });
+      if (!c.ok) { showProgress("<b>题目落库失败：</b>" + esc(c.error), true); return; }
+      state.examId = c.exam.id;
+      // 如实报出题型分布 —— 老师一眼看出"我要的三种是不是都出到了"
+      var byT = {};
+      r.questions.forEach(function (q) { byT[q.type] = (byT[q.type] || 0) + 1; });
+      var dist = Object.keys(byT).map(function (k) { return examTypeLabel(k) + " " + byT[k]; }).join("、");
+      showProgress("出了 " + r.questions.length + " 道题（" + esc(dist) +
+        "），**都在「待审」** —— 逐题看一眼，采纳的才进卷子。");
+      renderQuestions();
+      toast("已生成 " + r.questions.length + " 道题（待审）");
+    }).catch(function (err) {
+      btn.disabled = false;
+      showProgress("<b>出错了：</b>" + esc(String((err && err.message) || err)), true);
+    });
+  }
+
+  /** 🔴 示例题：把预置的那份**复制成一份新卷**，并**明确标注 `source:"sample"`**（界面上打标签） */
+  function loadSample() {
+    var seed = (typeof SEED_EXAM_DS !== "undefined") ? SEED_EXAM_DS : null;
+    if (!seed) { showProgress("没有可用的示例。", true); return; }
+    var c = createExam({
+      title: seed.title, courseId: state.courseId || seed.courseId,
+      courseName: (curCourse() ? curCourse().name : seed.courseName),
+      chapters: seed.chapters, config: seed.config,
+      questions: seed.questions.map(function (q, i) { return Object.assign({}, q, { id: "q" + (i + 1) }); }),
+      paper: seed.paper, source: "sample",
+    });
+    if (!c.ok) { showProgress("<b>示例没加载成功：</b>" + esc(c.error), true); return; }
+    state.examId = c.exam.id;
+    showProgress("这是一套**预置示例**（不是模型现出的）。你可以拿它把「审核 → 组卷 → 发布」走一遍。");
+    renderQuestions();
+    toast("已载入示例卷");
+  }
+
+  /* ---------------- 逐题审核 ---------------- */
+
+  function onQuestionAction(e) {
+    var b = e.target.closest ? e.target.closest("[data-act]") : null;
+    if (!b) return;
+    var card = e.target.closest ? e.target.closest("[data-i]") : null;
+    if (!card) return;
+    var exam = curExam();
+    if (!exam) return;
+    var i = Number(card.getAttribute("data-i"));
+    var act = b.getAttribute("data-act");
+
+    if (act === "accept") { setQuestionState(exam.id, i, "accepted"); renderQuestions(); return; }
+    if (act === "drop")   { setQuestionState(exam.id, i, "dropped");  renderQuestions(); return; }
+
+    if (act === "del") {
+      var qd = exam.questions[i];
+      confirmBox("删掉第 " + (i + 1) + " 题？",
+        (qd.text || "").replace(/\s+/g, " ").slice(0, 70) +
+        "…\n\n删掉就移出这份卷子了。想保留但不进卷子，用「弃用」。", "删除", true)
+        .then(function (ok) {
+          if (!ok) return;
+          var r = removeQuestion(exam.id, i);
+          if (!r.ok) { toast(r.error); return; }
+          toast("已删除第 " + (i + 1) + " 题");
+          renderQuestions();
+        });
+      return;
+    }
+
+    if (act === "edit") {
+      var q = exam.questions[i];
+      var isSel = q.type === "single" || q.type === "multi";
+      // 🔴 按题型给不同的编辑项：选择题能改选项，填空题要按空写答案
+      var fields = [{
+        key: "text",
+        label: q.type === "blank" ? "题干（每个空写 ___）" : "题干",
+        value: q.text, multiline: true, rows: 3,
+      }];
+      if (isSel) {
+        fields.push({
+          key: "options", label: "选项（一行一个，带 A/B/C/D 前缀）",
+          value: (q.options || []).join("\n"), multiline: true, rows: 4,
+        });
+        fields.push({
+          key: "answer",
+          label: q.type === "multi" ? "答案（字母，多选按升序，如 ABD）" : "答案（一个字母，如 B）",
+          value: q.answer, ph: q.type === "multi" ? "ABD" : "B",
+        });
+      } else if (q.type === "blank") {
+        fields.push({
+          key: "answer",
+          label: "答案（多空用 || 按顺序分隔，如 邻接矩阵||邻接表）",
+          value: (q.blanks && q.blanks.length) ? q.blanks.join("||") : q.answer,
+          multiline: true, rows: 2,
+        });
+      } else {
+        fields.push({ key: "answer", label: "参考答案", value: q.answer, multiline: true, rows: 2 });
+      }
+      fields.push({ key: "key", label: "解析（给老师看的）", value: q.key, multiline: true, rows: 2 });
+
+      askText("修改这道题（" + examTypeLabel(q.type) + "）", fields).then(function (v) {
+        if (!v) return;
+        if (v.options != null) {
+          v.options = String(v.options).split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
+        }
+        var r = updateQuestion(exam.id, i, v);
+        if (!r.ok) { toast(r.error); return; }
+        toast("改好了（还是「待审」，采纳了才进卷子）");
+        renderQuestions();
+      });
+      return;
+    }
+
+    if (act === "redo") {
+      if (!llmReady()) {
+        showProgress("换题要调模型 —— " + esc(llmStatusText()), true);
+        $("goSettings").hidden = false;
+        var g = $("goSet2");
+        if (g) g.addEventListener("click", goSettings);
+        return;
+      }
+      var scope = makeScope();
+      showProgress("正在换第 " + (i + 1) + " 题…");
+      var old = exam.questions[i];
+      // 🔴 换一题**保持原题型**（在选择题上点换一题，不该换出一道填空题来）
+      generateExamQuestions(scope, { count: 1, difficulty: old.diff, types: [old.type] }).then(function (r) {
+        if (!r.ok) { showProgress("<b>换题失败：</b>" + esc(r.error || ""), true); return; }
+        var nq = r.questions[0];
+        nq.diff = old.diff;            // 保持原来的难度位置
+        if (!nq.point) nq.point = old.point;
+        replaceQuestion(exam.id, i, nq);
+        showProgress("第 " + (i + 1) + " 题换好了（待审）。");
+        renderQuestions();
+      });
+      return;
+    }
+  }
+
+  /* ---------------- 添加一题（AI 出 / 自己填） ---------------- */
+
+  /**
+   * 点「添加一题」先问一句：这道题 **让 AI 出** 还是 **自己填**？
+   * 两条路都从同一个题型下拉开始（选项来自 `EXAM_QTYPES`，页面不写死）。
+   */
+  function openAddQ() {
+    var e = curExam();
+    if (!e) { toast("先在上面点「生成题目」建一份卷子"); return; }
+    var typeOpts = (typeof EXAM_QTYPES !== "undefined" ? EXAM_QTYPES : [])
+      .map(function (t) { return [t.key, t.label]; });
+    var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+    host.hidden = false;
+    host.className = "modal-host";
+    host.innerHTML =
+      '<div class="modal" role="dialog" aria-modal="true" style="max-width:470px">' +
+        '<div class="modal-head"><b>添加一题</b></div>' +
+        '<div class="modal-body">' +
+          '<label class="field" style="display:block;margin-bottom:14px">' +
+            '<span style="display:block;font-size:12px;color:var(--muted-foreground);margin-bottom:5px">题型</span>' +
+            '<select class="select" id="addTypeSel">' +
+              typeOpts.map(function (o) { return '<option value="' + esc(o[0]) + '">' + esc(o[1]) + "</option>"; }).join("") +
+            "</select>" +
+          "</label>" +
+          '<p class="ex-sub" style="margin:0;line-height:1.75">' +
+            "<b>让 AI 出一道</b> —— 按上面的题型，从你圈定的章节范围里再出一道（要接了模型）。<br>" +
+            "<b>自己填一道</b> —— 题干 / 选项 / 答案都由你写。" +
+          "</p>" +
+        "</div>" +
+        '<div class="modal-foot">' +
+          '<button class="btn" data-mc="no" type="button">取消</button>' +
+          '<button class="btn" data-mc="manual" type="button">自己填一道</button>' +
+          '<button class="btn btn-primary" data-mc="ai" type="button">让 AI 出一道</button>' +
+        "</div>" +
+      "</div>";
+    document.body.classList.add("modal-open");
+    var sel = host.querySelector("#addTypeSel");
+
+    function close() {
+      host.hidden = true; host.innerHTML = "";
+      document.body.classList.remove("modal-open");
+      host.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    }
+    function onClick(ev) {
+      var b = ev.target.closest ? ev.target.closest("[data-mc]") : null;
+      if (!b) { if (ev.target === host) close(); return; }
+      var act = b.getAttribute("data-mc");
+      var type = sel ? sel.value : "";
+      close();
+      if (act === "manual") openManualQ(type);
+      else if (act === "ai") aiAddQ(type);
+    }
+    function onKey(ev) { if (ev.key === "Escape") close(); }
+    host.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+  }
+
+  /** 自己填一道 —— 题型预选好，其余字段老师写；🔴 题干必填（空题干进卷子就是废题） */
+  function openManualQ(type) {
+    var e = curExam();
+    if (!e) { toast("先在上面点「生成题目」建一份卷子"); return; }
+    var typeOpts = (typeof EXAM_QTYPES !== "undefined" ? EXAM_QTYPES : [])
+      .map(function (t) { return [t.key, t.label]; });
+    askText("自己填一道", [
+      { key: "type", label: "题型", options: typeOpts, value: type || (typeOpts.length ? typeOpts[0][0] : "") },
+      { key: "text", label: "题干（填空题用 ___ 表示空）", multiline: true, rows: 3 },
+      { key: "options", label: "选项（一行一个，带 A/B/C/D 前缀；填空题留空）", multiline: true, rows: 4 },
+      { key: "answer", label: "参考答案（多选按字母升序如 ABD；多空用 || 分隔）", multiline: true, rows: 2 },
+      { key: "key", label: "解析（给老师看的，可留空）", multiline: true, rows: 2 },
+    ], "添加").then(function (v) {
+      if (!v) return;
+      var r = addQuestion(e.id, {
+        type: v.type,
+        text: v.text,
+        options: String(v.options || "").split("\n").map(function (s) { return s.trim(); }).filter(Boolean),
+        answer: v.answer,
+        key: v.key,
+      });
+      if (!r.ok) { toast(r.error); return; }
+      toast("加好了（第 " + (r.index + 1) + " 题，待审）");
+      renderQuestions();
+    });
+  }
+
+  /**
+   * 让 AI 再出一道（只出指定题型、只从当前圈定的章节范围出）。
+   * 🔴 没接模型 → **如实拒绝 + 给能点的下一步**，绝不塞一道假题冒充；
+   * 🔴 出出来的题**一律「待审」**，而且**只追加到卷子末尾**（不动已有的题）。
+   */
+  function aiAddQ(type) {
+    var e = curExam();
+    if (!e) return;
+    var err = scopeError();
+    if (err) { showProgress(err, true); return; }
+    if (!llmReady()) {
+      showProgress(
+        esc(llmStatusText()) +
+        '<div class="ex-row" style="margin-top:10px">' +
+          '<button class="btn btn-sm btn-primary" id="goSet3" type="button">去设置填 Key</button>' +
+        "</div>", true);
+      var g = $("goSet3");
+      if (g) g.addEventListener("click", goSettings);
+      $("goSettings").hidden = false;
+      return;
+    }
+    showProgress("正在让 AI 出一道" + examTypeLabel(type) + "…");
+    generateExamQuestions(makeScope(), {
+      count: 1,
+      difficulty: $("diff").value || "mid",
+      types: [type],                       // 🔴 只出这一种题型
+    }).then(function (r) {
+      if (!r.ok) { showProgress("<b>没能出题。</b>" + esc(r.error || ""), true); return; }
+      var r2 = addQuestion(e.id, r.questions[0]);
+      if (!r2.ok) { showProgress("<b>加进卷子失败：</b>" + esc(r2.error), true); return; }
+      showProgress("又出了一道" + examTypeLabel(r2.question.type) +
+        "（**待审**）—— 看一眼，采纳了才进卷子。");
+      renderQuestions();
+      toast("AI 加的题在第 " + (r2.index + 1) + " 题（待审）");
+    }).catch(function (err2) {
+      showProgress("<b>出错了：</b>" + esc(String((err2 && err2.message) || err2)), true);
+    });
+  }
+
+  /* ---------------- 组卷 / 预览 / 发布 ---------------- */
+
+  function savePaper() {
+    var e = curExam();
+    if (!e) { toast("还没有卷子"); return; }
+    var r = updateExam(e.id, {
+      title: $("examTitle").value,
+      paper: { totalScore: Number($("totalScore").value), duration: Number($("duration").value) },
+    });
+    if (!r.ok) { toast(r.error); return; }
+    toast("卷子设置已保存");
+    renderPaper();
+  }
+
+  function previewExam() {
+    var e = curExam();
+    if (!e) { toast("还没有卷子"); return; }
+    var acc = e.questions.filter(function (q) { return q.state === "accepted"; });
+    var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+    host.hidden = false;
+    host.className = "modal-host";
+
+    var head = '<p style="margin:0 0 4px;font-size:13px">' +
+      esc(e.title) + "　·　总分 " + e.paper.totalScore + " 分　·　" + e.paper.duration + " 分钟</p>" +
+      '<p class="ex-sub" style="margin:0">范围：' +
+      esc((e.chapters || []).map(function (c) { return c.title; }).join("、") || "（未指定）") + "</p>";
+
+    var body = acc.length
+      ? acc.map(function (q, i) {
+          var qn = (q.blanks || []).length;
+          return '<h4>' + (i + 1) + "．[" + examTypeLabel(q.type) + "] " +
+            esc(q.point || "") + "</h4>" +
+            '<div class="q-text">' + esc(q.text) + "</div>" +
+            (q.options && q.options.length
+              ? '<div class="q-opts">' + q.options.map(esc).join("<br>") + "</div>" : "") +
+            (q.type === "blank" && qn ? '<div class="q-blanks">共 ' + qn + " 个空</div>" : "") +
+            ((q.answer || qn)
+              ? '<div class="q-key">参考答案：' + esc(answerText(q)) +
+                (q.type === "multi" ? "（多选，答全才给分）" : "") + "</div>" : "");
+        }).join("")
+      : '<div class="ex-empty">一道题都还没采纳 —— 没采纳的题不会进卷子。</div>';
+
+    host.innerHTML =
+      '<div class="modal" role="dialog" aria-modal="true" style="max-width:680px">' +
+        '<div class="modal-head"><b>试卷预览（' + acc.length + " 题）</b></div>" +
+        '<div class="modal-body"><div class="ex-preview">' + head + body + "</div></div>" +
+        '<div class="modal-foot"><button class="btn btn-primary" data-mc="ok" type="button">知道了</button></div>' +
+      "</div>";
+    document.body.classList.add("modal-open");
+    function close() {
+      host.hidden = true; host.innerHTML = "";
+      document.body.classList.remove("modal-open");
+      host.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    }
+    function onClick(ev) {
+      var b = ev.target.closest ? ev.target.closest("[data-mc]") : null;
+      if (b || ev.target === host) close();
+    }
+    function onKey(ev) { if (ev.key === "Escape") close(); }
+    host.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+  }
+
+  /** 发布名单 —— 🔴 来自 `enrolledStudentsOf(course).key`（真实的在课学生） */
+  function publishExamFlow() {
+    var e = curExam();
+    if (!e) { toast("还没有卷子"); return; }
+    var s = examStats(e);
+    if (!s.accepted) { toast("一道题都还没采纳 —— 先逐题审核，再发布"); return; }
+
+    var studs = (typeof enrolledStudentsOf === "function") ? enrolledStudentsOf(e.courseId) : [];
+    var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+    host.hidden = false;
+    host.className = "modal-host";
+
+    if (!studs.length) {
+      // 🔴 没有在课学生时说清"为什么发不了"，不假装发出去了
+      host.innerHTML =
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          '<div class="modal-head"><b>发布到班级</b></div>' +
+          '<div class="modal-body"><p style="margin:0;font-size:13px;line-height:1.7">' +
+            "「" + esc(e.courseName || "这门课") + "」现在还没有学生加入，所以没有人可以发。<br>" +
+            '先去「教学 · 课程成员」把邀请码给学生，他们加入后这里就能选了。' +
+          "</p></div>" +
+          '<div class="modal-foot"><button class="btn btn-primary" data-mc="ok" type="button">知道了</button></div>' +
+        "</div>";
+      document.body.classList.add("modal-open");
+    } else {
+      var sent = {};
+      (e.publishedTo || []).forEach(function (x) { sent[x.who] = 1; });
+      var rows = studs.map(function (st) {
+        var done = sent[st.key] ? '<span class="status-pill st-ok">已发</span>' : "";
+        return '<label class="ex-person"><input type="checkbox" data-who="' + esc(st.key) + '">' +
+          "<span>" + esc(st.name || st.user) + "</span>" + done + "</label>";
+      }).join("");
+      host.innerHTML =
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          '<div class="modal-head"><b>把「' + esc(e.title) + "」发给谁（" + s.accepted + " 题）</b></div>" +
+          '<div class="modal-body"><div class="ex-people">' + rows + "</div>" +
+            '<p class="ex-sub" style="margin-top:10px">发给同一个学生不会重复记录，只是刷新一下时间。</p></div>' +
+          '<div class="modal-foot">' +
+            '<button class="btn" data-mc="no" type="button">取消</button>' +
+            '<button class="btn btn-primary" data-mc="ok" type="button">确认发布</button>' +
+          "</div>" +
+        "</div>";
+      document.body.classList.add("modal-open");
+    }
+
+    function close() {
+      host.hidden = true; host.innerHTML = "";
+      document.body.classList.remove("modal-open");
+      host.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    }
+    function onClick(ev) {
+      var b = ev.target.closest ? ev.target.closest("[data-mc]") : null;
+      if (!b) { if (ev.target === host) close(); return; }
+      if (b.getAttribute("data-mc") !== "ok") { close(); return; }
+      if (!studs.length) { close(); return; }
+      var picked = [];
+      Array.prototype.forEach.call(host.querySelectorAll("[data-who]"), function (el) {
+        if (el.checked) picked.push(el.getAttribute("data-who"));
+      });
+      var r = publishExam(e.id, picked);
+      if (!r.ok) { toast(r.error); return; }
+      toast("已发布给 " + (r.added + r.updated) + " 位学生" + (r.updated ? "（" + r.updated + " 位是重发）" : ""));
+      close();
+      renderQuestions();
+    }
+    function onKey(ev) { if (ev.key === "Escape") close(); }
+    host.addEventListener("click", onClick);
+    host.addEventListener("keydown", onKey);
+  }
+
+  function delExamFlow() {
+    var e = curExam();
+    if (!e) { toast("还没有卷子"); return; }
+    confirmBox("删除这份试卷？", "「" + e.title + "」" + examAssetCount(e.id) + "。删除后无法恢复。", "删除", true)
+      .then(function (ok) {
+        if (!ok) return;
+        deleteExam(e.id);
+        state.examId = null;
+        toast("已删除");
+        renderQuestions();
+      });
+  }
+
+  /* ---------------- 事件 ---------------- */
+
+  $("courseSel").addEventListener("change", function () {
+    state.courseId = this.value;
+    state.picked = {};
+    renderCourse();
+    renderChapters();
+  });
+  $("genBtn").addEventListener("click", genQuestions);
+  $("qtypes").addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("[data-type]") : null;
+    if (b) toggleType(b.getAttribute("data-type"));
+  });
+  $("sampleBtn").addEventListener("click", loadSample);
+  $("goSettings").addEventListener("click", goSettings);
+  $("qList").addEventListener("click", onQuestionAction);
+  $("addQBtn").addEventListener("click", openAddQ);
+  $("savePaperBtn").addEventListener("click", savePaper);
+  $("previewBtn").addEventListener("click", previewExam);
+  $("publishBtn").addEventListener("click", publishExamFlow);
+  $("delExamBtn").addEventListener("click", delExamFlow);
+
+  /* ---------------- 启动 ---------------- */
+
+  function init() {
+    var list = courseList();
+    state.courseId = list.length ? list[0].id : "";
+
+    // 打开时接着最近一份草稿（没采完的那份），不要每次都从零开始
+    var latest = (typeof EXAMS !== "undefined" && EXAMS.length)
+      ? (EXAMS.filter(function (e) { return e.status === "draft"; })[0] || EXAMS[0])
+      : null;
+    state.examId = latest ? latest.id : null;
+    if (latest && latest.courseId) state.courseId = latest.courseId;
+
+    renderCourse();
+    // 若当前卷就是这门课的，把它的章节范围还原成勾选状态
+    if (latest && latest.chapters) {
+      latest.chapters.forEach(function (c) { if (c.id) state.picked[c.id] = true; });
+    }
+    // 题型也按这份卷子还原（没存过就用默认三种）
+    if (latest && latest.config && latest.config.types) {
+      state.types = examPickTypes(latest.config.types);
+    }
+    renderChapters();
+    renderTypes();
+    renderQuestions();
+  }
+  init();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,560 @@
+/* ============================================================
+   应用壳样式
+   —— 顶部栏 + 左侧栏固定，中间 iframe 承载页面内容
+   壳自己不管主题，完全依赖 design.css 的令牌
+   ============================================================ */
+
+/* ⚠️ 视口锁定由 app.html 内联 <style> 承担（只作用于壳）。
+   这里不要写 html{overflow:hidden} —— 内容页是独立文档，也引用了本文件，
+   那会把内容页的滚动一起干掉，导致正文被截断。 */
+body.shell-body { overflow: hidden; }
+
+.shell-body {
+  margin: 0;
+  background: var(--background);
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================================
+   顶部栏
+   ============================================================ */
+.shell-top {
+  flex: 0 0 auto;
+  height: 54px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  display: flex; align-items: center; gap: 14px;
+  position: relative; z-index: 30;
+}
+
+.shell-top-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.shell-top-right { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+
+/* 折叠按钮：三条横线（纯 CSS，不用图标字体） */
+.shell-icon-btn {
+  width: 34px; height: 34px; border-radius: 9px;
+  border: 1px solid transparent; background: transparent;
+  display: grid; place-items: center; cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.shell-icon-btn:hover { background: var(--secondary); border-color: var(--border); }
+.icon-bars {
+  display: block; width: 16px; height: 11px;
+  border-top: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  position: relative;
+}
+.icon-bars::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%;
+  border-top: 1.6px solid currentColor; transform: translateY(-50%);
+}
+
+/* 品牌 */
+.shell-brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.shell-mark {
+  width: 28px; height: 28px; border-radius: 8px; flex: 0 0 auto;
+  background: var(--primary); color: var(--primary-foreground);
+  display: grid; place-items: center; font-size: 13.5px; font-weight: 500;
+}
+.shell-brand-name {
+  font-size: 14.5px; font-weight: 500; white-space: nowrap;
+}
+.shell-brand-role {
+  font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary); white-space: nowrap;
+}
+
+/* 无障碍阅读模式勾选（⚠️ 目前仅记录开关状态，功能尚未实现） */
+.shell-a11y-toggle {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 11px 5px 9px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--card); color: var(--muted-foreground);
+  font-size: 12.5px; cursor: pointer; user-select: none;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.shell-a11y-toggle:hover { border-color: var(--muted-foreground); color: var(--foreground); }
+.shell-a11y-toggle:focus-within {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 16%, transparent);
+}
+.shell-a11y-toggle input[type="checkbox"] {
+  width: 15px; height: 15px; margin: 0; flex: 0 0 auto;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.a11y-toggle-label { white-space: nowrap; }
+/* 勾选后整块变实，一眼能看出是开启状态 */
+.shell-a11y-toggle input:checked + .a11y-toggle-label { color: var(--foreground); font-weight: 500; }
+.shell-a11y-toggle:has(input:checked) {
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+  background: color-mix(in srgb, var(--primary) 6%, var(--card));
+}
+
+/* 主题切换 */
+.shell-theme {
+  display: flex; gap: 2px; background: var(--secondary);
+  padding: 3px; border-radius: 9px;
+}
+.shell-theme .theme-btn {
+  padding: 5px 11px; border-radius: 7px; border: none;
+  background: transparent; color: var(--muted-foreground);
+  font-size: 12px; font-family: inherit; cursor: pointer;
+  transition: background .15s, color .15s; white-space: nowrap;
+}
+.shell-theme .theme-btn:hover { color: var(--foreground); }
+.shell-theme .theme-btn.active {
+  background: var(--card); color: var(--foreground);
+  box-shadow: var(--shadow-sm);
+}
+
+/* 用户菜单 */
+.shell-user { position: relative; }
+.shell-user-btn {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 9px 4px 5px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--card);
+  color: var(--foreground); font-family: inherit; font-size: 13px;
+  cursor: pointer; transition: border-color .15s, background .15s;
+}
+.shell-user-btn:hover { background: var(--secondary); border-color: var(--muted-foreground); }
+.shell-avatar {
+  width: 26px; height: 26px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--accent); color: var(--primary);
+  display: grid; place-items: center; font-size: 12px; font-weight: 500;
+}
+.shell-user-name { white-space: nowrap; }
+.shell-caret {
+  width: 0; height: 0; flex: 0 0 auto;
+  border-left: 4px solid transparent; border-right: 4px solid transparent;
+  border-top: 5px solid var(--muted-foreground);
+}
+
+.shell-menu {
+  position: absolute; top: calc(100% + 7px); right: 0;
+  min-width: 200px; padding: 6px;
+  background: var(--popover); color: var(--popover-foreground);
+  border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow-raised); z-index: 40;
+}
+.shell-menu-head {
+  padding: 10px 11px 9px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.shell-menu-head b { font-size: 13.5px; font-weight: 500; }
+.shell-menu-head span { font-size: 11.5px; color: var(--muted-foreground); }
+.shell-menu-item {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; padding: 8px 11px; border: none; border-radius: 8px;
+  background: transparent; color: var(--foreground);
+  font-family: inherit; font-size: 13px; text-align: left; cursor: pointer;
+  transition: background .14s;
+}
+.shell-menu-item:hover { background: var(--secondary); }
+.shell-menu-item.danger { color: var(--destructive); }
+.shell-menu-item.danger:hover {
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+}
+.mi-ico {
+  width: 20px; height: 20px; border-radius: 6px; flex: 0 0 auto;
+  background: var(--accent); color: var(--primary);
+  display: grid; place-items: center; font-size: 10.5px;
+}
+.shell-menu-item.danger .mi-ico {
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
+  color: var(--destructive);
+}
+.shell-menu-sep { height: 1px; background: var(--border); margin: 5px 0; }
+
+/* ============================================================
+   主体：侧栏 + 内容
+   ============================================================ */
+.shell-main {
+  flex: 1 1 auto; min-height: 0;
+  display: flex;
+}
+
+/* ---- 左侧栏 ---- */
+.shell-side {
+  --side-pad: 12px;
+  flex: 0 0 auto;
+  width: 232px;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--secondary) 45%, var(--background));
+  padding: 14px 0 0;
+  /* 🔴 侧栏**自身不能滚动**。
+     之前这里是 `overflow-y: auto`，整个侧栏一起滚 —— 菜单一多，
+     底部的用户卡片（.side-foot）就被推到滚动内容的末尾，
+     要滚到底才看得见。用户卡片本来就该永远待在底部，不该跟着菜单跑。 */
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  transition: width .18s ease, padding .18s ease;
+}
+
+/* 只有菜单区滚动；底部 .side-foot 固定，菜单再长也不会把它顶下去 */
+.shell-side .side-nav {
+  flex: 1 1 auto;
+  min-height: 0;                 /* 没有它，flex 子项不会收缩，滚动不会生效 */
+  overflow-y: auto; overflow-x: hidden;
+  padding: 0 var(--side-pad);
+}
+
+.shell-side .side-group { margin-bottom: 18px; }
+.shell-side .side-group:first-child { margin-top: 2px; }
+.shell-side .side-group h4 {
+  display: flex; align-items: center; gap: 6px;
+  margin: 0 0 7px; padding: 0 9px;
+  font-size: 11px; font-weight: 500; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted-foreground);
+  white-space: nowrap; overflow: hidden;
+}
+.shell-side .side-group h4 > span:first-child {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 组标题右侧的「＋」按钮（添加课程 / 添加班级，由 GROUP_ACTIONS 决定文案） */
+.shell-side .side-add {
+  flex: 0 0 auto;
+  width: 20px; height: 20px; padding: 0;
+  display: grid; place-items: center;
+  border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--muted-foreground);
+  font: inherit; font-size: 13px; line-height: 1; cursor: pointer;
+  transition: background .14s, color .14s, border-color .14s;
+}
+.shell-side .side-add:hover {
+  background: var(--secondary); color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 26%, transparent);
+}
+.shell-side .side-add:focus-visible {
+  outline: none; color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 30%, transparent);
+}
+.shell-side .side-item {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; padding: 8px 10px; margin-bottom: 2px;
+  border-radius: 8px; border: 1px solid transparent;
+  background: transparent; color: var(--foreground);
+  font-family: inherit; font-size: 13.5px; text-align: left;
+  cursor: pointer; white-space: nowrap; overflow: hidden;
+  transition: background .14s, border-color .14s, color .14s;
+}
+.shell-side .side-item:hover { background: var(--secondary); }
+.shell-side .side-item.active {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary); font-weight: 500;
+  border-color: color-mix(in srgb, var(--primary) 22%, transparent);
+}
+.shell-side .side-item.disabled {
+  cursor: not-allowed; color: var(--muted-foreground); opacity: .55;
+}
+.shell-side .side-item.disabled:hover { background: transparent; }
+.shell-side .side-item.dim:not(.disabled) { opacity: .75; }
+
+.shell-side .side-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+  background: currentColor; opacity: .75;
+}
+.shell-side .side-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.shell-side .side-badge {
+  font-size: 10.5px; padding: 1px 6px; border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: var(--primary); flex: 0 0 auto;
+}
+
+/* ---- 课程项右侧的「⋯」（改信息 / 删除）----
+   默认透明，悬停 / 聚焦 / 菜单开着时出现。 */
+.shell-side .side-row {
+  position: relative;          /* 「⋯」的绝对定位参照 */
+  margin-bottom: 2px;
+}
+/* 🔴 「⋯」必须**绝对定位**，不能当 flex 兄弟节点。
+   `.side-item` 是 `width: 100%`：若「⋯」参与行内布局，它会占走 22px + 间距，
+   于是课程项的胶囊背景比别的菜单项**短一截**，看起来像缺了一块。
+   绝对定位后它浮在右端，胶囊照旧整行宽 —— 与班级项、其它项完全对齐。 */
+.shell-side .side-row .side-item {
+  margin-bottom: 0;            /* 间距移到 .side-row 上，行高才与「⋯」的居中基准一致 */
+  padding-right: 32px;         /* 给「⋯」留位：文字不会被压到它下面（仍在胶囊内部） */
+}
+.shell-side .side-more {
+  position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+  z-index: 1;
+  width: 22px; height: 22px; padding: 0;
+  display: grid; place-items: center;
+  border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--muted-foreground);
+  font: inherit; font-size: 14px; line-height: 1; cursor: pointer;
+  opacity: 0;
+  pointer-events: none;            /* 隐形时也别接点击 —— 否则右端 22px 是个「陷阱」：
+                                      点课程名边缘会莫名其妙弹出菜单 */
+  transition: opacity .14s, background .14s, color .14s, border-color .14s;
+}
+.shell-side .side-row:hover .side-more,
+.shell-side .side-more:focus-visible,
+.shell-side .side-more[aria-expanded="true"] { opacity: 1; pointer-events: auto; }
+.shell-side .side-more:hover { background: var(--secondary); color: var(--foreground); }
+.shell-side .side-more[aria-expanded="true"] {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+}
+/* 折叠态侧栏只有 58px：不显示「⋯」，也不给它留位置
+   （下方 `.collapsed .side-item` 的 `padding: 9px 0` 已经把右内边距归零，
+     这里显式写一遍只为「意图明确」，值必须与之一致 —— 别写成 10px） */
+.shell-side.collapsed .side-more { display: none; }
+.shell-side.collapsed .side-row .side-item { padding-right: 0; }
+
+/* ---- 悬浮操作菜单 ----
+   ⚠️ 挂在 body 上、用 position:fixed 定位：
+      .shell-side 是 overflow:hidden（为了让底部用户卡片固定），
+      菜单若放在侧栏内部会被直接裁掉，看不见。
+   `.tree-menu` 是教案大纲树用的同一套样式（选择器并列，样式只有一份）。 */
+.side-menu, .tree-menu {
+  position: fixed; z-index: 70; min-width: 152px;
+  padding: 5px; border-radius: 10px;
+  background: var(--card); border: 1px solid var(--border);
+  box-shadow: var(--shadow-raised);
+}
+.side-menu button, .tree-menu button {
+  display: block; width: 100%; text-align: left;
+  padding: 8px 10px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--foreground);
+  font: inherit; font-size: 13px; cursor: pointer;
+}
+.side-menu button:hover, .tree-menu button:hover { background: var(--secondary); }
+.side-menu button.danger, .tree-menu button.danger { color: var(--destructive); }
+.side-menu button.danger:hover, .tree-menu button.danger:hover {
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
+}
+
+/* 侧栏底部：用户卡片 —— 固定在最下方，不随菜单滚动 */
+.shell-side .side-foot {
+  flex: 0 0 auto;
+  margin-top: 12px;
+  padding: 12px var(--side-pad) 14px;
+  border-top: 1px solid var(--border);
+}
+.shell-side .side-foot-note {
+  font-size: 11px; color: var(--muted-foreground);
+  line-height: 1.7; padding: 0 9px;
+}
+
+/* ---- 折叠态 ---- */
+.shell-side.collapsed { --side-pad: 7px; width: 58px; }
+.shell-side.collapsed .side-group h4 {
+  opacity: 0; height: 0; margin: 0 0 4px; padding: 0;
+}
+.shell-side.collapsed .side-add { display: none; }
+.shell-side.collapsed .side-label,
+.shell-side.collapsed .side-badge { display: none; }
+.shell-side.collapsed .side-item { justify-content: center; padding: 9px 0; }
+.shell-side.collapsed .side-dot { width: 9px; height: 9px; opacity: 1; }
+.shell-side.collapsed .side-foot-note { display: none; }
+
+/* ---- 内容区 ---- */
+.shell-content {
+  flex: 1 1 auto; min-width: 0; min-height: 0;
+  position: relative; overflow: hidden;
+  background: var(--background);
+}
+.shell-frame {
+  width: 100%; height: 100%; border: 0; display: block;
+  background: var(--background);
+}
+
+/* 受限环境（如 file:// 拦截 iframe）提示条 */
+.shell-frame-error {
+  position: absolute; inset: 0 0 auto 0; z-index: 3;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 12px 16px;
+  background: var(--warning-surface, var(--card));
+  border-bottom: 1px solid var(--border);
+  color: var(--foreground); font-size: 13px; line-height: 1.55;
+}
+.shell-frame-error b { font-size: 13.5px; }
+.shell-frame-error span { color: var(--muted-foreground); }
+
+/* 加载指示 */
+.shell-loading {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; background: var(--background);
+  color: var(--muted-foreground); font-size: 13px;
+  opacity: 0; pointer-events: none;
+  transition: opacity .18s;
+}
+.shell-loading.on { opacity: 1; }
+.shell-spinner {
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 2.5px solid var(--border); border-top-color: var(--primary);
+  animation: shell-spin .75s linear infinite;
+}
+@keyframes shell-spin { to { transform: rotate(360deg); } }
+
+/* 小屏遮罩 */
+.shell-scrim {
+  position: fixed; inset: 0; z-index: 25;
+  background: var(--overlay);
+}
+
+/* ============================================================
+   响应式
+   ============================================================ */
+@media (max-width: 860px) {
+  .shell-brand-name { display: none; }
+  .shell-user-name { display: none; }
+  .shell-a11y-toggle .a11y-toggle-label { display: none; }
+  .shell-a11y-toggle { padding: 5px 8px; }
+  .shell-side {
+    position: absolute; top: 54px; bottom: 0; left: 0; z-index: 26;
+    box-shadow: var(--shadow-raised);
+  }
+  .shell-side.collapsed { width: 0; padding-left: 0; padding-right: 0; border-right: 0; }
+}
+@media (max-width: 560px) {
+  .shell-brand-role { display: none; }
+  .shell-theme .theme-btn { padding: 5px 8px; font-size: 11.5px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-side, .shell-loading, .shell-icon-btn, .shell-menu-item {
+    transition: none !important;
+  }
+  .shell-spinner { animation-duration: 2s; }
+}
+
+/* ============================================================
+   弹窗（Modal）
+   ------------------------------------------------------------
+   ⚠️ 目前用于「添加课程」示例，保存逻辑尚未接入。
+   ============================================================ */
+body.modal-open { overflow: hidden; }
+
+#modalHost { position: relative; z-index: 60; }
+
+.modal-scrim {
+  position: fixed; inset: 0;
+  background: var(--overlay);
+  backdrop-filter: blur(1.5px);
+  animation: modal-fade .16s ease-out;
+}
+.modal {
+  position: fixed; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  display: flex; flex-direction: column;
+  background: var(--card); color: var(--foreground);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow-raised);
+  animation: modal-in .18s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes modal-fade { from { opacity: 0; } }
+@keyframes modal-in {
+  from { opacity: 0; transform: translate(-50%, -46%) scale(.97); }
+}
+/* 需要放宽的弹窗（如导入课表要看格式说明与预览） */
+.modal-wide { width: min(680px, calc(100vw - 32px)); }
+
+.modal-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 16px 18px; border-bottom: 1px solid var(--border);
+}
+.modal-head h3 { margin: 0; font-size: 15.5px; font-weight: 500; flex: 1; }
+.modal-x {
+  width: 26px; height: 26px; padding: 0;
+  display: grid; place-items: center;
+  border: 0; border-radius: 7px; background: transparent;
+  color: var(--muted-foreground); font: inherit; font-size: 12px;
+  cursor: pointer; transition: background .14s, color .14s;
+}
+.modal-x:hover { background: var(--secondary); color: var(--foreground); }
+.modal-x:focus-visible {
+  outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 30%, transparent);
+}
+
+.modal-body {
+  padding: 18px;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 14px;
+  /* 🔴 内容比 max-height 高时，必须由 .modal-body 自己滚，不能把 .modal-foot 顶出去。
+     两个前提缺一不可：`flex:1 1 auto`（允许伸缩）+ `min-height:0`（flex 子项默认
+     `min-height:auto`，不加这条它不会收缩 → 滚动条不出现、底部按钮被推出可视区）。 */
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* 头部与底部不参与伸缩，永远贴在弹窗上下两端 */
+.modal-head, .modal-foot { flex: 0 0 auto; }
+.modal-body .field { margin: 0; }
+.modal-body .field label {
+  display: block; margin-bottom: 6px;
+  font-size: 12px; font-weight: 500; color: var(--muted-foreground);
+}
+.modal-body .req { color: var(--destructive); }
+.modal-row { display: flex; gap: 12px; }
+.modal-row .field { flex: 1; min-width: 0; }
+
+.modal-hint {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin: 0; padding: 10px 12px; border-radius: 9px;
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 18%, transparent);
+  font-size: 12.5px; line-height: 1.7; color: var(--muted-foreground);
+}
+
+.modal-foot {
+  display: flex; justify-content: flex-end; gap: 9px;
+  padding: 14px 18px; border-top: 1px solid var(--border);
+}
+
+@media (max-width: 560px) {
+  .modal-row { flex-direction: column; gap: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal, .modal-scrim { animation: none; }
+}
+
+/* ============================================================
+   独立模式（内容页被直接打开时自带的壳）
+   ------------------------------------------------------------
+   与真正的应用壳外观一致，只是没有折叠按钮（页面已整页刷新，
+   折叠状态保留没有意义）。布局同样用 flex 铺满视口。
+   ============================================================ */
+.standalone-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+.standalone-top {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.standalone-body .shell-main {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.standalone-body .shell-content {
+  overflow: auto;
+}
+/* 独立模式下页面内容已自带 padding，避免与 .page-wrap 叠加 */
+.standalone-content > .page-wrap {
+  padding-top: 20px;
+}
+
+@media (max-width: 860px) {
+  .standalone-body .shell-side {
+    position: static;
+    width: 100%;
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .standalone-body .shell-main {
+    flex-direction: column;
+  }
+}

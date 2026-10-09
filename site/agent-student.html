@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="student">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 助手 · 学生端 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<!--
+  ============================================================
+  学生端 Agent（第 35 轮实现）
+  ------------------------------------------------------------
+   与教师端**共用同一套技能库**（nav.js 的 SKILL_LIB / routeSkills / runSkill），
+   只有两处不同：
+     1. 三层里的**内容**不同：系统层是「学生端怎么用」，群组层是「我加入的课堂 + 自学/备考/实训」，
+        原子层是讲解与自测类的活（定位薄弱 / 类比讲解 / 生成自测）
+     2. 🔴 **全只读**：`roleSkills("student")` 里一个 `kind: "write"` 的技能都没有，
+        所以动作链里**不可能**出现 publish_/delete_，也没有「等待确认」这一步（有断言盯着）
+   ⚠️ 本页与 agent.html 的渲染函数是**成对的两份**（renderLines / skillChainEl / runSteps 同源），
+      改一处必须同步另一处 —— 与 shell.js / core.js 那两份侧栏渲染是同一个道理。
+  ============================================================
+-->
+<style>
+  :root { --font-sans: "Inter", system-ui; }
+  /* 三栏：左＝技能库（可勾选的树）· 中＝对话 · 右＝画像与边界 */
+  /* 两栏：左＝技能库 + 画像（上下分屏、各自滚动）· 右＝对话（撑满） */
+  .agent-grid { display: grid; grid-template-columns: 302px minmax(0, 1fr); gap: 18px; align-items: start; }
+  .agent-grid .bubble { font-size: 14.5px; line-height: 1.8; }
+
+  .skill-chain {
+    border: 1px solid var(--border); border-radius: 12px;
+    background: var(--secondary); padding: 13px 15px; margin: 0 0 12px; font-size: 12.5px;
+  }
+  .skill-chain > .sc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+  .skill-chain > .sc-head b { font-weight: 500; }
+  .skill-chain > .sc-head span { color: var(--muted-foreground); font-size: 11.5px; }
+  .lg { border-top: 1px dashed var(--border); padding-top: 9px; margin-top: 9px; }
+  .lg:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+  .lg-head { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+  .lg-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--accent); color: var(--muted-foreground); flex: 0 0 auto; }
+  .lg-tag.system { background: var(--info-surface); color: var(--info); }
+  .lg-tag.group { background: var(--success-surface); color: var(--success); }
+  .lg-tag.atomic { background: var(--warning-surface); color: var(--warning); }
+  .lg-head em { font-style: normal; color: var(--muted-foreground); font-size: 11.5px; }
+  .sk { border-left: 2px solid var(--border); padding: 4px 0 4px 10px; margin-bottom: 5px; }
+  .sk:last-child { margin-bottom: 0; }
+  .sk-name { font-weight: 500; }
+  .sk-hit { font-size: 11px; color: var(--success); margin-left: 6px; }
+  .sk-why { font-size: 11.5px; color: var(--muted-foreground); margin-top: 2px; line-height: 1.6; }
+  .sk-steps { font-size: 11.5px; color: var(--muted-foreground); margin-top: 3px; }
+
+  .tool-chain { border: 1px solid var(--border); border-radius: 12px; background: var(--secondary); padding: 13px 15px; font-size: 13px; margin-bottom: 12px; }
+  .tool-chain > .tc-head { display: flex; align-items: center; gap: 8px; color: var(--muted-foreground); margin-bottom: 10px; }
+  .tc-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--primary); animation: spin .8s linear infinite; flex: 0 0 auto; }
+  .tc-done { animation: none; border-color: var(--success); border-top-color: var(--success); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .tc-step { display: flex; align-items: flex-start; gap: 9px; padding: 6px 0; border-top: 1px dashed var(--border); }
+  .tc-step:first-of-type { border-top: 0; }
+  .tc-ico { width: 17px; height: 17px; border-radius: 5px; flex: 0 0 auto; display: grid; place-items: center; font-size: 10px; background: var(--accent); color: var(--muted-foreground); }
+  .tc-step.ok .tc-ico { background: var(--success-surface); color: var(--success); }
+  .tc-step.run .tc-ico { background: var(--info-surface); color: var(--info); }
+  .tc-body { flex: 1; min-width: 0; }
+  .tc-name { font-weight: 500; color: var(--foreground); }
+  .tc-src { font-size: 10.5px; color: var(--muted-foreground); margin-left: 7px; }
+  .tc-arg { color: var(--muted-foreground); font-size: 11.5px; margin-top: 2px; word-break: break-all; font-family: "JetBrains Mono", Consolas, monospace; }
+  .tc-step.ok .tc-name { color: var(--success); }
+
+  .res-card { border-color: color-mix(in srgb, var(--primary) 26%, transparent); }
+  .res-sec { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+  .res-sec:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+  .res-sec h4 { margin: 0 0 8px; font-size: 14px; font-weight: 500; }
+  .res-note { margin: 12px 0 0; padding: 10px 12px; border-radius: 9px; font-size: 12.5px; line-height: 1.75; background: var(--secondary); border: 1px solid var(--border); color: var(--muted-foreground); }
+  .bubble table.data { font-size: 12.5px; margin: 6px 0; }
+
+  .side-card { padding: 18px; margin-bottom: 16px; }
+  .side-card h3 { margin: 0 0 4px; font-size: 14px; font-weight: 500; }
+  .side-card > p { margin: 0 0 15px; font-size: 12.5px; color: var(--muted-foreground); line-height: 1.7; }
+  .pf-line { font-size: 13px; line-height: 1.75; margin: 0 0 12px; }
+  .pf-kv { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 6px 10px; font-size: 12.5px; }
+  .pf-kv dt { color: var(--muted-foreground); }
+  .pf-kv dd { margin: 0; line-height: 1.65; word-break: break-word; }
+  .pf-sub { font-size: 11.5px; color: var(--muted-foreground); margin: 12px 0 6px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-size: 11.5px; padding: 3px 9px; border-radius: 999px; background: var(--secondary); border: 1px solid var(--border); }
+  .chip.ok { border-color: color-mix(in srgb, var(--success) 40%, transparent); color: var(--success); }
+  .chip.bad { border-color: color-mix(in srgb, var(--warning) 45%, transparent); color: var(--warning); }
+  .path-item { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; font-size: 12.5px; }
+  .path-item:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+  .path-item .ch { font-family: "JetBrains Mono", Consolas, monospace; font-size: 11.5px; color: var(--primary); }
+  .path-item .why { color: var(--muted-foreground); margin-top: 4px; line-height: 1.7; }
+  .path-item .br { margin-top: 4px; line-height: 1.7; }
+  .fit-log { font-size: 11.5px; color: var(--muted-foreground); line-height: 1.7; margin: 0; padding-left: 16px; }
+  .fit-log li { margin-bottom: 6px; }
+  .mem-item { display: flex; align-items: flex-start; gap: 9px; padding: 8px 0; font-size: 12.5px; line-height: 1.7; }
+  .mem-ico { width: 18px; height: 18px; border-radius: 6px; flex: 0 0 auto; display: grid; place-items: center; font-size: 10px; background: var(--accent); color: var(--primary); }
+  .mem-ico.no { background: color-mix(in srgb, var(--destructive) 12%, transparent); color: var(--destructive); }
+  /* ---------- 左栏：技能库（像文件列表一样的一棵树） ---------- */
+  .skill-pane { padding: 0; overflow: hidden; }
+  .sp-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 13px 14px 10px; border-bottom: 1px solid var(--border);
+  }
+  .sp-head h3 { margin: 0; font-size: 14px; font-weight: 500; }
+  .sp-head .btn { padding: 3px 9px; font-size: 12px; }
+  .sp-sum {
+    padding: 9px 14px; font-size: 11.5px; color: var(--muted-foreground); line-height: 1.6;
+    border-bottom: 1px solid var(--border);
+  }
+  .sp-sum b { color: var(--foreground); font-weight: 500; }
+  .sp-tree { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 8px 8px; }
+  .sp-layer { margin-bottom: 2px; }
+  .sp-row-head {
+    display: flex; align-items: center; gap: 7px; width: 100%;
+    background: none; border: 0; padding: 7px 7px; border-radius: 8px;
+    font: inherit; font-size: 12.5px; color: var(--foreground); cursor: pointer; text-align: left;
+  }
+  .sp-row-head:hover { background: var(--secondary); }
+  .sp-caret { width: 11px; flex: 0 0 auto; color: var(--muted-foreground); font-size: 10px; transition: transform .15s; }
+  .sp-layer.closed .sp-caret { transform: rotate(-90deg); }
+  .sp-gname { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sp-n { margin-left: auto; font-size: 11px; color: var(--muted-foreground); flex: 0 0 auto; }
+  .sp-layer.closed .sp-body { display: none; }
+  .sp-row {
+    display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 9px;
+    border-radius: 7px; font-size: 12.5px; line-height: 1.4;
+  }
+  .sp-row:hover { background: var(--secondary); }
+  .sp-row.off .sp-name { color: var(--muted-foreground); text-decoration: line-through; }
+  .sp-box { display: inline-flex; flex: 0 0 auto; cursor: pointer; }
+  .sp-box input {
+    appearance: none; -webkit-appearance: none; margin: 0;
+    width: 15px; height: 15px; border: 1.5px solid var(--border);
+    border-radius: 4px; background: var(--card); cursor: pointer; position: relative;
+    display: grid; place-items: center; font-size: 10px; color: var(--primary-foreground);
+  }
+  .sp-box input:checked { background: var(--primary); border-color: var(--primary); }
+  .sp-box input:checked::after { content: "✓"; }
+  .sp-box input:disabled { background: var(--muted); border-color: var(--border); cursor: not-allowed; }
+  .sp-box input:disabled::after { content: "🔒"; color: var(--muted-foreground); }
+  .sp-box input:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+  .sp-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sp-flag { flex: 0 0 auto; font-size: 10px; padding: 0 5px; border-radius: 999px; background: var(--warning-surface); color: var(--warning); }
+  .sp-more {
+    flex: 0 0 auto; width: 20px; height: 20px; border: 0; border-radius: 5px;
+    background: none; color: var(--muted-foreground); cursor: pointer;
+    font-size: 13px; line-height: 1; opacity: 0; pointer-events: none;
+  }
+  .sp-row:hover .sp-more, .sp-row-head:hover .sp-more, .sp-more[aria-expanded="true"] { opacity: 1; pointer-events: auto; }
+  .sp-more:hover { background: var(--accent); color: var(--foreground); }
+  .sp-more:focus-visible { opacity: 1; pointer-events: auto; outline: 2px solid var(--ring); }
+  .sp-input {
+    width: 100%; font: inherit; font-size: 12.5px; padding: 4px 8px;
+    border: 1px solid var(--ring); border-radius: 7px;
+    background: var(--card); color: var(--foreground);
+  }
+  .sp-newrow { display: flex; gap: 6px; align-items: center; padding: 6px 7px 2px; }
+  .sp-newrow .sp-input { flex: 1 1 auto; }
+  .sp-empty { font-size: 11.5px; color: var(--muted-foreground); padding: 5px 8px; line-height: 1.6; }
+  .sp-foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 9px 14px; border-top: 1px solid var(--border);
+    font-size: 11.5px; color: var(--muted-foreground); line-height: 1.5;
+  }
+  .sp-foot .btn { flex: 0 0 auto; padding: 3px 8px; font-size: 11.5px; }
+
+  /* ---------- 左栏容器：技能库 + 画像上下分屏，各自独立滚动 ---------- */
+  /* 🔴 之前是三栏（技能库 | 对话 | 画像），中间被两边挤得只剩一点宽 —— 现在把
+     技能库和画像摞在同一栏里，对话区独占剩下的全部宽度。 */
+  .agent-rail {
+    position: sticky; top: 0;
+    display: flex; flex-direction: column; gap: 12px;
+    height: calc(100vh - 26px); min-height: 460px;
+  }
+  .agent-rail > .card { margin-bottom: 0; min-height: 0; }
+  .agent-rail > .skill-pane { display: flex; flex-direction: column; flex: 1.15 1 0; }
+  .agent-rail > .rail-body { display: flex; flex-direction: column; flex: 1 1 0; }
+  .agent-rail > .rail-mini { flex: 0 0 auto; }
+  .agent-rail > .rail-mini[open] { overflow-y: auto; max-height: 56%; }
+  .skill-pane > .sp-head, .skill-pane > .sp-sum, .skill-pane > .sp-foot { flex: 0 0 auto; }
+  .rail-body > h3, .rail-body > button { flex: 0 0 auto; }
+  .rail-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 2px; }
+  .rail-body > p { margin: 0 0 12px; }
+  .rail-mini > summary {
+    display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+  }
+  .rail-mini > summary::-webkit-details-marker { display: none; }
+  .rail-mini > summary h3 { margin: 0; }
+  .rail-mini > summary span { margin-left: auto; font-size: 11.5px; color: var(--muted-foreground); }
+  .rail-mini[open] > summary { margin-bottom: 4px; }
+  .rail-mini > p { margin: 8px 0 0; }
+
+  /* 技能 / 分组的「⋯」菜单 —— 🔴 必须挂 body + fixed（面板自己有滚动，放里面会被裁） */
+  #spMenu {
+    position: fixed; z-index: 90; min-width: 196px; max-width: 268px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .28); padding: 5px; font-size: 12.5px;
+  }
+  #spMenu .m-title {
+    padding: 6px 9px 7px; font-size: 11.5px; color: var(--muted-foreground);
+    border-bottom: 1px solid var(--border); margin-bottom: 4px; line-height: 1.5;
+  }
+  #spMenu button {
+    display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
+    background: none; border: 0; padding: 7px 9px; border-radius: 7px;
+    font: inherit; font-size: 12.5px; color: var(--foreground); cursor: pointer;
+  }
+  #spMenu button:hover { background: var(--secondary); }
+  #spMenu button.danger { color: var(--destructive); }
+  #spMenu .m-sep { height: 1px; background: var(--border); margin: 4px 0; }
+  #spMenu label { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 7px; cursor: pointer; }
+  #spMenu label:hover { background: var(--secondary); }
+  #spMenu label input { accent-color: var(--primary); flex: 0 0 auto; }
+  #spMenu .m-hint { padding: 5px 9px 7px; font-size: 11px; color: var(--muted-foreground); line-height: 1.55; }
+
+  @media (max-width: 940px) {
+    .agent-grid { grid-template-columns: minmax(0, 1fr); }
+    .agent-rail { position: static; height: auto; min-height: 0; }
+    .agent-rail > .skill-pane, .agent-rail > .rail-body { flex: 0 0 auto; }
+    .sp-tree, .rail-scroll { max-height: 340px; }
+    .agent-rail > .rail-mini[open] { max-height: none; }
+  }
+</style>
+</head>
+<body>
+
+
+<div class="page-wrap">
+    <div class="page" style="padding-top:0">
+      <div class="page-head" style="margin-bottom:18px">
+        <div class="crumb" id="crumbText">我的学习台 · 智能体</div>
+        <h1>AI 助手</h1>
+        <p>三层技能 + 一份从你行为里磨出来的画像：哪些你已经懂了、哪些还没通，我就照这个顺序讲</p>
+      </div>
+
+      <div class="agent-grid">
+        <aside class="agent-rail" aria-label="技能库与画像">
+          <!-- 技能库：一棵可勾选的树（开关与分组都存在 nav.js 的技能状态层） -->
+          <div class="card card-raised skill-pane">
+            <div class="sp-head">
+              <h3>技能库</h3>
+              <button class="btn btn-sm" type="button" id="newGroupBtn" title="新建一个自己的分组">＋ 新建分组</button>
+            </div>
+            <p class="sp-sum" id="libCount">—</p>
+            <div class="sp-tree" id="skillTree"></div>
+            <div class="sp-foot">
+              <span id="skillFoot">勾选＝以后会挂，取消＝关掉</span>
+              <button class="btn btn-ghost btn-sm" type="button" id="skillResetBtn">恢复默认</button>
+            </div>
+          </div>
+
+          <!-- 画像 -->
+          <div class="card card-raised side-card rail-body">
+            <h3>我的画像</h3>
+            <div class="rail-scroll">
+              <p>它统计的是<b>你自己的动作</b>：问过什么、标过哪些「懂了」、反复卡在哪儿 —— 不是考试分数，也不是猜的</p>
+              <p class="pf-line" id="personaFit">正在读你的行为记录…</p>
+              <dl class="pf-kv" id="personaBase"></dl>
+
+              <p class="pf-sub">已经懂的</p>
+              <div class="chips" id="personaKnown"></div>
+              <p class="pf-sub">反复卡住的</p>
+              <div class="chips" id="personaGaps"></div>
+
+              <p class="pf-sub">从他会的，到他想会的</p>
+              <div id="personaPath"></div>
+
+              <p class="pf-sub">磨合记录</p>
+              <ul class="fit-log" id="personaLog"></ul>
+            </div>
+            <button class="btn btn-sm" style="width:100%;margin-top:12px" id="personaFitBtn" type="button">按最新行为重新磨合</button>
+          </div>
+
+          <!-- 我不会做什么（默认收起） -->
+          <details class="card card-raised side-card rail-mini">
+            <summary><h3>我不会做什么</h3><span>3 条硬规则</span></summary>
+            <p>这几条是硬的，不是说说</p>
+            <div class="mem-item"><span class="mem-ico no">×</span>
+              <span>不会改你的任何数据 —— 学生端一个「会改动」的技能都没有</span></div>
+            <div class="mem-item"><span class="mem-ico no">×</span>
+              <span>不会直接甩作业答案，先按你已会的推到你想会的</span></div>
+            <div class="mem-item"><span class="mem-ico no">×</span>
+              <span>不会把你的记录发给同学或老师，全部留在本机</span></div>
+          </details>
+        </aside>
+
+<section class="card card-raised chat-main" aria-label="学生 Agent 对话区">
+          <div class="chat-head">
+            <div class="msg-avatar" style="background:var(--primary);color:var(--primary-foreground)">智</div>
+            <div style="flex:1;min-width:0">
+              <h2>学习助手</h2>
+              <p id="connLine">已连接：我的课程 · 课件 · 答疑记录 · 学习画像</p>
+            </div>
+            <span class="tag tag-success" id="readyTag">就绪</span>
+          </div>
+
+          <div class="chat-log" id="chatLog" role="log" aria-live="polite" style="max-height:600px"></div>
+
+          <div class="chat-suggests" id="suggests"></div>
+
+          <div class="composer">
+            <div class="composer-box">
+              <label class="sr-only" for="input">告诉助手你想做什么</label>
+              <textarea id="input" rows="1"
+                placeholder="例如：我哪块最弱 / 用我懂的类比讲讲「图」/ 考考我"></textarea>
+              <button class="send-btn" id="sendBtn" title="发送" aria-label="发送">↑</button>
+            </div>
+            <div class="composer-foot">
+              <span><span class="kbd">Enter</span> 发送　<span class="kbd">Shift</span>+<span class="kbd">Enter</span> 换行</span>
+              <span>我不会改你的数据，也不会替你答题</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+/* ============================================================
+   学生端 Agent —— 与教师端共用技能库，全只读
+   ============================================================ */
+
+const SUGGESTS_FIXED = [
+  "我哪块最弱",
+  "考考我",
+  "这门课怎么用",
+  "这周要考试了，帮我复习",
+];
+
+const logEl = $("#chatLog");
+
+function el(html) {
+  const t = document.createElement("template");
+  t.innerHTML = html.trim();
+  return t.content.firstElementChild;
+}
+
+/** 🔴 与 agent.html 的 renderLines 是同源的两份（mdToHtml 不认表格，所以先抽出表格与代码块） */
+/* `renderLines()` 在 core.js 里（唯一实现）—— 代码块与表格要合并处理，三个页面共用一份 */
+
+function addMsg(html) {
+  const node = el('<div class="msg ai"><div class="msg-avatar">智</div><div class="bubble"></div></div>');
+  node.querySelector(".bubble").innerHTML = html;
+  logEl.appendChild(node);
+  logEl.scrollTop = logEl.scrollHeight;
+  return node;
+}
+
+function addMe(text) {
+  const node = el('<div class="msg me"><div class="msg-avatar">我</div><div class="bubble"></div></div>');
+  node.querySelector(".bubble").textContent = text;
+  logEl.appendChild(node);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function routeCtx() {
+  const c = (typeof ENROLLED !== "undefined" && ENROLLED[0]) ? ENROLLED[0].courseId : "";
+  return { role: "student", courseId: c };
+}
+
+function skillChainEl(route) {
+  const box = el('<div class="skill-chain"><div class="sc-head">' +
+    '<b>挂了 ' + route.chain.length + ' 个技能</b>' +
+    '<span>系统层每次都在 · 群组层按我的课堂 · 原子层只在真用到时挂</span></div></div>');
+  SKILL_LAYER_ORDER.forEach(function (L) {
+    const list = route[L] || [];
+    const sec = el('<div class="lg"><div class="lg-head">' +
+      '<span class="lg-tag ' + L + '">' + SKILL_LAYER[L].name + '</span>' +
+      '<em>' + SKILL_LAYER[L].hint + '</em></div></div>');
+    if (!list.length) sec.appendChild(el('<div class="sk"><div class="sk-why">这一层这次没有要挂的技能。</div></div>'));
+    list.forEach(function (s) {
+      const item = el('<div class="sk"><div class="sk-name">' + escHtml(s.name) +
+        (s.hit && s.hit.length ? '<span class="sk-hit">命中：' + escHtml(s.hit.join(" / ")) + "</span>" : "") +
+        '</div><div class="sk-why">' + escHtml(s.desc) + "</div>" +
+        '<div class="sk-steps">什么时候用：' + escHtml(s.when || "—") + "</div>" +
+        '<div class="sk-steps">步骤：' + (s.steps || []).map(function (x) { return escHtml(x.name); }).join(" → ") + "</div></div>");
+      if (s.fallback) item.querySelector(".sk-name").insertAdjacentHTML("beforeend",
+        '<span class="sk-hit" style="color:var(--muted-foreground)">（按我当前的课选中）</span>');
+      sec.appendChild(item);
+    });
+    box.appendChild(sec);
+  });
+  return box;
+}
+
+/* ---------- 轻提示（#flash 的样式在 design.css，与其它页共用一套） ---------- */
+let flashTimer = 0;
+function flash(msg, tone) {
+  let box = document.getElementById("flash");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "flash";
+    document.body.appendChild(box);
+  }
+  box.className = tone || "";
+  box.textContent = msg;
+  box.hidden = false;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(function () { box.hidden = true; }, 3000);
+}
+
+/** 学生端的动作链：**没有「等待确认」那一支** —— 学生端压根没有会改动的技能 */
+function runSteps(steps, done) {
+  const chain = el('<div class="tool-chain"><div class="tc-head"><span class="tc-spin"></span>' +
+    '<span>正在做 ' + steps.length + ' 个动作…</span></div><div class="tc-list"></div></div>');
+  logEl.appendChild(chain);
+  const listEl = chain.querySelector(".tc-list");
+  const head = chain.querySelector(".tc-head");
+  let i = 0;
+  const next = function () {
+    if (i >= steps.length) {
+      head.innerHTML = '<span class="tc-spin tc-done"></span><span>做完了（都是只读动作）</span>';
+      done();
+      return;
+    }
+    const s = steps[i];
+    const node = el('<div class="tc-step run"><span class="tc-ico">›</span><div class="tc-body">' +
+      '<div class="tc-name">' + escHtml(s.name) + '<span class="tc-src">' + escHtml(SKILL_LAYER[s.layer].name) + "</span></div>" +
+      '<div class="tc-arg">' + escHtml(s.arg || "—") + "</div></div></div>");
+    listEl.appendChild(node);
+    logEl.scrollTop = logEl.scrollHeight;
+    i++;
+    setTimeout(function () {
+      node.classList.remove("run"); node.classList.add("ok");
+      node.querySelector(".tc-ico").textContent = "✓";
+      node.querySelector(".tc-body").insertAdjacentHTML("beforeend",
+        '<div class="tc-arg" style="color:var(--success)">→ 完成</div>');
+      logEl.scrollTop = logEl.scrollHeight;
+      next();
+    }, 300);
+  };
+  next();
+}
+
+/** 跑一串技能 —— 🔴 实现在 nav.js（`runSkillChain`），工作台与两页共用同一份 */
+function runSkills(skillIds, payload, ctx) { return runSkillChain(skillIds, payload, ctx); }
+
+function addResult(runs, back, meta) {
+  const node = el('<div class="msg ai"><div class="msg-avatar">智</div><div class="bubble res-card"></div></div>');
+  const box = node.querySelector(".bubble");
+  runs.secs.forEach(function (s) {
+    const sec = el('<div class="res-sec"><h4>' + escHtml(s.title) + "</h4><div></div></div>");
+    sec.querySelector("div").innerHTML = renderLines(s.lines);
+    box.appendChild(sec);
+  });
+  if (runs.notes.length) {
+    const n = el('<div class="res-note"></div>');
+    n.innerHTML = runs.notes.map(function (t) { return "<div>" + mdToHtml(t) + "</div>"; }).join("");
+    box.appendChild(n);
+  }
+  // 「收进工作台」：把这次的结果**存成一张卡片**（存快照，见 nav.js 的 cardFromRun）
+  if (meta && meta.input && typeof createCard === "function") {
+    const foot = el('<div class="bubble-foot"></div>');
+    const save = el('<a href="#" data-act="save">收进工作台</a>');
+    save.addEventListener("click", function (e) {
+      e.preventDefault();
+      const r = createCard(cardFromRun(meta.input, runs, {
+        fromId: meta.fromId, role: "student", courseId: meta.courseId,
+      }));
+      if (!r.ok) { flash(r.error, "bad"); return; }
+      // ⚠️ 收完把入口收掉：同一份结果再点一次会变成两张一模一样的卡片
+      save.textContent = "已收进工作台 ✓";
+      save.style.color = "var(--success)";
+      save.style.pointerEvents = "none";
+      flash("已收进工作台 —— 左侧「智能体 · 工作台」里能看到", "ok");
+    });
+    foot.appendChild(save);
+    box.appendChild(foot);
+  }
+  logEl.appendChild(node);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+let busy = false;
+
+function handle(text) {
+  if (busy) return;
+  const t = String(text || "").trim();
+  if (!t) return;
+  busy = true;
+  $("#sendBtn").disabled = true;
+  addMe(t);
+
+  const ctx = routeCtx();
+  const route = routeSkills(t, ctx);
+  logEl.appendChild(skillChainEl(route));
+
+  // 谁该跑 —— 🔴 实现在 nav.js（`runnableIds`），三个页面共用同一份判断
+  const ids = runnableIds(route);
+  const runChain = route.chain.filter(function (s) { return ids.indexOf(s.id) >= 0; });
+
+  // 全关掉了（含系统层）→ 说清楚，不能给一片空白
+  if (!ids.length) {
+    addMsg("<p>这次<b>一条技能都没挂</b> —— 你把它们都关掉了。在左栏勾上至少一条（或点「恢复默认」），我再试。</p>");
+    busy = false;
+    $("#sendBtn").disabled = false;
+    return;
+  }
+  const steps = planFromChain(runChain, { role: "student", chain: runChain });
+  runSteps(steps, function () {
+    addResult(runSkills(ids, {}, ctx), null,
+      { input: t, fromId: primarySkillId(route, ids), courseId: ctx.courseId });
+    busy = false;
+    $("#sendBtn").disabled = false;
+    renderPersona();
+    $("#input").focus();
+  });
+}
+
+/* ---------- 右栏 ---------- */
+function chip(text, cls) { return '<span class="chip ' + (cls || "") + '">' + escHtml(text) + "</span>"; }
+
+/** 只看**当前课堂**的记录（与「我的学情」同一个口径） */
+function myBehavior() {
+  const cid = (typeof ENROLLED !== "undefined" && ENROLLED[0]) ? ENROLLED[0].courseId : "";
+  return behaviorInCourse(BEHAVIOR, cid);
+}
+
+function renderPersona() {
+  const prof = behaviorProfile(myBehavior(), Date.now());
+  const p = MY_PERSONA;
+
+  $("#personaFit").textContent = "现在这么讲：" + personaFitLine(prof);
+  $("#personaBase").innerHTML =
+    "<dt>开口</dt><dd>" + escHtml(p.voice) + "</dd>" +
+    "<dt>步子</dt><dd>" + escHtml(p.step) + "</dd>" +
+    "<dt>常用</dt><dd>" + escHtml(p.formats.join("｜")) + "</dd>" +
+    "<dt>避免</dt><dd>" + escHtml(p.avoid.join("｜")) + "</dd>" +
+    "<dt>依据</dt><dd>" + prof.total + " 条我的学习记录" + (prof.seedCount ? "（含 " + prof.seedCount + " 条预置示例）" : "") + "</dd>";
+
+  $("#personaKnown").innerHTML = prof.known.length
+    ? prof.known.slice(0, 6).map(function (k) { return chip(k.topic + " · 懂了 " + k.got + " 次", "ok"); }).join("")
+    : '<span class="field-hint">还没有标过「懂了」的话题 —— 在 AI 答疑里点一下「✓ 懂了」就有了</span>';
+  $("#personaGaps").innerHTML = prof.gaps.length
+    ? prof.gaps.slice(0, 6).map(function (g) { return chip(g.topic + " · 问过 " + g.count, "bad"); }).join("")
+    : '<span class="field-hint">没有反复卡住的话题</span>';
+
+  const path = learningPath(prof, 3);
+  $("#personaPath").innerHTML = path.length ? path.map(function (x) {
+    return '<div class="path-item"><div><b>' + escHtml(x.topic) + '</b>　<span class="ch">' +
+      escHtml(x.chain.join(" → ")) + "</span></div>" +
+      '<div class="why">' + escHtml(x.from) + "</div>" +
+      (x.bridge ? '<div class="br">类比：' + escHtml(x.bridge) + "</div>"
+        : '<div class="br" style="color:var(--muted-foreground)">这条类比桥本版没预置 —— 正式版由模型现场找</div>') +
+      "</div>";
+  }).join("") : '<span class="field-hint">等你多问几次、标过一些「懂了」之后，我就能排路线了</span>';
+
+  $("#personaLog").innerHTML = (p.log || []).length
+    ? p.log.slice(0, 3).map(function (e) {
+      return "<li>" + escHtml(agoText(e.at, Date.now())) + "（依据 " + e.from + " 条）<br>" +
+        e.changes.map(function (c) { return escHtml(c); }).join("<br>") + "</li>";
+    }).join("")
+    : "<li>还没有磨合过 —— 点下面的按钮，用你现在的记录对一次。</li>";
+}
+
+/* ============================================================
+   左栏：技能库（与教师端同一套交互，各写一份）
+   ------------------------------------------------------------
+   🔴 数据全在 nav.js 的技能状态层（`SKILL_STATE` / `skillEnabled` / `skillGroups`），
+      这页只画 + 接点击，**别在页面里另存一份开关状态**。
+   🔴 学生端这里**没有一条 `kind:"write"`** —— 所以树上一个「会改动」标记都不会有，
+      「改前确认」那道闸也不会出现（它只挂教师端）。
+   ============================================================ */
+let spMenuEl = null;
+let spNewGroupOpen = false;
+let spRenameCancel = false;
+
+function closeSpMenu() {
+  if (spMenuEl) {
+    if (spMenuEl._anchor) spMenuEl._anchor.setAttribute("aria-expanded", "false");
+    spMenuEl.remove();
+    spMenuEl = null;
+  }
+  document.removeEventListener("mousedown", spOutsideClose, true);
+}
+function spOutsideClose(e) {
+  if (spMenuEl && !spMenuEl.contains(e.target) &&
+      !(spMenuEl._anchor && spMenuEl._anchor.contains(e.target))) closeSpMenu();
+}
+
+/** 打开「⋯」菜单 —— 🔴 挂 body + fixed（面板自己有滚动，挂里面会被裁） */
+function openSpMenu(anchor, build) {
+  closeSpMenu();
+  const m = el('<div id="spMenu" role="menu"></div>');
+  m._anchor = anchor;
+  build(m);
+  document.body.appendChild(m);
+  const r = anchor.getBoundingClientRect();
+  const w = m.offsetWidth || 200, h = m.offsetHeight || 160;
+  let left = r.right + 6;
+  if (left + w > window.innerWidth - 8) left = Math.max(8, r.left - w - 6);
+  let top = r.top;
+  if (top + h > window.innerHeight - 8) top = Math.max(8, window.innerHeight - h - 8);
+  m.style.left = Math.round(left) + "px";
+  m.style.top = Math.round(top) + "px";
+  anchor.setAttribute("aria-expanded", "true");
+  spMenuEl = m;
+  setTimeout(function () { document.addEventListener("mousedown", spOutsideClose, true); }, 0);
+}
+
+function skillRow(s, gid) {
+  const on = skillEnabled(s.id);
+  const locked = skillLocked(s.id);
+  const row = el('<div class="sp-row' + (on ? "" : " off") + '" data-id="' + s.id + '">' +
+    '<label class="sp-box"><input type="checkbox"' + (on ? " checked" : "") + (locked ? " disabled" : "") +
+    ' aria-label="' + escHtml(s.name) + (on ? "，已启用" : "，已关闭") + '"></label>' +
+    '<span class="sp-name">' + escHtml(s.name) + '</span>' +
+    '<button class="sp-more" type="button" aria-haspopup="menu" aria-expanded="false" ' +
+    'aria-label="' + escHtml(s.name) + ' 的更多操作">⋯</button>' +
+    '</div>');
+  row.title = (s.desc || "") + (locked ? "\n🔒 " + skillLockReason(s.id) : "");
+  row.querySelector("input").addEventListener("change", function () { applySkillToggle(s.id); });
+  row.querySelector(".sp-more").addEventListener("click", function (e) {
+    e.stopPropagation();
+    openSpMenu(e.currentTarget, function (m) { skillMenu(m, s.id, gid); });
+  });
+  return row;
+}
+
+function skillMenu(m, id, gid) {
+  const sk = skillAnyRole(id);
+  if (!sk) return;
+  m.appendChild(el('<div class="m-title"><b>' + escHtml(sk.name) + '</b> · ' +
+    SKILL_LAYER[sk.layer].name + '<br>' + escHtml(sk.desc || "") + '</div>'));
+
+  if (gid) {
+    const g = skillGroupOf(gid);
+    const out = el('<button type="button">从「' + escHtml(g ? g.name : "本组") + '」移出</button>');
+    out.addEventListener("click", function () {
+      closeSpMenu();
+      const r = removeSkillFromGroup(gid, id);
+      if (!r.ok) { flash(r.error, "bad"); return; }
+      renderSkillTree();
+      flash("已从分组移出（技能还在它原来的层里）", "ok");
+    });
+    m.appendChild(out);
+    m.appendChild(el('<div class="m-sep"></div>'));
+  }
+
+  const gs = skillGroups();
+  if (gs.length) {
+    m.appendChild(el('<div class="m-hint">收进我的分组（只是视图，技能还在原来的层里）</div>'));
+    gs.forEach(function (g) {
+      const lab = el('<label><input type="checkbox"' + (g.skills.indexOf(id) >= 0 ? " checked" : "") +
+        '><span>' + escHtml(g.name) + '</span></label>');
+      lab.querySelector("input").addEventListener("change", function (e) {
+        const r = e.target.checked ? addSkillToGroup(g.id, id) : removeSkillFromGroup(g.id, id);
+        if (!r.ok) { flash(r.error, "bad"); e.target.checked = !e.target.checked; return; }
+        renderSkillTree(); closeSpMenu();
+        flash(e.target.checked ? "已收进「" + g.name + "」" : "已从「" + g.name + "」移出", "ok");
+      });
+      m.appendChild(lab);
+    });
+  } else {
+    m.appendChild(el('<div class="m-hint">还没有分组 —— 先建一个，就能把常用技能收进去。</div>'));
+  }
+  const ng = el('<button type="button">＋ 新建分组…</button>');
+  ng.addEventListener("click", function () { closeSpMenu(); openNewGroupRow(); });
+  m.appendChild(ng);
+  m.appendChild(el('<div class="m-sep"></div>'));
+
+  if (skillLocked(id)) {
+    m.appendChild(el('<div class="m-hint">🔒 锁定，不能关 —— ' + escHtml(skillLockReason(id)) + '</div>'));
+  } else {
+    const tb = el('<button type="button">' + (skillEnabled(id) ? "关掉这条技能" : "打开这条技能") + '</button>');
+    tb.addEventListener("click", function () { closeSpMenu(); applySkillToggle(id); });
+    m.appendChild(tb);
+  }
+}
+
+function skillGroupMenu(m, gid) {
+  const g = skillGroupOf(gid);
+  if (!g) return;
+  const n = skillGroupAssetCount(gid).skills;
+  m.appendChild(el('<div class="m-title"><b>' + escHtml(g.name) + '</b> · 收着 ' + n + ' 条技能</div>'));
+  const rb = el('<button type="button">重命名</button>');
+  rb.addEventListener("click", function () { closeSpMenu(); startRenameGroup(gid); });
+  m.appendChild(rb);
+  m.appendChild(el('<div class="m-sep"></div>'));
+  const db = el('<button type="button" class="danger">删除这个分组</button>');
+  db.addEventListener("click", function () {
+    closeSpMenu();
+    if (!window.confirm("删除分组「" + g.name + "」？\n\n只删这个分组 —— 里面的 " + n +
+      " 条技能都还在原来的层里，开关状态也一个都不变。")) return;
+    const r = deleteSkillGroup(gid);
+    if (!r.ok) { flash(r.error, "bad"); return; }
+    renderSkillTree();
+    flash("已删除分组「" + r.group.name + "」（技能一条没少）", "ok");
+  });
+  m.appendChild(db);
+}
+
+function applySkillToggle(id) {
+  const r = toggleSkillEnabled(id);
+  if (!r.ok) { flash(r.error, "bad"); renderSkillTree(); return; }
+  renderSkillTree();
+  flash("「" + r.skill.name + "」已" +
+    (r.enabled ? "打开 —— 以后的对话会重新挂上它" : "关掉 —— 以后不再挂它，随时可以打开"), r.enabled ? "ok" : "");
+}
+
+function newGroupRow() {
+  const row = el('<div class="sp-newrow"><input class="sp-input" maxlength="20" ' +
+    'placeholder="分组名，例如：复习时用"><button class="btn btn-primary btn-sm" type="button">建</button></div>');
+  const inp = row.querySelector("input");
+  const submit = function () {
+    const r = createSkillGroup(inp.value);
+    if (!r.ok) { flash(r.error, "bad"); inp.focus(); return; }
+    spNewGroupOpen = false;
+    renderSkillTree();
+    flash("已建分组「" + r.group.name + "」—— 在技能行的「⋯」里把技能收进去", "ok");
+  };
+  row.querySelector("button").addEventListener("click", submit);
+  inp.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); submit(); }
+    if (e.key === "Escape") { spNewGroupOpen = false; renderSkillTree(); }
+  });
+  return row;
+}
+
+function openNewGroupRow() {
+  if (skillClosed("groups")) toggleSkillClosed("groups");
+  spNewGroupOpen = true;
+  renderSkillTree();
+  const inp = $("#skillTree .sp-newrow input");
+  if (inp) { inp.focus(); if (inp.scrollIntoView) inp.scrollIntoView({ block: "nearest" }); }
+}
+
+function startRenameGroup(gid) {
+  const g = skillGroupOf(gid);
+  if (!g) return;
+  const sub = $("#skillTree .sp-subgroup[data-gid='" + gid + "']");
+  const head = sub ? sub.querySelector(".sp-row-head") : null;
+  const nameEl = head ? head.querySelector(".sp-gname") : null;
+  if (!nameEl) return;
+  const inp = el('<input class="sp-input" style="max-width:132px" maxlength="20">');
+  inp.value = g.name;
+  spRenameCancel = false;
+  nameEl.replaceWith(inp);
+  inp.focus();
+  inp.select();
+  let done = false;
+  const commit = function () {
+    if (done) return;
+    done = true;
+    if (spRenameCancel) { spRenameCancel = false; renderSkillTree(); return; }
+    const r = renameSkillGroup(gid, inp.value);
+    if (!r.ok) { flash(r.error, "bad"); renderSkillTree(); return; }
+    renderSkillTree();
+    flash("分组已改名为「" + r.group.name + "」", "ok");
+  };
+  inp.addEventListener("blur", commit);
+  inp.addEventListener("click", function (e) { e.stopPropagation(); });
+  inp.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); inp.blur(); }
+    if (e.key === "Escape") { spRenameCancel = true; inp.blur(); }
+  });
+}
+
+/** 画整棵树：三层 + 我的分组（学生端没有任何「会改动」的技能） */
+function renderSkillTree() {
+  const box = $("#skillTree");
+  if (!box) return;
+  const role = "student";
+  box.innerHTML = "";
+
+  SKILL_LAYER_ORDER.forEach(function (L) {
+    const list = roleSkills(role).filter(function (s) { return s.layer === L; });
+    const foldKey = "layer:" + L;
+    const closed = skillClosed(foldKey);
+    const offN = list.filter(function (s) { return !skillEnabled(s.id); }).length;
+    const wrap = el('<div class="sp-layer' + (closed ? " closed" : "") + '"></div>');
+    const head = el('<button class="sp-row-head" type="button" aria-expanded="' + String(!closed) + '">' +
+      '<span class="sp-caret">▾</span>' +
+      '<span class="lg-tag ' + L + '">' + SKILL_LAYER[L].name + '</span>' +
+      '<span class="sp-n">' + (offN ? offN + "/" : "") + list.length + ' 条</span></button>');
+    head.title = SKILL_LAYER[L].hint;
+    head.addEventListener("click", function () { toggleSkillClosed(foldKey); renderSkillTree(); });
+    wrap.appendChild(head);
+    const body = el('<div class="sp-body"></div>');
+    list.forEach(function (s) { body.appendChild(skillRow(s, null)); });
+    wrap.appendChild(body);
+    box.appendChild(wrap);
+  });
+
+  const gs = skillGroups();
+  const gClosed = skillClosed("groups");
+  const gl = el('<div class="sp-layer sp-group' + (gClosed ? " closed" : "") + '"></div>');
+  const gh = el('<button class="sp-row-head" type="button" aria-expanded="' + String(!gClosed) + '">' +
+    '<span class="sp-caret">▾</span><span class="sp-gname">我的分组</span>' +
+    '<span class="sp-n">' + gs.length + ' 个</span></button>');
+  gh.addEventListener("click", function () { toggleSkillClosed("groups"); renderSkillTree(); });
+  gl.appendChild(gh);
+
+  const gb = el('<div class="sp-body"></div>');
+  if (!gs.length) {
+    gb.appendChild(el('<div class="sp-empty">还没有分组。点上面的「＋ 新建分组」把常用技能收进去 —— ' +
+      '分组只是一层视图，技能还在原来的层里。</div>'));
+  }
+  gs.forEach(function (g) {
+    const items = g.skills.map(skillAnyRole).filter(Boolean);
+    const subClosed = skillClosed("group:" + g.id);
+    const sub = el('<div class="sp-subgroup sp-layer' + (subClosed ? " closed" : "") +
+      '" data-gid="' + g.id + '"></div>');
+    const h = el('<button class="sp-row-head" type="button" aria-expanded="' + String(!subClosed) + '">' +
+      '<span class="sp-caret">▾</span><span class="sp-gname">' + escHtml(g.name) + '</span>' +
+      '<span class="sp-n">' + items.length + '</span></button>');
+    h.addEventListener("click", function () { toggleSkillClosed("group:" + g.id); renderSkillTree(); });
+    const more = el('<button class="sp-more" type="button" aria-haspopup="menu" aria-expanded="false" ' +
+      'aria-label="' + escHtml(g.name) + ' 的分组操作">⋯</button>');
+    more.addEventListener("click", function (e) {
+      e.stopPropagation();
+      openSpMenu(e.currentTarget, function (m) { skillGroupMenu(m, g.id); });
+    });
+    h.appendChild(more);
+    sub.appendChild(h);
+    const sb = el('<div class="sp-body"></div>');
+    if (!items.length) {
+      sb.appendChild(el('<div class="sp-empty">这个分组还是空的 —— 在技能行的「⋯」里选「收进分组」。</div>'));
+    }
+    items.forEach(function (s) { sb.appendChild(skillRow(s, g.id)); });
+    sub.appendChild(sb);
+    gb.appendChild(sub);
+  });
+  gl.appendChild(gb);
+  box.appendChild(gl);
+
+  if (spNewGroupOpen) box.appendChild(newGroupRow());
+
+  const total = roleSkills(role).length;
+  const off = disabledSkillCount(role);
+  const groupsN = skillGroups().length;
+  $("#libCount").innerHTML = "共 <b>" + total + "</b> 条技能，" +
+    (off ? "已关掉 <b>" + off + "</b> 条" : "全部开着") +
+    (groupsN ? " · 我的分组 <b>" + groupsN + "</b> 个" : "") +
+    "<br>勾选＝以后会挂，取消＝关掉；这里<b>没有会改动数据的技能</b>";
+}
+
+/* ---------- 启动 ---------- */
+(function boot() {
+  const cid = (typeof ENROLLED !== "undefined" && ENROLLED[0]) ? ENROLLED[0].courseId : "";
+  if (cid && typeof studentCourseName === "function") {
+    $("#crumbText").textContent = studentCourseName(cid) + " · 学习助手";
+  }
+
+  addMsg("<p>我是你的学习助手。和别人不太一样的地方是两层：</p>" +
+    "<p><b>三层技能</b>：系统层知道这个应用怎么用，群组层记着你在哪门课、什么场景，" +
+    "原子层是具体到「定位薄弱」「类比讲解」「生成自测」这样的活 —— 你说一句话，我先路由，命中了什么都摊开给你看。</p>" +
+    "<p><b>一份画像</b>：你标过「懂了」的我就当你会了；反复问又没标懂的，我就当还没通。" +
+    "于是我能<b>顺着你已经会的东西讲你想会的</b> —— 比如你懂树，我就从树推到图。</p>" +
+    "<p>我不改动你的任何数据，也不替你答题。</p>");
+
+  renderSkillTree();
+  renderPersona();
+
+  const fit = fitPersona(Date.now());
+  if (fit.changes.length) {
+    addMsg("<p>我按你最近的 <b>" + fit.profile.total + "</b> 条记录，把讲法对了一次：</p><ul>" +
+      fit.changes.map(function (c) { return "<li>" + escHtml(c) + "</li>"; }).join("") + "</ul>");
+    renderPersona();
+  }
+
+  // 建议问题是**按他自己的画像生成的**，不是一份写死的清单
+  const prof = behaviorProfile(myBehavior(), Date.now());
+  const sug = [];
+  prof.gaps.slice(0, 2).forEach(function (g) { sug.push("用我懂的类比讲讲「" + g.topic + "」"); });
+  SUGGESTS_FIXED.forEach(function (s) { if (sug.indexOf(s) < 0) sug.push(s); });
+  $("#suggests").innerHTML = sug.slice(0, 6).map(function (s) {
+    return '<button class="suggest" type="button">' + escHtml(s) + "</button>";
+  }).join("");
+  $$(".suggest").forEach(function (b) {
+    b.addEventListener("click", function () { $("#input").value = b.textContent; handle(b.textContent); });
+  });
+})();
+
+/* ---------- 左栏：技能库的按钮 ---------- */
+$("#newGroupBtn").addEventListener("click", openNewGroupRow);
+$("#skillResetBtn").addEventListener("click", function () {
+  const off = disabledSkillCount("student");
+  const gs = skillGroups().length;
+  if (!off && !gs) { flash("现在就是默认状态（技能全开、没有分组）", ""); return; }
+  if (!window.confirm("恢复默认？\n\n" +
+    (off ? "会把 " + off + " 条被关掉的技能重新打开；" : "") +
+    (gs ? "并清空你的 " + gs + " 个分组（技能本身不动）；" : "") + "\n历史记录不受影响。")) return;
+  resetSkillState();
+  spNewGroupOpen = false;
+  renderSkillTree();
+  flash("已恢复默认：技能全开" + (gs ? "，分组已清空" : ""), "ok");
+});
+document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeSpMenu(); });
+
+$("#sendBtn").addEventListener("click", function () { const v = $("#input").value; $("#input").value = ""; handle(v); });
+$("#input").addEventListener("keydown", function (e) {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = $("#input").value; $("#input").value = ""; handle(v); }
+});
+$("#input").addEventListener("input", function (e) {
+  e.target.style.height = "auto";
+  e.target.style.height = Math.min(e.target.scrollHeight, 150) + "px";
+});
+$("#personaFitBtn").addEventListener("click", function () {
+  const fit = fitPersona(Date.now());
+  renderPersona();
+  addMsg(fit.changes.length
+    ? "<p>刚用 <b>" + fit.profile.total + "</b> 条记录对了一次：</p><ul>" +
+      fit.changes.map(function (c) { return "<li>" + escHtml(c) + "</li>"; }).join("") + "</ul>"
+    : "<p>对过了：按现在的记录没有要调整的地方（依据不足时我不会瞎调）。</p>");
+});
+</script>
+</body>
+</html>

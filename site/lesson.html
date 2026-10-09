@@ -1,0 +1,1784 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="teacher">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>教案 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  :root { --font-sans: "Inter", system-ui; }
+
+  /* ---------- 课程切换条 ---------- */
+  .lesson-bar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 16px; margin-bottom: 16px;
+  }
+  .lesson-bar .lb-label { font-size: 12.5px; color: var(--muted-foreground); }
+  .lesson-bar .lb-sel { width: auto; min-width: 190px; padding: 6px 10px; font-size: 13px; }
+  .lesson-bar .lb-meta { font-size: 12.5px; color: var(--muted-foreground); }
+  .lesson-bar .lb-spacer { flex: 1 1 auto; }
+
+  .lesson-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; }
+
+  /* ---------- 左：教案大纲 ---------- */
+  .outline-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .outline-head h3 { margin: 0; font-size: 13px; font-weight: 500; flex: 1 1 auto; min-width: 0; }
+  .outline-tree { display: flex; flex-direction: column; gap: 2px; }
+
+  .ch-row, .ls-row {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    border: 1px solid transparent; border-radius: 8px;
+    background: transparent; color: var(--foreground);
+    font-family: inherit; font-size: 13px; cursor: pointer; text-align: left;
+    transition: background .14s, border-color .14s;
+  }
+  .ch-row { padding: 8px 9px; }
+  .ls-row { padding: 6px 9px 6px 20px; font-size: 12.5px; margin-bottom: 1px; }
+  .ch-row:hover, .ls-row:hover { background: var(--secondary); }
+  .ch-row.active, .ls-row.active {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    border-color: color-mix(in srgb, var(--primary) 24%, transparent);
+  }
+  .ch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .ch-hours { font-size: 11.5px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+  .ls-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ls-tag { font-size: 11px; color: var(--muted-foreground); flex: 0 0 auto; }
+  .ls-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+  .ls-dot.draft  { background: var(--muted-foreground); opacity: .5; }
+  .ls-dot.ready  { background: var(--primary); }
+  .ls-dot.taught { background: var(--success); }
+
+  .outline-empty { font-size: 12.5px; line-height: 1.8; color: var(--muted-foreground); }
+  .outline-empty p { margin: 0 0 9px; }
+
+  /* ---------- 拖动调序 ----------
+     行本身即可拖动（draggable），落点用 box-shadow 画指示线：
+       · 上/下半边 → 插到该行前 / 后（一行细线）
+       · 拖课时落在「章行」上 → 移入该章（整行描边） */
+  .tree-row .ch-row, .tree-row .ls-row { cursor: grab; }
+  .tree-row .ch-row:active, .tree-row .ls-row:active { cursor: grabbing; }
+  .ch-row.dragging, .ls-row.dragging { opacity: .4; }
+  .ch-row.drop-before, .ls-row.drop-before { box-shadow: inset 0 2px 0 var(--primary); }
+  .ch-row.drop-after,  .ls-row.drop-after  { box-shadow: inset 0 -2px 0 var(--primary); }
+  .ch-row.drop-into {
+    box-shadow: inset 0 0 0 2px var(--primary);
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+  }
+
+  /* ---------- 大纲树每行的「⋯」（编辑 / 删除）----------
+     🔴 与侧栏课程项同一套做法：**绝对定位、不参与行内布局**。
+        .ch-row / .ls-row 都是 width:100%，若「⋯」当 flex 兄弟节点，
+        会把行的胶囊宽度挤短、与其它行对不齐。 */
+  .tree-row { position: relative; }
+  .tree-row > .ch-row, .tree-row > .ls-row { padding-right: 34px; }
+  .tree-more {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    z-index: 1;
+    width: 22px; height: 22px; padding: 0;
+    display: grid; place-items: center;
+    border: 1px solid transparent; border-radius: 6px;
+    background: transparent; color: var(--muted-foreground);
+    font: inherit; font-size: 14px; line-height: 1; cursor: pointer;
+    opacity: 0;
+    pointer-events: none;          /* 隐形时别接点击（否则右端是隐形陷阱） */
+    transition: opacity .14s, background .14s, color .14s, border-color .14s;
+  }
+  .tree-row:hover .tree-more,
+  .tree-more:focus-visible,
+  .tree-more[aria-expanded="true"] { opacity: 1; pointer-events: auto; }
+  .tree-more:hover { background: var(--secondary); color: var(--foreground); }
+  .tree-more[aria-expanded="true"] {
+    color: var(--primary);
+    border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  }
+  /* 卡片头的「⋯」复用同一套外观，但它在文档流里、且**常驻可见**
+     （放在后面 → 同权重下覆盖 .tree-more 的 absolute / opacity:0） */
+  .outline-more {
+    position: static; right: auto; top: auto; transform: none;
+    opacity: 1; pointer-events: auto;
+    flex: 0 0 auto;
+  }
+  .outline-more:hover { background: var(--secondary); color: var(--foreground); }
+
+  /* ---------- 右：详情 ---------- */
+  .plan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+  .plan-head h2 { margin: 0 0 4px; font-size: 18px; font-weight: 500; line-height: 1.4; }
+  .plan-sub { font-size: 12.5px; color: var(--muted-foreground); }
+  .plan-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
+  .tab {
+    padding: 8px 12px; font-size: 13px; font-family: inherit; cursor: pointer;
+    background: transparent; border: 0; border-bottom: 2px solid transparent;
+    color: var(--muted-foreground); margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--foreground); }
+  .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+  .tab .n { font-size: 11px; opacity: .75; }
+
+  .plan-sec { margin-bottom: 20px; }
+  .plan-sec:last-child { margin-bottom: 0; }
+  .plan-sec h4 {
+    margin: 0 0 8px; font-size: 13px; font-weight: 500;
+    color: var(--primary); display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .plan-sec h4::before {
+    content: ""; width: 3px; height: 13px; border-radius: 2px;
+    background: var(--primary); flex: 0 0 auto;
+  }
+  .plan-sec p { margin: 0; font-size: 13.5px; line-height: 1.8; }
+  .plan-sec ul { margin: 0; padding-left: 20px; }
+  .plan-sec li { font-size: 13.5px; line-height: 1.8; margin-bottom: 4px; }
+  .plan-sec .sec-note { font-size: 11.5px; font-weight: 400; color: var(--muted-foreground); }
+  .sk { font-weight: 500; }
+  .sm { font-size: 11.5px; color: var(--muted-foreground); margin-left: 5px; font-variant-numeric: tabular-nums; }
+  .pre { white-space: pre-line; }
+  .muted { color: var(--muted-foreground); font-size: 13px; }
+  .plan-note { margin: 16px 0 0; font-size: 12px; color: var(--muted-foreground); line-height: 1.7; }
+  .hint-empty { padding: 30px 4px; text-align: center; font-size: 13px; color: var(--muted-foreground); }
+
+  .ai-box {
+    margin-top: 18px; padding: 13px 15px; border-radius: 10px;
+    background: color-mix(in srgb, var(--primary) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
+    font-size: 12.5px; line-height: 1.75; color: var(--muted-foreground);
+  }
+  .ai-box b { color: var(--primary); font-weight: 500; }
+
+  /* ---------- 版本时间线 ---------- */
+  .ver-hint { margin: 0 0 14px; font-size: 12.5px; color: var(--muted-foreground); line-height: 1.7; }
+  .ver-item { display: flex; gap: 11px; }
+  .ver-rail { display: flex; flex-direction: column; align-items: center; width: 11px; flex: 0 0 auto; padding-top: 6px; }
+  .ver-dot { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--border); background: var(--card); flex: 0 0 auto; }
+  .ver-dot.head { border-color: var(--primary); background: var(--primary); }
+  .ver-line { flex: 1; width: 1px; background: var(--border); margin: 4px 0; }
+  .ver-item:last-child .ver-line { display: none; }
+  .ver-body { flex: 1; min-width: 0; padding-bottom: 16px; }
+  .ver-msg { font-size: 13.5px; line-height: 1.6; }
+  .ver-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 5px; font-size: 11.5px; color: var(--muted-foreground); }
+  .ver-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  /* ---------- 结构化 diff ---------- */
+  .diff-panel {
+    margin-top: 6px; padding: 14px 16px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--secondary);
+  }
+  .diff-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .diff-head h5 { margin: 0; font-size: 13px; font-weight: 500; }
+  .diff-fld { margin-bottom: 14px; }
+  .diff-fld:last-of-type { margin-bottom: 0; }
+  .diff-fld h5 { margin: 0 0 6px; font-size: 12px; font-weight: 500; color: var(--muted-foreground); }
+  .diff-line {
+    font-size: 13px; line-height: 1.7; padding: 3px 9px; border-radius: 5px;
+    margin-bottom: 2px; white-space: pre-line; word-break: break-word;
+  }
+  .diff-line.same { color: var(--muted-foreground); opacity: .75; }
+  .diff-line.add  { background: color-mix(in srgb, var(--success) 15%, transparent); }
+  .diff-line.del  { background: color-mix(in srgb, var(--destructive) 13%, transparent); }
+  .diff-line.chg  { background: color-mix(in srgb, var(--warning) 16%, transparent); }
+  .diff-note { margin-left: 8px; font-size: 12px; color: var(--muted-foreground); }
+  .diff-mark { display: inline-block; width: 14px; font-family: ui-monospace, monospace; font-weight: 500; }
+
+  /* ---------- 课后反思 ---------- */
+  .rf-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .rf-head .ver-hint { margin: 0; max-width: 60ch; }
+  .rf-item {
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 10px; background: var(--card);
+  }
+  .rf-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .rf-date { font-size: 12.5px; font-weight: 500; color: var(--primary); }
+  .rf-from { font-size: 11.5px; color: var(--muted-foreground); }
+  .rf-p { margin: 0 0 6px; font-size: 13px; line-height: 1.75; }
+  .rf-p:last-child { margin-bottom: 0; }
+  .rf-k { color: var(--muted-foreground); }
+
+  /* ---------- 弹窗内：课堂流程行 ---------- */
+  .step-row { display: grid; grid-template-columns: 96px 74px minmax(0, 1fr) 30px; gap: 8px; margin-bottom: 8px; }
+  .step-row .input { padding: 7px 9px; font-size: 13px; }
+  .step-del {
+    border: 1px solid transparent; border-radius: 8px; background: transparent;
+    color: var(--muted-foreground); cursor: pointer; font-size: 13px; font-family: inherit;
+  }
+  .step-del:hover { color: var(--destructive); background: var(--secondary); }
+
+  /* ---------- 轻提示 ----------
+     `#flash` 的样式已抽到 assets/design.css（全站共用一份）——
+     本页只用脚本里的 flash(msg, tone) 建节点，不要在这里再定义一遍。 */
+
+  @media (max-width: 860px) {
+    .lesson-grid { grid-template-columns: minmax(0, 1fr); }
+    .step-row { grid-template-columns: 84px 64px minmax(0, 1fr) 30px; }
+  }
+</style>
+</head>
+<body>
+
+
+<div class="page-wrap">
+    <div class="page" style="padding-top:0">
+      <div class="page-head">
+        <div class="crumb">我的工作 · 教师端</div>
+        <h1>教案</h1>
+        <p>一门课一份教案大纲，大纲下按课时沉淀教案；每次修改都留下版本，越用越准</p>
+      </div>
+
+      <!-- 课程切换 -->
+      <div class="card card-raised lesson-bar">
+        <label class="lb-label" for="courseSel">课程</label>
+        <select class="select lb-sel" id="courseSel" aria-label="选择课程"></select>
+        <span class="lb-meta" id="courseMeta"></span>
+        <span class="lb-spacer"></span>
+        <button class="btn btn-sm" type="button" id="addLessonBtn">＋ 新建课时教案</button>
+      </div>
+
+      <div class="lesson-grid">
+        <!-- 左：教案大纲 -->
+        <section class="card card-raised" style="padding:16px" aria-label="教案大纲">
+          <div class="outline-head">
+            <h3>教案大纲</h3>
+            <button class="btn btn-sm btn-ghost" type="button" id="sylVerBtn" hidden>版本</button>
+            <button class="btn btn-sm btn-ghost" type="button" id="addChapterBtn" hidden>＋ 章节</button>
+            <button class="tree-more outline-more" type="button" id="sylMoreBtn" hidden
+                    aria-label="教案大纲的操作" aria-haspopup="menu" aria-expanded="false">
+              <span aria-hidden="true">⋯</span>
+            </button>
+          </div>
+          <div class="outline-tree" id="outlineTree"></div>
+          <div class="outline-empty" id="outlineEmpty" hidden></div>
+        </section>
+
+        <!-- 右：教案详情 -->
+        <section class="card card-raised" id="planPanel" style="padding:22px" aria-label="教案详情"></section>
+      </div>
+    </div>
+  </div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+/* ============================================================
+   教案页 —— 大纲 / 课时教案 / 版本链
+   ------------------------------------------------------------
+   数据与规则全部来自 nav.js（唯一来源），本页只负责渲染与交互：
+     · 课程 → 教案大纲（章）→ 课时教案 → 版本链
+     · 编辑产生新版本；回退也是新增一版（不覆盖历史）
+   设计稿见 docs/PLAN-lesson.md
+   ============================================================ */
+
+/** HTML 转义：属性与文本通用（不像 escapeHtml 那样把换行变 <br>） */
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** 课程名（找不到就给个兜底，不显示 undefined） */
+function courseName(id) {
+  const c = (COURSES || []).find((x) => x.id === id);
+  return c ? c.name : "未知课程";
+}
+
+/* shortTitle 在 nav.js —— 大纲对比（diffChapters）也要用它，同一件事只有一处实现 */
+
+/** 课堂流程总时长摘要：导入 8′ · 探究 28′ …（共 45′） */
+function stepsSummary(steps) {
+  if (!steps || !steps.length) return "";
+  const total = steps.reduce((n, s) => n + (Number(s.min) > 0 ? Number(s.min) : 0), 0);
+  const parts = steps.filter((s) => s.t).map((s) => s.t + (Number(s.min) > 0 ? " " + s.min + "′" : ""));
+  return parts.join(" · ") + (total ? "（共 " + total + "′）" : "");
+}
+
+/* ---------------- 状态 ---------------- */
+
+const PICK = LS.get(LESSON_PICK_KEY, {}) || {};
+
+/** URL 查询串（不引 URLSearchParams，file:// 下也稳） */
+const QUERY = (() => {
+  const o = {};
+  String(location.search || "").replace(/^\?/, "").split("&").forEach((kv) => {
+    if (!kv) return;
+    const i = kv.indexOf("=");
+    const k = i < 0 ? kv : kv.slice(0, i);
+    const v = i < 0 ? "" : kv.slice(i + 1);
+    try { o[decodeURIComponent(k)] = decodeURIComponent(v); } catch (_) { o[k] = v; }
+  });
+  return o;
+})();
+
+const state = {
+  courseId: "",
+  chapterId: "",
+  lessonId: "",
+  tab: "plan",
+  diff: null,          // 课时版本的对比：{ from, to }（下标）
+  outlineHistory: false,   // 右栏是否切到「大纲版本历史」视图
+  sylDiff: null,           // 大纲版本的对比：{ from, to }（下标）
+};
+
+/* ---------------- 轻提示 ---------------- */
+let flashTimer = 0;
+function flash(msg, tone) {
+  let box = document.getElementById("flash");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "flash";
+    document.body.appendChild(box);
+  }
+  box.className = tone || "";
+  box.textContent = msg;
+  box.hidden = false;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { box.hidden = true; }, 2800);
+}
+
+/* ---------------- 选择（课程 / 章 / 课时） ---------------- */
+
+function pickCourseId() {
+  if (QUERY.course && COURSES.some((c) => c.id === QUERY.course)) return QUERY.course;
+  if (PICK.courseId && COURSES.some((c) => c.id === PICK.courseId)) return PICK.courseId;
+  const withSyl = COURSES.find((c) => syllabusOf(c.id));
+  return ((withSyl || COURSES[0] || {}).id) || "";
+}
+
+/** 该课程第一个「有课时教案的章 → 第一份教案」；都没有就返回第一章 */
+function firstSelection(courseId) {
+  const syl = syllabusOf(courseId);
+  if (!syl) return { chapterId: "", lessonId: "" };
+  for (const ch of syl.chapters) {
+    const ls = lessonsOfChapter(ch);
+    if (ls.length) return { chapterId: ch.id, lessonId: ls[0].id };
+  }
+  return { chapterId: syl.chapters.length ? syl.chapters[0].id : "", lessonId: "" };
+}
+
+function initSelection() {
+  state.courseId = pickCourseId();
+  const cid = state.courseId;
+
+  // 归属校验：只有确实属于当前课程的深链才认
+  const own = (id) => (id && LESSONS[id] && LESSONS[id].courseId === cid) ? id : "";
+  const chosen = own(QUERY.lesson) || own(PICK.lessonId);
+
+  if (chosen) {
+    state.lessonId = chosen;
+    state.chapterId = LESSONS[chosen].chapterId;
+  } else {
+    const f = firstSelection(cid);
+    state.chapterId = f.chapterId;
+    state.lessonId = f.lessonId;
+  }
+}
+
+function rememberPick() {
+  LS.set(LESSON_PICK_KEY, { courseId: state.courseId, lessonId: state.lessonId });
+}
+
+/** 把当前选择写回 URL（不触发跳转；壳的 hash 不受影响，仅用于分享/刷新） */
+function syncUrl() {
+  try {
+    const q = "?course=" + encodeURIComponent(state.courseId)
+      + (state.lessonId ? "&lesson=" + encodeURIComponent(state.lessonId) : "");
+    history.replaceState(null, "", location.pathname + q);
+  } catch (_) { /* file:// 下可能被拒 —— 不影响功能 */ }
+}
+
+/* ---------------- 渲染：课程切换条 ---------------- */
+
+function renderCourseSel() {
+  const sel = $("#courseSel");
+  if (!sel) return;
+  sel.innerHTML = (COURSES || []).map((c) => {
+    const hasSyl = !!syllabusOf(c.id);
+    return `<option value="${esc(c.id)}"${c.id === state.courseId ? " selected" : ""}>`
+      + `${esc(c.name)}${hasSyl ? "" : "（未建大纲）"}</option>`;
+  }).join("");
+
+  const syl = syllabusOf(state.courseId);
+  const st = syllabusStats(state.courseId);
+  const meta = $("#courseMeta");
+  if (meta) {
+    meta.textContent = syl
+      ? `${st.chapters} 章 · ${st.lessons} 份课时教案 · 计划 ${st.hours} 课时`
+      : "还没有教案大纲";
+  }
+  const btn = $("#addChapterBtn");
+  if (btn) btn.hidden = !syl;
+  const more = $("#sylMoreBtn");
+  if (more) more.hidden = !syl;        // 没有大纲时没什么可删的
+  const ver = $("#sylVerBtn");
+  if (ver) {
+    ver.hidden = !syl;
+    if (syl) ver.textContent = "版本 " + syl.commits.length;
+  }
+}
+
+/* ---------------- 渲染：教案大纲（章 → 课时） ---------------- */
+
+function renderOutline() {
+  const tree = $("#outlineTree");
+  const empty = $("#outlineEmpty");
+  if (!tree || !empty) return;
+
+  const syl = syllabusOf(state.courseId);
+
+  if (!syl) {
+    tree.innerHTML = "";
+    empty.hidden = false;
+    empty.innerHTML = `
+      <p><b>「${esc(courseName(state.courseId))}」还没有教案大纲。</b></p>
+      <p>教案按课程组织，一门课一份大纲。新建后会得到一个空骨架，章节由你自己定 ——
+         这里不会替你编造章节内容。</p>
+      <button class="btn btn-sm" type="button" id="createSylBtn">按课程新建大纲</button>`;
+    return;
+  }
+
+  empty.hidden = true;
+  tree.innerHTML = syl.chapters.map((ch) => {
+    const ls = lessonsOfChapter(ch);
+    const hoursTxt = ch.hours ? ch.hours + " 课时" : (ls.length ? ls.length + " 份教案" : "");
+    return `
+    <div class="ch-block">
+      <div class="tree-row">
+        <button class="ch-row${ch.id === state.chapterId && !state.lessonId ? " active" : ""}"
+                type="button" data-ch="${esc(ch.id)}" data-drag="ch" draggable="true"
+                title="可拖动调整章节顺序"
+                aria-current="${ch.id === state.chapterId && !state.lessonId}">
+          <span class="ch-name">${esc(ch.title)}</span>
+          <span class="ch-hours">${esc(hoursTxt)}</span>
+        </button>
+        <button class="tree-more" type="button" data-more="ch" data-target="${esc(ch.id)}"
+                aria-label="${esc(ch.title)} 的操作" aria-haspopup="menu" aria-expanded="false">
+          <span aria-hidden="true">⋯</span>
+        </button>
+      </div>
+      ${ls.map((l) => `
+        <div class="tree-row">
+          <button class="ls-row${l.id === state.lessonId ? " active" : ""}"
+                  type="button" data-ls="${esc(l.id)}" data-drag="ls" draggable="true"
+                  title="${esc(l.title)}　（可拖到别的位置或别的章）"
+                  aria-current="${l.id === state.lessonId}">
+            <span class="ls-dot ${esc(l.status)}" aria-hidden="true"></span>
+            <span class="ls-name">${esc(shortTitle(l.title))}</span>
+            <span class="ls-tag">${esc(LESSON_STATUS[l.status].label)}</span>
+          </button>
+          <button class="tree-more" type="button" data-more="ls" data-target="${esc(l.id)}"
+                  aria-label="${esc(shortTitle(l.title))} 的操作" aria-haspopup="menu" aria-expanded="false">
+            <span aria-hidden="true">⋯</span>
+          </button>
+        </div>`).join("")}
+    </div>`;
+  }).join("");
+}
+
+/* ---------------- 渲染：右栏 ---------------- */
+
+function renderPlan() {
+  const panel = $("#planPanel");
+  if (!panel) return;
+
+  if (!syllabusOf(state.courseId)) {
+    panel.innerHTML = `<div class="hint-empty">
+      这门课还没有教案大纲。先在左侧点「按课程新建大纲」。</div>`;
+    return;
+  }
+  if (state.outlineHistory) { renderOutlineHistory(panel); return; }   // 大纲版本历史优先级最高
+  if (state.lessonId) { renderLessonPanel(panel); return; }
+  if (state.chapterId) { renderChapterPanel(panel); return; }
+  panel.innerHTML = `<div class="hint-empty">从左侧选一章，或选一份课时教案。</div>`;
+}
+
+function renderChapterPanel(panel) {
+  const ch = chapterOf(state.courseId, state.chapterId);
+  if (!ch) { panel.innerHTML = ""; return; }
+  const ls = lessonsOfChapter(ch);
+  const mismatch = ch.hours > 0 && ls.length !== ch.hours;
+
+  panel.innerHTML = `
+    <div class="plan-head">
+      <div style="min-width:0">
+        <h2>${esc(ch.title)}</h2>
+        <div class="plan-sub">教案大纲 · 计划 ${ch.hours || "未定"} 课时 · 已有 ${ls.length} 份课时教案</div>
+      </div>
+      <div class="plan-actions">
+        <button class="btn btn-sm" type="button" id="chEditBtn">编辑本章</button>
+        <button class="btn btn-sm btn-ghost" type="button" id="chDelBtn">删除本章</button>
+        <button class="btn btn-sm" type="button" id="chNewLessonBtn">＋ 新建课时教案</button>
+      </div>
+    </div>
+
+    <div class="plan-sec">
+      <h4>本章核心知识点</h4>
+      <p class="pre">${ch.points ? esc(ch.points) : '<span class="muted">（未填写）</span>'}</p>
+    </div>
+
+    <div class="plan-sec">
+      <h4>本章课时教案 <span class="sec-note">${ls.length} 份</span></h4>
+      ${ls.length
+        ? `<ul>${ls.map((l) => `<li><b class="sk">${esc(l.title)}</b>　<span class="muted">${esc(LESSON_STATUS[l.status].label)}</span></li>`).join("")}</ul>`
+        : '<p class="muted">本章还没有课时教案。</p>'}
+    </div>
+
+    <div class="ai-box">
+      <b>AI 可以按本章大纲起草课时教案</b> —— 把本章的核心知识点与计划课时数交给 AI 助手，
+      生成一份可直接编辑的初稿，再由你改。
+      <div style="margin-top:10px">
+        <button class="btn btn-sm" type="button" id="aiGenBtn">让 AI 起草本章课时教案 →</button>
+      </div>
+    </div>
+
+    ${mismatch ? `<p class="plan-note">提示：本章计划 ${ch.hours} 课时，实际有 ${ls.length} 份教案 —— 只是不同步，不会自动增删。</p>` : ""}`;
+}
+
+function renderLessonPanel(panel) {
+  const L = lessonById(state.lessonId);
+  if (!L) { panel.innerHTML = `<div class="hint-empty">这份教案已不存在。</div>`; return; }
+
+  const cur = L.commits[L.head];
+  const tabs = [
+    { k: "plan",    label: "教案" },
+    { k: "version", label: "版本", n: L.commits.length },
+    { k: "reflect", label: "课后反思", n: lessonReflects(L).length },
+  ];
+
+  panel.innerHTML = `
+    <div class="plan-head">
+      <div style="min-width:0">
+        <h2>${esc(L.title)}</h2>
+        <div class="plan-sub">
+          ${L.minutes} 分钟 · ${esc(courseName(L.courseId))} · 当前 <span class="mono">${esc(cur.id)}</span>
+          · ${esc(agoText(cur.at))}
+          ${L.taughtAt ? " · 已上：" + esc(L.taughtAt) : ""}
+        </div>
+      </div>
+      <div class="plan-actions">
+        <select class="select" id="statusSel" style="width:auto;padding:5px 9px;font-size:12.5px" aria-label="课时状态">
+          ${Object.keys(LESSON_STATUS).map((k) =>
+            `<option value="${k}"${k === L.status ? " selected" : ""}>${esc(LESSON_STATUS[k].label)}</option>`).join("")}
+        </select>
+        <button class="btn btn-sm" type="button" id="editBtn">编辑教案</button>
+      </div>
+    </div>
+
+    <div class="tabs" role="tablist">
+      ${tabs.map((t) => `<button class="tab${state.tab === t.k ? " active" : ""}" type="button"
+        role="tab" aria-selected="${state.tab === t.k}" data-tab="${t.k}">
+        ${esc(t.label)}${t.n ? ` <span class="n">${t.n}</span>` : ""}</button>`).join("")}
+    </div>
+
+    <div id="tabBody"></div>`;
+
+  renderTabBody();      // ⚠️ 必须紧跟其后 —— 忘了它标签区就是一片空白
+}
+
+/** 只重画标签内容（切标签、提交版本后不必整页重排） */
+function renderTabBody() {
+  const box = $("#tabBody");
+  if (!box) return;
+  const L = lessonById(state.lessonId);
+  if (!L) return;
+  if (state.tab === "version") renderVersionTab(box, L);
+  else if (state.tab === "reflect") renderReflectTab(box, L);
+  else renderPlanTab(box, L);
+}
+
+function renderPlanTab(box, L) {
+  const s = lessonSnap(L);
+  const body = SNAP_FIELDS.map((f) => {
+    const v = s[f.key];
+    if (f.kind === "list") {
+      return `<div class="plan-sec">
+        <h4>${esc(f.label)}</h4>
+        ${v.length ? `<ul>${v.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`
+                   : '<p class="muted">（未填写）</p>'}
+      </div>`;
+    }
+    if (f.kind === "steps") {
+      return `<div class="plan-sec">
+        <h4>${esc(f.label)} <span class="sec-note">${esc(stepsSummary(v))}</span></h4>
+        ${v.length ? `<ul>${v.map((x) => `<li><b class="sk">${esc(x.t)}</b>${
+          x.min ? `<span class="sm">${x.min}′</span>` : ""}　${esc(x.d)}</li>`).join("")}</ul>`
+                   : '<p class="muted">（未填写）</p>'}
+      </div>`;
+    }
+    return `<div class="plan-sec">
+      <h4>${esc(f.label)}</h4>
+      <p class="pre">${v ? esc(v) : '<span class="muted">（未填写）</span>'}</p>
+    </div>`;
+  }).join("");
+
+  box.innerHTML = body + `
+    <div class="ai-box">
+      <b>这份教案可以被 AI 直接使用</b> —— 出题时会参考「教学重点 / 难点」生成更有针对性的题目，
+      课堂讲评也能据此生成提纲。
+      <div style="margin-top:10px">
+        <button class="btn btn-sm" type="button" id="aiExamBtn">据此出题与组卷 →</button>
+      </div>
+    </div>`;
+}
+
+function renderVersionTab(box, L) {
+  const hist = lessonHistory(L);
+  box.innerHTML = `
+    <p class="ver-hint">每次修改都会追加一版，<b>历史只增不减</b> —— 「回到某版」也是新增一版，
+      不会覆盖掉中间的任何一次修改。</p>
+    <div class="ver-list">
+      ${hist.map(({ commit: c, index: i }) => `
+        <div class="ver-item">
+          <div class="ver-rail">
+            <span class="ver-dot${i === L.head ? " head" : ""}"></span>
+            <span class="ver-line"></span>
+          </div>
+          <div class="ver-body">
+            <div class="ver-msg">${esc(c.msg || "（无说明）")}</div>
+            <div class="ver-meta">
+              <span class="mono">${esc(c.id)}</span>
+              <span class="${toneClass(commitKind(c.kind).tone)}">${esc(commitKind(c.kind).label)}</span>
+              <span>${esc(c.by)}</span>
+              <span>${esc(agoText(c.at))}</span>
+              ${i === L.head ? '<span class="tag tag-success">当前版本</span>' : ""}
+            </div>
+            <div class="ver-acts">
+              ${i > 0 ? `<button class="btn btn-sm btn-ghost" type="button" data-diff="${i}">与上一版对比</button>` : ""}
+              ${i !== L.head ? `<button class="btn btn-sm btn-ghost" type="button" data-revert="${i}">回到这版</button>` : ""}
+            </div>
+          </div>
+        </div>`).join("")}
+    </div>
+    <div id="diffBox"></div>`;
+  renderDiff();
+}
+
+function diffLine(p) {
+  if (p.op === "~") {
+    return `<div class="diff-line chg"><span class="diff-mark">−</span>${esc(p.text)}</div>
+            <div class="diff-line chg"><span class="diff-mark">+</span>${esc(p.to)}</div>`;
+  }
+  const cls = p.op === "+" ? "add" : (p.op === "-" ? "del" : "same");
+  const mark = p.op === "=" ? "\u00a0" : p.op;
+  return `<div class="diff-line ${cls}"><span class="diff-mark">${esc(mark)}</span>${esc(p.text)}</div>`;
+}
+
+function renderDiff() {
+  const box = $("#diffBox");
+  if (!box) return;
+  const L = lessonById(state.lessonId);
+  if (!L || !state.diff) { box.innerHTML = ""; return; }
+
+  const A = L.commits[state.diff.from];
+  const B = L.commits[state.diff.to];
+  if (!A || !B) { box.innerHTML = ""; return; }
+
+  const d = diffSnap(A.snap, B.snap);
+  const changed = d.fields.filter((f) => !f.same);
+
+  box.innerHTML = `
+    <div class="diff-panel">
+      <div class="diff-head">
+        <h5>${esc(A.id)} → ${esc(B.id)}　${changed.length ? changed.length + " 个字段有变化" : "内容完全相同"}</h5>
+        <button class="btn btn-sm btn-ghost" type="button" id="diffClose">收起</button>
+      </div>
+      ${changed.length
+        ? changed.map((f) => `
+            <div class="diff-fld">
+              <h5>${esc(f.label)}</h5>
+              ${f.parts.map(diffLine).join("")}
+            </div>`).join("")
+        : '<p class="muted">这两版的内容完全一致（可能只是记录了课后反思）。</p>'}
+      <div style="margin-top:12px">
+        <button class="btn btn-sm btn-ghost" type="button" id="aiDiffBtn">让 AI 解读这次改动 →</button>
+      </div>
+    </div>`;
+}
+
+/* ---------------- 渲染：大纲版本历史（右栏，第 29 轮）----------------
+   与课时版本视图同一套视觉语言，但记的是**结构**：
+   章的增删改序、每章的课时数与知识点、章下挂着的课时。
+   ============================================================ */
+
+function renderOutlineHistory(panel) {
+  const syl = syllabusOf(state.courseId);
+  if (!syl) { panel.innerHTML = '<div class="hint-empty">这门课还没有教案大纲。</div>'; return; }
+
+  const hist = syllabusHistory(syl);
+  const st = syllabusStats(state.courseId);
+  const cur = syl.commits[syl.head];
+
+  panel.innerHTML = `
+    <div class="plan-head">
+      <div style="min-width:0">
+        <h2>教案大纲 · 版本历史</h2>
+        <div class="plan-sub">
+          ${esc(courseName(state.courseId))} · ${hist.length} 个版本 ·
+          当前 <span class="mono">${esc(cur.id)}</span>
+          （${st.chapters} 章 · ${st.lessons} 份课时教案）
+        </div>
+      </div>
+      <div class="plan-actions">
+        <button class="btn btn-sm" type="button" id="sylHistBackBtn">返回教案</button>
+      </div>
+    </div>
+
+    <p class="ver-hint">
+      大纲的每次结构改动都会追加一版，<b>历史只增不减</b> —— 「回到某版」也是新增一版，
+      不会覆盖中间的任何一次调整。课时教案的内容有它自己的版本链，这里只管结构。
+    </p>
+
+    <div class="ver-list">
+      ${hist.map(({ commit: c, index: i }) => `
+        <div class="ver-item">
+          <div class="ver-rail">
+            <span class="ver-dot${i === syl.head ? " head" : ""}"></span>
+            <span class="ver-line"></span>
+          </div>
+          <div class="ver-body">
+            <div class="ver-msg">${esc(c.msg || "（无说明）")}</div>
+            <div class="ver-meta">
+              <span class="mono">${esc(c.id)}</span>
+              <span class="${toneClass(commitKind(c.kind).tone)}">${esc(commitKind(c.kind).label)}</span>
+              <span>${esc(c.by)}</span>
+              <span>${esc(agoText(c.at))}</span>
+              <span>${c.snap.chapters.length} 章</span>
+              ${i === syl.head ? '<span class="tag tag-success">当前结构</span>' : ""}
+            </div>
+            <div class="ver-acts">
+              ${i > 0 ? `<button class="btn btn-sm btn-ghost" type="button" data-sdiff="${i}">与上一版对比</button>` : ""}
+              ${i !== syl.head ? `<button class="btn btn-sm btn-ghost" type="button" data-srevert="${i}">回到这版</button>` : ""}
+            </div>
+          </div>
+        </div>`).join("")}
+    </div>
+    <div id="sylDiffBox"></div>`;
+
+  renderSylDiff();
+}
+
+function sylDiffLine(e) {
+  const mark = e.op === "add" ? "+" : (e.op === "del" ? "−" : (e.op === "chg" ? "~" : "\u00a0"));
+  const cls = e.op === "add" ? "add" : (e.op === "del" ? "del" : (e.op === "chg" ? "chg" : "same"));
+  return `<div class="diff-line ${cls}"><span class="diff-mark">${esc(mark)}</span>`
+    + `${esc(e.text)}${e.note ? `<span class="diff-note">${esc(e.note)}</span>` : ""}</div>`;
+}
+
+function renderSylDiff() {
+  const box = $("#sylDiffBox");
+  if (!box) return;
+  const syl = syllabusOf(state.courseId);
+  if (!syl || !state.sylDiff) { box.innerHTML = ""; return; }
+  const A = syl.commits[state.sylDiff.from];
+  const B = syl.commits[state.sylDiff.to];
+  if (!A || !B) { box.innerHTML = ""; return; }
+
+  const list = diffChapters(A.snap.chapters, B.snap.chapters);
+  const changed = list.filter((e) => e.op !== "=");
+
+  box.innerHTML = `
+    <div class="diff-panel">
+      <div class="diff-head">
+        <h5>${esc(A.id)} → ${esc(B.id)}　${changed.length ? changed.length + " 处结构变化" : "结构完全相同"}</h5>
+        <button class="btn btn-sm btn-ghost" type="button" id="sylDiffClose">收起</button>
+      </div>
+      ${changed.length
+        ? changed.map(sylDiffLine).join("")
+        : '<p class="muted">这两版的结构完全一致（可能只是改了章的标题或知识点）。</p>'}
+      <div style="margin-top:12px">
+        <button class="btn btn-sm btn-ghost" type="button" id="aiSylDiffBtn">让 AI 解读这次大纲调整 →</button>
+      </div>
+    </div>`;
+}
+
+/** 回退大纲到某一版（追加版本，不删历史） */
+function revertOutline(index) {
+  const syl = syllabusOf(state.courseId);
+  if (!syl) return;
+  const src = syl.commits[index];
+  if (!src) return;
+  const warn = "把教案大纲回到 " + src.id + " 吗？\n\n"
+    + "「" + (src.msg || "无说明") + "」\n\n"
+    + "回退会新增一版（历史不会被删掉）。注意：之后删掉的课时教案不会因此恢复。";
+  if (!window.confirm(warn)) return;
+
+  const r = revertSyllabus(state.courseId, index);
+  if (!r.ok) { flash(r.error, "bad"); return; }
+  state.sylDiff = null;
+  renderAll();
+  flash(r.missingLessons
+    ? "已回到 " + src.id + "；其中 " + r.missingLessons + " 份课时教案此前已删除，无法恢复"
+    : "已回到 " + src.id, r.missingLessons ? "bad" : "ok");
+}
+
+function handoffOutlineDiff() {
+  const syl = syllabusOf(state.courseId);
+  if (!syl || !state.sylDiff) return;
+  const A = syl.commits[state.sylDiff.from];
+  const B = syl.commits[state.sylDiff.to];
+  if (!A || !B) return;
+  const list = diffChapters(A.snap.chapters, B.snap.chapters).filter((e) => e.op !== "=");
+  handoffAgent("explain-outline-diff", [
+    "教案大纲：" + courseName(state.courseId),
+    "对比：" + A.id + " → " + B.id,
+    "提交说明：" + A.id + "「" + A.msg + "」、" + B.id + "「" + B.msg + "」",
+    "",
+    list.map((e) => (e.op === "add" ? "[新增] " : e.op === "del" ? "[删除] " : "[改动] ")
+      + e.text + (e.note ? "（" + e.note + "）" : "")).join("\n"),
+  ].join("\n"), { courseId: state.courseId, from: A.id, to: B.id, changed: list.length });
+}
+
+function renderReflectTab(box, L) {
+  const rs = lessonReflects(L);
+  box.innerHTML = `
+    <div class="rf-head">
+      <p class="ver-hint">课后反思是教案改进的输入：记下「课堂上发生了什么、下次怎么改」，
+        AI 会据此给出具体建议。</p>
+      <button class="btn btn-sm" type="button" id="addReflectBtn">＋ 记录本次反思</button>
+    </div>
+    ${rs.length ? rs.map(({ commit: c, index: i }) => `
+      <div class="rf-item">
+        <div class="rf-top">
+          <span class="rf-date">${esc(c.reflect.date || agoText(c.reflect.at || c.at))}</span>
+          <span class="tag tag-primary">课后改进</span>
+          <span class="rf-from">来自 <span class="mono">${esc(c.id)}</span></span>
+        </div>
+        <p class="rf-p"><span class="rf-k">课堂观察：</span>${esc(c.reflect.saw || "（未填）")}</p>
+        <p class="rf-p"><span class="rf-k">下次改进：</span>${esc(c.reflect.todo || "（未填）")}</p>
+        ${c.msg ? `<p class="rf-p"><span class="rf-k">提交说明：</span>${esc(c.msg)}</p>` : ""}
+      </div>`).join("")
+      : '<p class="muted">还没有课后反思。上完这节课后回来记一笔。</p>'}
+
+    <div class="ai-box">
+      <b>让 AI 根据反思给改进建议</b> —— 把「最近一次反思 + 当前教案」交给 AI 助手，
+      它会指出具体该改哪里；采纳后作为新版本提交，原版本仍留在版本历史里。
+      <div style="margin-top:10px">
+        <button class="btn btn-sm" type="button" id="aiImproveBtn"${rs.length ? "" : " disabled"}>
+          让 AI 提改进建议 →</button>
+        ${rs.length ? "" : '<span class="muted" style="margin-left:8px">（先记一次课后反思）</span>'}
+      </div>
+    </div>`;
+}
+
+function renderAll() {
+  renderCourseSel();
+  renderOutline();
+  renderPlan();
+}
+
+/* ============================================================
+   弹窗
+   ------------------------------------------------------------
+   统一走 core.js 的 pageModalHost() —— 内容页**不能**用壳的 #modalHost
+   （那个节点在壳的文档里，iframe 内 getElementById 取不到）。
+   ============================================================ */
+
+function modalShell(title, bodyHtml, footHtml) {
+  return `
+    <div class="modal-scrim" data-close="1"></div>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-head">
+        <h3 id="modalTitle">${esc(title)}</h3>
+        <button class="modal-x" type="button" data-close="1" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body">${bodyHtml}</div>
+      <div class="modal-foot">${footHtml || `
+        <button class="btn" type="button" data-close="1">取消</button>
+        <button class="btn btn-primary" type="button" id="formSave">保存</button>`}</div>
+    </div>`;
+}
+
+function openModal(html) {
+  const host = pageModalHost();
+  host.innerHTML = html;
+  host.hidden = false;
+  document.body.classList.add("modal-open");
+
+  host.querySelectorAll("[data-close]").forEach((b) => {
+    b.addEventListener("click", closePageModal);
+  });
+  document.addEventListener("keydown", pageModalEsc);   // core.js 提供
+  // 回车提交（textarea 里回车应换行，不提交）
+  host.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.tagName === "INPUT") {
+      e.preventDefault();
+      const save = host.querySelector("#formSave");
+      if (save) save.click();
+    }
+  });
+  return host;
+}
+
+function formError(msg) {
+  const e = $("#formError");
+  if (!e) return;
+  if (msg) { e.textContent = msg; e.hidden = false; }
+  else { e.textContent = ""; e.hidden = true; }
+}
+
+/** 取当前草稿（编辑弹窗用） */
+function readStepRows(scope) {
+  return [...scope.querySelectorAll(".step-row")].map((row) => ({
+    t: (row.querySelector('[data-f="t"]') || {}).value || "",
+    min: (row.querySelector('[data-f="min"]') || {}).value || "",
+    d: (row.querySelector('[data-f="d"]') || {}).value || "",
+  })).map((x) => ({ t: x.t.trim(), min: Number(x.min) || 0, d: x.d.trim() }))
+     .filter((x) => x.t || x.d);
+}
+
+function stepRowHtml(s) {
+  return `<div class="step-row">
+    <input class="input" data-f="t" placeholder="环节（导入）" value="${esc(s.t || "")}" aria-label="环节名称">
+    <input class="input" data-f="min" type="number" min="0" placeholder="分钟" value="${s.min ? esc(s.min) : ""}" aria-label="分钟数">
+    <input class="input" data-f="d" placeholder="做什么" value="${esc(s.d || "")}" aria-label="环节说明">
+    <button class="step-del" type="button" data-step-del="1" aria-label="删除该环节">✕</button>
+  </div>`;
+}
+
+/* ---------------- 编辑教案 ---------------- */
+
+function openLessonEditor() {
+  const L = lessonById(state.lessonId);
+  if (!L) return;
+  const s = lessonSnap(L);
+
+  const host = openModal(modalShell("编辑教案", `
+    <div class="field">
+      <label for="fTitle">课时名称 <span class="req">*</span></label>
+      <input class="input" id="fTitle" value="${esc(L.title)}">
+    </div>
+    <div class="modal-row">
+      <div class="field">
+        <label for="fMinutes">课时长度（分钟）</label>
+        <input class="input" id="fMinutes" type="number" min="1" value="${esc(L.minutes)}">
+      </div>
+      <div class="field">
+        <label for="fStatus">状态</label>
+        <select class="select" id="fStatus">
+          ${Object.keys(LESSON_STATUS).map((k) =>
+            `<option value="${k}"${k === L.status ? " selected" : ""}>${esc(LESSON_STATUS[k].label)}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label for="fGoals">教学目标</label>
+      <textarea class="textarea" id="fGoals" rows="3">${esc(s.goals)}</textarea>
+    </div>
+    <div class="field">
+      <label for="fKey">教学重点（每行一条）</label>
+      <textarea class="textarea" id="fKey" rows="4">${esc(s.keyPoints.join("\n"))}</textarea>
+    </div>
+    <div class="field">
+      <label for="fHard">教学难点</label>
+      <textarea class="textarea" id="fHard" rows="3">${esc(s.hardPoints)}</textarea>
+    </div>
+    <div class="field">
+      <label>课堂流程</label>
+      <div id="fSteps">${(s.steps.length ? s.steps : [{ t: "", min: 0, d: "" }]).map(stepRowHtml).join("")}</div>
+      <button class="btn btn-sm btn-ghost" type="button" id="stepAdd">＋ 添加一步</button>
+    </div>
+    <div class="field">
+      <label for="fHw">作业布置</label>
+      <textarea class="textarea" id="fHw" rows="2">${esc(s.homework)}</textarea>
+    </div>
+    <div class="field">
+      <label for="fNote">学情提示</label>
+      <textarea class="textarea" id="fNote" rows="2">${esc(s.note)}</textarea>
+    </div>
+    <div class="field">
+      <label for="fMsg">本次修改说明（会显示在版本历史里）</label>
+      <input class="input" id="fMsg" placeholder="例：把「已有序数据」的对比练习移到探究环节">
+    </div>
+    <p class="modal-hint">名称 / 时长 / 状态属于教案的基本信息，改动直接生效；
+      六个内容字段的改动会<b>提交为一个新版本</b>，旧版本不会被覆盖。</p>
+    <p class="login-error" id="formError" role="alert" hidden></p>
+  `, `
+    <button class="btn" type="button" data-close="1">取消</button>
+    <button class="btn btn-primary" type="button" id="formSave">提交为新版本</button>
+  `));
+
+  host.querySelector("#stepAdd").addEventListener("click", () => {
+    host.querySelector("#fSteps").insertAdjacentHTML("beforeend", stepRowHtml({ t: "", min: 0, d: "" }));
+  });
+  host.querySelector("#fSteps").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-step-del]");
+    if (!b) return;
+    const rows = host.querySelectorAll(".step-row");
+    if (rows.length <= 1) { formError("课堂流程至少保留一行"); return; }
+    b.closest(".step-row").remove();
+    formError("");
+  });
+
+  host.querySelector("#formSave").addEventListener("click", () => {
+    const title = (host.querySelector("#fTitle").value || "").trim();
+    if (!title) { formError("课时名称不能为空"); return; }
+    const minutes = Math.floor(Number(host.querySelector("#fMinutes").value));
+    if (!(minutes > 0)) { formError("课时长度要填正整数（分钟）"); return; }
+
+    const snap = {
+      goals: host.querySelector("#fGoals").value.trim(),
+      keyPoints: host.querySelector("#fKey").value.split("\n").map((x) => x.trim()).filter(Boolean),
+      hardPoints: host.querySelector("#fHard").value.trim(),
+      steps: readStepRows(host),
+      homework: host.querySelector("#fHw").value.trim(),
+      note: host.querySelector("#fNote").value.trim(),
+    };
+    const msg = host.querySelector("#fMsg").value.trim();
+
+    // 基本信息直接改（不进版本）
+    L.title = title;
+    L.minutes = minutes;
+    L.status = host.querySelector("#fStatus").value;
+    saveLessons();
+
+    const r = commitLesson(L.id, snap, msg, "edit");
+    closePageModal();
+    renderAll();
+    if (r.ok) flash(`已提交 ${r.commit.id}：${r.commit.msg}`, "ok");
+    else flash("基本信息已保存；教案内容没有变化，未产生新版本");
+  });
+}
+
+/* ---------------- 记录课后反思 ---------------- */
+
+function openReflect() {
+  const L = lessonById(state.lessonId);
+  if (!L) return;
+
+  const host = openModal(modalShell("记录课后反思", `
+    <div class="modal-row">
+      <div class="field">
+        <label for="rDate">上课日期 / 节次</label>
+        <input class="input" id="rDate" value="${esc(L.taughtAt || "")}" placeholder="例：第 5 教学周 周二">
+      </div>
+    </div>
+    <div class="field">
+      <label for="rSaw">课堂上发生了什么 <span class="req">*</span></label>
+      <textarea class="textarea" id="rSaw" rows="3"
+        placeholder="学生的反应、卡在哪里、哪些环节超出/不足预期"></textarea>
+    </div>
+    <div class="field">
+      <label for="rTodo">下次怎么改 <span class="req">*</span></label>
+      <textarea class="textarea" id="rTodo" rows="3"
+        placeholder="例如：导入环节先发卡片让全班动手排一遍"></textarea>
+    </div>
+    <div class="field">
+      <label for="rMsg">提交说明（可留空，默认按反思内容生成）</label>
+      <input class="input" id="rMsg" placeholder="例：课后改进：补一张指针轨迹图">
+    </div>
+    <p class="modal-hint">记录反思会留下一个新版本（类型「课后改进」），
+      并把课时状态标为「已上」。教案内容不变也没关系 —— 反思本身就是要留下来的东西。</p>
+    <p class="login-error" id="formError" role="alert" hidden></p>
+  `, `
+    <button class="btn" type="button" data-close="1">取消</button>
+    <button class="btn btn-primary" type="button" id="formSave">保存为课后改进</button>
+  `));
+
+  host.querySelector("#formSave").addEventListener("click", () => {
+    const saw = host.querySelector("#rSaw").value.trim();
+    const todo = host.querySelector("#rTodo").value.trim();
+    if (!saw) { formError("请先写「课堂上发生了什么」"); return; }
+    if (!todo) { formError("请先写「下次怎么改」"); return; }
+
+    const date = host.querySelector("#rDate").value.trim();
+    const msg = host.querySelector("#rMsg").value.trim()
+      || ("课后改进：" + todo.replace(/\s+/g, "").slice(0, 24) + (todo.length > 24 ? "…" : ""));
+
+    const r = commitLesson(L.id, lessonSnap(L), msg, "reflect",
+      { at: Date.now(), date: date, saw: saw, todo: todo });
+
+    closePageModal();
+    renderAll();
+    if (r.ok) flash("已记下课后反思，并新增版本 " + r.commit.id, "ok");
+    else flash(r.error || "保存失败", "bad");
+  });
+}
+
+/* ---------------- 新建课时教案 ---------------- */
+
+function openNewLesson() {
+  const syl = syllabusOf(state.courseId);
+  if (!syl) { flash("这门课还没有教案大纲，先新建大纲", "bad"); return; }
+
+  const cur = state.chapterId || (syl.chapters[0] || {}).id || "";
+  const host = openModal(modalShell("新建课时教案", `
+    <div class="field">
+      <label for="nChapter">所属章节</label>
+      <select class="select" id="nChapter">
+        ${syl.chapters.map((c) =>
+          `<option value="${esc(c.id)}"${c.id === cur ? " selected" : ""}>${esc(c.title)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="field">
+      <label for="nTitle">课时名称 <span class="req">*</span></label>
+      <input class="input" id="nTitle" placeholder="例：第 7 章 · 第 3 课时：堆排序">
+    </div>
+    <div class="field">
+      <label for="nMinutes">课时长度（分钟）</label>
+      <input class="input" id="nMinutes" type="number" min="1" value="45">
+    </div>
+    <p class="modal-hint">新建后是一份空白教案（v1），六个内容字段由你填，也可以交给 AI 起草。</p>
+    <p class="login-error" id="formError" role="alert" hidden></p>
+  `));
+
+  host.querySelector("#formSave").addEventListener("click", () => {
+    const title = (host.querySelector("#nTitle").value || "").trim();
+    if (!title) { formError("请填写课时名称"); return; }
+
+    const r = addLesson(state.courseId, host.querySelector("#nChapter").value, title,
+      host.querySelector("#nMinutes").value);
+    if (!r.ok) { formError(r.error); return; }
+
+    state.chapterId = r.lesson.chapterId;
+    state.lessonId = r.lesson.id;
+    state.tab = "plan";
+    state.diff = null;
+    closePageModal();
+    rememberPick();
+    syncUrl();
+    renderAll();
+    flash("已新建课时教案：" + r.lesson.title, "ok");
+  });
+}
+
+/* ---------------- 章节：新建 / 编辑 / 删除 ---------------- */
+
+function openChapterEditor(chapterId) {
+  const syl = syllabusOf(state.courseId);
+  if (!syl) return;
+  const isNew = !chapterId;
+  const ch = isNew ? { title: "", hours: 0, points: "" } : chapterOf(state.courseId, chapterId);
+  if (!ch) return;
+
+  const host = openModal(modalShell(isNew ? "新建章节" : "编辑本章", `
+    <div class="field">
+      <label for="cTitle">章节名称 <span class="req">*</span></label>
+      <input class="input" id="cTitle" value="${esc(ch.title)}" placeholder="例：第 9 章 · 文件">
+    </div>
+    <div class="field">
+      <label for="cHours">计划课时数</label>
+      <input class="input" id="cHours" type="number" min="0" value="${ch.hours ? esc(ch.hours) : ""}"
+             placeholder="可留空">
+    </div>
+    <div class="field">
+      <label for="cPoints">本章核心知识点</label>
+      <textarea class="textarea" id="cPoints" rows="3"
+        placeholder="一句话说清本章最核心的知识点，AI 起草课时教案时会用到">${esc(ch.points)}</textarea>
+    </div>
+    <p class="modal-hint">课时数和实际教案数不同步时只会提示，不会自动增删教案。</p>
+    <p class="login-error" id="formError" role="alert" hidden></p>
+  `));
+
+  host.querySelector("#formSave").addEventListener("click", () => {
+    const title = (host.querySelector("#cTitle").value || "").trim();
+    if (!title) { formError("章节名称不能为空"); return; }
+    const hoursRaw = (host.querySelector("#cHours").value || "").trim();
+    const hours = hoursRaw === "" ? 0 : Math.floor(Number(hoursRaw));
+    if (hoursRaw !== "" && !(hours >= 0)) { formError("课时数要填不小于 0 的整数"); return; }
+
+    const r = isNew
+      ? addChapter(state.courseId, title)
+      : updateChapter(state.courseId, chapterId, { title: title, hours: hours });
+
+    if (!r.ok) { formError(r.error); return; }
+
+    // 知识点：新建时 setter 里没有它，这里补一次
+    if (isNew) updateChapter(state.courseId, r.chapter.id, {
+      points: host.querySelector("#cPoints").value.trim(),
+      hours: hours,
+    });
+    else updateChapter(state.courseId, chapterId, { points: host.querySelector("#cPoints").value.trim() });
+
+    if (isNew) { state.chapterId = r.chapter.id; state.lessonId = ""; }
+    closePageModal();
+    rememberPick();
+    renderAll();
+    flash(isNew ? "已新建章节：" + title : "本章已更新", "ok");
+  });
+}
+
+/* ============================================================
+   AI 交接 —— 与课表导入的「方式三」用同一套契约
+   写 STORE_KEY.agentTask 后跳到 agent.html?task=xxx
+   （agent.html 还没消费它，本轮只做交接）
+   ============================================================ */
+
+const AI_PROMPTS = {
+  "gen-lesson":
+    "你是高校教师的备课助手。下面是一门课程中某一章的教学大纲信息。" +
+    "请据此起草**一份课时教案**，用 Markdown 输出，包含这六个小节：" +
+    "教学目标 / 教学重点（列表）/ 教学难点 / 课堂流程（每步写成「标题（分钟）：说明」）/ 作业布置 / 学情提示。" +
+    "要求：紧扣本章核心知识点，课时长度按我给的信息；不要编造教材里没有的章节或知识点；" +
+    "信息不足的地方写「（待补充）」而不是臆测。",
+
+  "improve-lesson":
+    "你是高校教学改进顾问。下面是一份教案的当前内容，以及我上完这节课后的反思记录。" +
+    "请给出 **2–3 条具体可执行的改进建议**，每条说清「改哪个小节 → 改成什么 → 为什么」，用 Markdown 列表输出。" +
+    "要求：建议要落到可以直接替换的文字上（例如「把导入环节改为…」），不要泛泛而谈；" +
+    "只改我提到的方向所涉及的字段；如果反思信息不足以支撑建议，直接说明，不要编造。",
+
+  "explain-diff":
+    "下面是同一份教案两个版本的差异（+ 为新增、- 为删除）。" +
+    "请用 2–4 句话客观解读：这一版主要改了什么、可能的教学意图是什么。不要评价好坏。",
+};
+
+/** 教案 → 可读 Markdown（给 AI 的上下文） */
+function lessonToText(L) {
+  const s = lessonSnap(L);
+  return [
+    "# " + L.title,
+    "课程：" + courseName(L.courseId) + "　课时长度：" + L.minutes + " 分钟",
+    "",
+    "## 教学目标", s.goals || "（未填写）", "",
+    "## 教学重点", s.keyPoints.map((x) => "- " + x).join("\n") || "（未填写）", "",
+    "## 教学难点", s.hardPoints || "（未填写）", "",
+    "## 课堂流程",
+    s.steps.map((x) => "- " + x.t + (x.min ? "（" + x.min + " 分钟）" : "") + "：" + x.d).join("\n") || "（未填写）", "",
+    "## 作业布置", s.homework || "（未填写）", "",
+    "## 学情提示", s.note || "（未填写）",
+  ].join("\n");
+}
+
+/** diff → 可读 Markdown */
+function diffToText(d) {
+  return d.fields.filter((f) => !f.same).map((f) => {
+    const lines = f.parts.map((p) => {
+      if (p.op === "=") return "  " + p.text;
+      if (p.op === "+") return "+ " + p.text;
+      if (p.op === "-") return "- " + p.text;
+      return "- " + p.text + "\n+ " + p.to;
+    });
+    return "## " + f.label + "\n" + lines.join("\n");
+  }).join("\n\n");
+}
+
+function handoffAgent(task, text, payload) {
+  LS.set(STORE_KEY.agentTask, {
+    task: task,
+    from: "lesson.html",
+    text: text,
+    prompt: AI_PROMPTS[task] || "",
+    payload: payload || {},          // 附加的结构化上下文（agent 页可用可不用）
+    at: Date.now(),
+  });
+  navigate("agent.html?task=" + encodeURIComponent(task));
+}
+
+/* ============================================================
+   事件绑定
+   ============================================================ */
+
+/* 课程目录变了（左侧栏「＋」新建了课程，壳广播过来或本页自己建的）
+   → 下拉要跟着更新。
+   🔴 壳与 iframe 各持一份 COURSES，不接这个信号就会一直停在旧列表上：
+      用户在左边刚建的课，右边下拉里选不到。 */
+document.addEventListener("st:courses-changed", () => {
+  if ((COURSES || []).some((c) => c.id === state.courseId)) {
+    renderCourseSel();                 // 当前课程还在 → 下拉多一项即可
+    return;
+  }
+  // 当前课程已经不在目录里了（被删）→ 重选一门，别停在不存在的课程上
+  initSelection();
+  rememberPick();
+  syncUrl();
+  renderAll();
+});
+
+/* 课程切换：走 navigate（壳内换 iframe、独立模式整页跳），URL 与侧栏高亮都正确 */
+$("#courseSel").addEventListener("change", (e) => {
+  navigate("lesson.html?course=" + encodeURIComponent(e.target.value));
+});
+
+/* 「版本 N」→ 右栏切到大纲版本历史 */
+$("#sylVerBtn").addEventListener("click", () => {
+  state.outlineHistory = true;
+  state.sylDiff = null;
+  renderPlan();
+});
+
+$("#addLessonBtn").addEventListener("click", openNewLesson);
+$("#addChapterBtn").addEventListener("click", () => openChapterEditor(null));
+
+/* 大纲树：章 / 课时都是动态渲染的 → 用事件委托 */
+$("#outlineTree").addEventListener("click", (e) => {
+  const lsBtn = e.target.closest("[data-ls]");
+  if (lsBtn) {
+    const L = lessonById(lsBtn.dataset.ls);
+    if (!L) return;
+    state.chapterId = L.chapterId;
+    state.lessonId = L.id;
+    state.tab = "plan";
+    state.diff = null;
+    state.outlineHistory = false;      // 选了具体对象就离开「大纲历史」视图
+    state.sylDiff = null;
+    rememberPick();
+    syncUrl();
+    renderAll();
+    return;
+  }
+  const chBtn = e.target.closest("[data-ch]");
+  if (chBtn) {
+    state.chapterId = chBtn.dataset.ch;
+    state.lessonId = "";
+    state.tab = "plan";
+    state.diff = null;
+    state.outlineHistory = false;
+    state.sylDiff = null;
+    rememberPick();
+    syncUrl();
+    renderAll();
+  }
+});
+
+/* 空状态里的「新建大纲」按钮也是动态插入的 */
+$("#outlineEmpty").addEventListener("click", (e) => {
+  if (!e.target.closest("#createSylBtn")) return;
+  const r = createSyllabus(state.courseId);
+  if (!r.ok) { flash(r.error, "bad"); return; }
+  const f = firstSelection(state.courseId);
+  state.chapterId = f.chapterId;
+  state.lessonId = f.lessonId;
+  renderAll();
+  flash("已为「" + courseName(state.courseId) + "」新建空大纲，接着加章节吧", "ok");
+});
+
+/* 右栏：标签切换 / 各按钮（同样是动态内容 → 委托） */
+$("#planPanel").addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-tab]");
+  if (tab) {
+    state.tab = tab.dataset.tab;
+    state.diff = null;
+    renderPlan();
+    return;
+  }
+
+  const diffBtn = e.target.closest("[data-diff]");
+  if (diffBtn) {
+    const to = Number(diffBtn.dataset.diff);
+    state.diff = { from: to - 1, to: to };      // 与该版的前一版对比
+    renderDiff();
+    return;
+  }
+
+  const revBtn = e.target.closest("[data-revert]");
+  if (revBtn) {
+    const i = Number(revBtn.dataset.revert);
+    const L = lessonById(state.lessonId);
+    const src = L && L.commits[i];
+    if (!src) return;
+    if (!window.confirm(`回到 ${src.id}？\n\n会新增一版（内容等于 ${src.id}），中间这些版本都保留。`)) return;
+    const r = revertLesson(state.lessonId, i);
+    if (!r.ok) { flash(r.error, "bad"); return; }
+    state.diff = null;
+    renderAll();
+    flash("已回到 " + src.id + "（作为新版本 " + r.commit.id + "，历史都还在）", "ok");
+    return;
+  }
+
+  const L = lessonById(state.lessonId);
+
+  if (e.target.closest("#editBtn")) { openLessonEditor(); return; }
+  if (e.target.closest("#addReflectBtn")) { openReflect(); return; }
+  if (e.target.closest("#diffClose")) { state.diff = null; renderDiff(); return; }
+
+  if (e.target.closest("#aiExamBtn")) { navigate("exam.html"); return; }
+
+  if (e.target.closest("#aiGenBtn")) {
+    const ch = chapterOf(state.courseId, state.chapterId);
+    if (!ch) return;
+    const ls = lessonsOfChapter(ch);
+    handoffAgent("gen-lesson", [
+      "课程：" + courseName(state.courseId),
+      "章节：" + ch.title,
+      "计划课时数：" + (ch.hours || "未定"),
+      "本章核心知识点：" + (ch.points || "（未填写）"),
+      "本章已有课时教案：" + (ls.length ? ls.map((l) => l.title).join("；") : "（无）"),
+      "",
+      "请为本章起草一份课时教案（若本章计划多课时，请任选其中一节，并说明你选的是哪一节）。",
+    ].join("\n"), { courseId: state.courseId, chapterId: ch.id, hours: ch.hours, points: ch.points });
+    return;
+  }
+
+  if (e.target.closest("#aiImproveBtn")) {
+    if (!L) return;
+    const rs = lessonReflects(L);
+    const last = rs.length ? rs[0].commit.reflect : null;
+    handoffAgent("improve-lesson", [
+      lessonToText(L),
+      "",
+      "## 我上完这节课后的反思",
+      "课堂观察：" + (last ? last.saw : "（无）"),
+      "下次改进：" + (last ? last.todo : "（无）"),
+      "",
+      "请针对上面这份教案给出 2–3 条具体改进建议。",
+    ].join("\n"), { lessonId: L.id, courseId: L.courseId, reflect: last });
+    return;
+  }
+
+  if (e.target.closest("#aiDiffBtn")) {
+    if (!L || !state.diff) return;
+    const A = L.commits[state.diff.from], B = L.commits[state.diff.to];
+    if (!A || !B) return;
+    const d = diffSnap(A.snap, B.snap);
+    handoffAgent("explain-diff", [
+      "教案：" + L.title + "（" + courseName(L.courseId) + "）",
+      "对比：" + A.id + " → " + B.id,
+      "提交说明：" + A.id + "「" + A.msg + "」、" + B.id + "「" + B.msg + "」",
+      "",
+      diffToText(d),
+    ].join("\n"), { lessonId: L.id, from: A.id, to: B.id, changed: d.changed });
+    return;
+  }
+
+  if (e.target.closest("#sylHistBackBtn")) {
+    state.outlineHistory = false;
+    state.sylDiff = null;
+    renderPlan();
+    return;
+  }
+  const sdiffBtn = e.target.closest("[data-sdiff]");
+  if (sdiffBtn) {
+    const to = Number(sdiffBtn.dataset.sdiff);
+    state.sylDiff = { from: to - 1, to: to };      // 与该版的前一版对比
+    renderSylDiff();
+    return;
+  }
+  const srevBtn = e.target.closest("[data-srevert]");
+  if (srevBtn) { revertOutline(Number(srevBtn.dataset.srevert)); return; }
+  if (e.target.closest("#sylDiffClose")) { state.sylDiff = null; renderSylDiff(); return; }
+  if (e.target.closest("#aiSylDiffBtn")) { handoffOutlineDiff(); return; }
+
+  if (e.target.closest("#chEditBtn")) { openChapterEditor(state.chapterId); return; }
+  if (e.target.closest("#chNewLessonBtn")) { openNewLesson(); return; }
+  if (e.target.closest("#chDelBtn")) { askDeleteChapter(state.chapterId); return; }
+});
+
+/* 课时状态直接改（不进版本） */
+$("#planPanel").addEventListener("change", (e) => {
+  if (!e.target.closest("#statusSel")) return;
+  const r = setLessonStatus(state.lessonId, e.target.value);
+  if (!r.ok) { flash(r.error, "bad"); return; }
+  renderAll();
+  flash("状态已改为「" + LESSON_STATUS[e.target.value].label + "」", "ok");
+});
+
+/* ---------------- 大纲树每行的「⋯」菜单（编辑 / 删除） ----------------
+   与侧栏课程项同一套交互：悬停出现 → 点开小菜单 → 选中一项。
+   ⚠️ 菜单挂 body + position:fixed：大纲卡片是 overflow 容器，
+      放行内会被裁掉、也容易顶开布局。
+   ⚠️ 样式复用 shell.css 的 `.tree-menu`（与 `.side-menu` 同一份定义）。
+   ============================================================ */
+let treeMenuEl = null;
+
+function closeTreeMenu() {
+  if (!treeMenuEl) return;
+  treeMenuEl.remove();
+  treeMenuEl = null;
+  document.querySelectorAll('.tree-more[aria-expanded="true"]')
+    .forEach((b) => b.setAttribute("aria-expanded", "false"));
+  document.removeEventListener("click", onDocClickForTreeMenu);
+  document.removeEventListener("keydown", onEscForTreeMenu);
+}
+
+function onDocClickForTreeMenu(e) {
+  if (treeMenuEl && !treeMenuEl.contains(e.target)) closeTreeMenu();
+}
+function onEscForTreeMenu(e) {
+  if (e.key === "Escape") closeTreeMenu();
+}
+
+/** 打开某一行的操作菜单。scope: "ch"（章）| "ls"（课时教案）| "syl"（整份大纲） */
+function openTreeMenu(anchor, scope, targetId) {
+  const wasOpen = anchor.getAttribute("aria-expanded") === "true";
+  closeTreeMenu();
+  if (wasOpen) return;                                  // 再点一次 = 收起
+
+  const items = scope === "ch"
+    ? [{ act: "edit", label: "编辑本章" },
+       { act: "newls", label: "新建课时教案" },
+       { act: "up", label: "上移本章" },
+       { act: "down", label: "下移本章" },
+       { act: "del", label: "删除本章", danger: true }]
+    : scope === "ls"
+    ? [{ act: "edit", label: "编辑教案" },
+       { act: "up", label: "上移" },
+       { act: "down", label: "下移" },
+       { act: "del", label: "删除教案", danger: true }]
+    : [{ act: "del", label: "删除整份大纲", danger: true }];
+
+  const menu = document.createElement("div");
+  menu.className = "tree-menu";
+  menu.id = "treeMenu";
+  menu.setAttribute("role", "menu");
+  menu.dataset.scope = scope;
+  menu.dataset.target = targetId;
+  menu.innerHTML = items.map((it) =>
+    `<button type="button" role="menuitem" data-act="${it.act}"`
+    + `${it.danger ? ' class="danger"' : ""}>${esc(it.label)}</button>`).join("");
+  document.body.appendChild(menu);
+  treeMenuEl = menu;
+
+  // 定位到按钮下方；快贴到视口底部就往上弹
+  const r = anchor.getBoundingClientRect();
+  const mw = menu.offsetWidth || 150;
+  const mh = menu.offsetHeight || 100;
+  let top = r.bottom + 4;
+  if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - mw - 8));
+  menu.style.top = Math.round(top) + "px";
+  menu.style.left = Math.round(left) + "px";
+
+  anchor.setAttribute("aria-expanded", "true");
+  menu.querySelectorAll("[data-act]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const act = b.dataset.act;
+      closeTreeMenu();
+      treeAction(scope, targetId, act);
+    });
+  });
+
+  // 下一个事件循环再挂「点别处关闭」，否则本次 click 立刻把它关掉
+  setTimeout(() => {
+    document.addEventListener("click", onDocClickForTreeMenu);
+    document.addEventListener("keydown", onEscForTreeMenu);
+  }, 0);
+}
+
+function treeAction(scope, id, act) {
+  if (scope === "ch") {
+    if (act === "edit") {
+      state.chapterId = id; state.lessonId = "";
+      rememberPick(); syncUrl(); renderAll();
+      openChapterEditor(id);
+      return;
+    }
+    if (act === "newls") {
+      state.chapterId = id; state.lessonId = "";
+      rememberPick(); syncUrl(); renderAll();
+      openNewLesson();
+      return;
+    }
+    if (act === "del") { askDeleteChapter(id); return; }
+    if (act === "up" || act === "down") { nudgeChapter(id, act === "up" ? -1 : 1); return; }
+  }
+  if (scope === "ls") {
+    const L = lessonById(id);
+    if (!L) return;
+    if (act === "edit") {
+      state.chapterId = L.chapterId; state.lessonId = id;
+      state.tab = "plan"; state.diff = null;
+      rememberPick(); syncUrl(); renderAll();
+      openLessonEditor();
+      return;
+    }
+    if (act === "del") { askDeleteLesson(id); return; }
+    if (act === "up" || act === "down") { nudgeLesson(id, act === "up" ? -1 : 1); return; }
+  }
+  if (scope === "syl" && act === "del") { askDeleteSyllabus(); return; }
+}
+
+/* ---------------- 调序：拖动 与 「上移 / 下移」 ---------------- */
+
+/** 调序后让被调的对象保持选中，并重渲染 */
+function afterReorder(scope, id) {
+  if (scope === "ch") {
+    state.chapterId = id;
+    state.lessonId = "";
+  } else {
+    const L = lessonById(id);
+    if (L) { state.chapterId = L.chapterId; state.lessonId = L.id; }
+  }
+  state.diff = null;
+  rememberPick();
+  syncUrl();
+  renderAll();
+}
+
+function nudgeChapter(chapterId, delta) {
+  const r = moveChapterBy(state.courseId, chapterId, delta);
+  if (!r.ok) { flash(r.error, "bad"); return; }
+  afterReorder("ch", chapterId);
+  flash(delta < 0 ? "已上移本章" : "已下移本章", "ok");
+}
+
+function nudgeLesson(lessonId, delta) {
+  const r = moveLessonBy(lessonId, delta);
+  if (!r.ok) { flash(r.error, "bad"); return; }
+  afterReorder("ls", lessonId);
+  flash(delta < 0 ? "已上移" : "已下移", "ok");
+}
+
+/* ---------------- 拖动排序 ----------------
+   用原生 HTML5 DnD（零依赖）。落点规则：
+     · 拖章 → 只落在**章行**上（上/下半边 = 插到前 / 后）
+     · 拖课时 → 落在**课时行**上（上/下半边 = 插到前 / 后），
+                落在**章行**上 = 移入该章（末尾）—— 跨章移动靠这个
+   真正的重排在 nav.js 的 moveChapter() / moveLesson() 里，
+   这里只负责算「插到谁前面」。
+   ============================================================ */
+let dragState = null;
+
+function clearDropMarks() {
+  document.querySelectorAll("#outlineTree .drop-before, #outlineTree .drop-after, #outlineTree .drop-into")
+    .forEach((el) => el.classList.remove("drop-before", "drop-after", "drop-into"));
+}
+
+/** 这一行能不能接住正在拖的东西？能就返回落点信息 */
+function dropInfo(row, clientY) {
+  if (!row || !dragState) return null;
+  const isCh = row.classList.contains("ch-row");
+  const after = clientY > row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2;
+
+  if (dragState.scope === "ch") {
+    if (!isCh) return null;                              // 章只在章之间排序
+    if (row.dataset.ch === dragState.id) return null;    // 拖到自己身上
+    return { mode: after ? "after" : "before", isCh: true,
+             chapterId: row.dataset.ch, after: after };
+  }
+  if (isCh) return { mode: "into", isCh: true, chapterId: row.dataset.ch };
+  if (row.dataset.ls === dragState.id) return null;
+  return { mode: after ? "after" : "before", isCh: false,
+           lessonId: row.dataset.ls, after: after };
+}
+
+$("#outlineTree").addEventListener("dragstart", (e) => {
+  const row = e.target.closest("[data-drag]");
+  if (!row) return;
+  dragState = { scope: row.dataset.drag,
+                id: row.dataset.drag === "ch" ? row.dataset.ch : row.dataset.ls };
+  row.classList.add("dragging");
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = "move";
+    // Firefox 必须 setData 才会真正开始拖（否则拖不动）
+    try { e.dataTransfer.setData("text/plain", dragState.id); } catch (_) {}
+  }
+});
+
+$("#outlineTree").addEventListener("dragover", (e) => {
+  const row = e.target.closest(".ch-row, .ls-row");
+  const info = dropInfo(row, e.clientY);
+  if (!info) { clearDropMarks(); return; }
+  e.preventDefault();                                    // 不 preventDefault 就不允许 drop
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  clearDropMarks();
+  row.classList.add("drop-" + info.mode);
+});
+
+$("#outlineTree").addEventListener("dragleave", (e) => {
+  if (!e.relatedTarget || !$("#outlineTree").contains(e.relatedTarget)) clearDropMarks();
+});
+
+$("#outlineTree").addEventListener("drop", (e) => {
+  const row = e.target.closest(".ch-row, .ls-row");
+  const info = dropInfo(row, e.clientY);
+  const drag = dragState;
+  dragState = null;
+  clearDropMarks();
+  if (!info || !drag) return;
+  e.preventDefault();
+
+  let r;
+  if (drag.scope === "ch") {
+    const syl = syllabusOf(state.courseId);
+    const ids = (syl ? syl.chapters : []).map((c) => c.id).filter((x) => x !== drag.id);
+    const at = ids.indexOf(info.chapterId);
+    r = moveChapter(state.courseId, drag.id, info.after ? (ids[at + 1] || null) : ids[at]);
+  } else if (info.mode === "into") {
+    r = moveLesson(drag.id, info.chapterId, null);        // 移入该章末尾
+  } else {
+    const target = lessonById(info.lessonId);
+    if (!target) return;
+    const ids = ((chapterOf(state.courseId, target.chapterId) || {}).lessonIds || [])
+      .filter((x) => x !== drag.id);
+    const at = ids.indexOf(info.lessonId);
+    r = moveLesson(drag.id, target.chapterId, info.after ? (ids[at + 1] || null) : ids[at]);
+  }
+  if (!r || !r.ok) { flash((r && r.error) || "调整位置失败", "bad"); return; }
+  afterReorder(drag.scope, drag.id);
+});
+
+$("#outlineTree").addEventListener("dragend", () => {
+  dragState = null;
+  document.querySelectorAll("#outlineTree .dragging").forEach((el) => el.classList.remove("dragging"));
+  clearDropMarks();
+});
+
+/* ---------------- 删除：章 / 课时教案 / 整份大纲 ---------------- */
+
+/** 删完之后把选中项挪到还存在的第一个对象上，别停在已被删掉的东西上 */
+function afterTreeRemove() {
+  const f = firstSelection(state.courseId);
+  state.chapterId = f.chapterId;
+  state.lessonId = f.lessonId;
+  state.diff = null;
+  rememberPick();
+  syncUrl();
+  renderAll();
+}
+
+function askDeleteChapter(chapterId) {
+  const ch = chapterOf(state.courseId, chapterId);
+  if (!ch) return;
+  const n = lessonsOfChapter(ch).length;
+  // 章里还有教案时**先别弹确认框** —— 反正删不掉，直接说清原因更有用
+  if (n) {
+    flash("本章还有 " + n + " 份课时教案，先删掉教案再删章节", "bad");
+    return;
+  }
+  if (!window.confirm("确定删除章节「" + ch.title + "」吗？\n\n删除后无法撤销。")) return;
+  const r = removeChapter(state.courseId, chapterId);
+  if (!r.ok) { flash(r.error, "bad"); return; }
+  afterTreeRemove();
+  flash("已删除章节：" + ch.title, "ok");
+}
+
+function askDeleteLesson(lessonId) {
+  const L = lessonById(lessonId);
+  if (!L) return;
+  const n = L.commits.length;
+  const msg = "确定删除课时教案「" + L.title + "」吗？\n\n"
+    + (n > 1 ? "它的 " + n + " 个版本记录会一起删除。\n" : "")
+    + "删除后无法撤销。";
+  if (!window.confirm(msg)) return;
+  const r = deleteLesson(lessonId);
+  if (!r.ok) { flash(r.error, "bad"); return; }
+  afterTreeRemove();
+  flash("已删除课时教案：" + shortTitle(L.title), "ok");
+}
+
+function askDeleteSyllabus() {
+  const syl = syllabusOf(state.courseId);
+  if (!syl) return;
+  const st = syllabusStats(state.courseId);
+  let msg = "确定删除「" + courseName(state.courseId) + "」的整份教案大纲吗？";
+  if (st.chapters || st.lessons) {
+    msg += "\n\n会一起删除：" + st.chapters + " 章大纲、"
+         + st.lessons + " 份课时教案（含它们的全部版本记录）。";
+  }
+  msg += "\n\n删除后无法撤销。";
+  if (!window.confirm(msg)) return;
+  const r = deleteSyllabus(state.courseId);
+  if (!r.ok) { flash(r.error, "bad"); return; }
+  afterTreeRemove();
+  flash("已删除整份教案大纲", "ok");
+}
+
+/* 大纲树上的「⋯」按钮（动态渲染 → 事件委托） */
+$("#outlineTree").addEventListener("click", (e) => {
+  const more = e.target.closest(".tree-more");
+  if (!more) return;
+  e.stopPropagation();
+  openTreeMenu(more, more.dataset.more, more.dataset.target);
+});
+
+/* 「教案大纲」卡片头右侧的「⋯」→ 删除整份大纲 */
+$("#sylMoreBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  openTreeMenu(e.currentTarget, "syl", state.courseId);
+});
+
+/* ---------------- 启动 ---------------- */
+initSelection();
+rememberPick();
+syncUrl();
+renderAll();
+</script>
+</body>
+</html>

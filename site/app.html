@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>智课助教 SmartTutor CS</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  /* 只有壳锁视口：顶部栏+侧栏固定，滚动交给 iframe 内部 */
+  html, body { height: 100%; }
+  html { overflow: hidden; }
+</style>
+</head>
+<body class="shell-body">
+
+<!-- ============================================================
+     应用壳：顶部栏 + 左侧栏 固定不动，中间 iframe 换内容
+     纯静态：切页只改 iframe.src，不发任何网络请求给服务端
+     ============================================================ -->
+
+<!-- 顶部栏 -->
+<header class="shell-top" role="banner">
+  <div class="shell-top-left">
+    <button class="shell-icon-btn" id="collapseBtn" type="button"
+            aria-label="折叠侧栏" title="折叠 / 展开侧栏">
+      <span class="icon-bars" aria-hidden="true"></span>
+    </button>
+    <div class="shell-brand">
+      <span class="shell-mark">智</span>
+      <span class="shell-brand-name">智课助教</span>
+      <span class="shell-brand-role" id="brandRole">教师端</span>
+    </div>
+  </div>
+
+  <div class="shell-top-right">
+    <!-- 无障碍阅读模式：默认勾选。⚠️ 目前只记录状态，功能尚未实现 -->
+    <label class="shell-a11y-toggle" for="a11yReadMode" title="无障碍阅读模式（功能开发中）">
+      <input type="checkbox" id="a11yReadMode" checked
+             data-a11y-mode="read">
+      <span class="a11y-toggle-label">无障碍阅读模式</span>
+    </label>
+
+    <div class="shell-theme" role="group" aria-label="切换主题">
+      <button class="theme-btn" type="button" data-theme-btn="cream">Cream</button>
+      <button class="theme-btn" type="button" data-theme-btn="snow">Snow</button>
+      <button class="theme-btn" type="button" data-theme-btn="dark">深色</button>
+    </div>
+
+    <div class="shell-user" id="userMenuWrap">
+      <button class="shell-user-btn" id="userBtn" type="button"
+              aria-haspopup="menu" aria-expanded="false">
+        <span class="shell-avatar" id="userAvatar">李</span>
+        <span class="shell-user-name" id="userName">李老师</span>
+        <span class="shell-caret" aria-hidden="true"></span>
+      </button>
+      <div class="shell-menu" id="userMenu" role="menu" hidden>
+        <div class="shell-menu-head">
+          <b id="menuName">李老师</b>
+          <span id="menuRole">教师身份</span>
+        </div>
+        <button class="shell-menu-item" role="menuitem" data-go="settings.html">
+          <span class="mi-ico">设</span>偏好设置
+        </button>
+        <button class="shell-menu-item" role="menuitem" data-go="index.html">
+          <span class="mi-ico">换</span>切换身份
+        </button>
+        <div class="shell-menu-sep"></div>
+        <button class="shell-menu-item danger" role="menuitem" id="logoutBtn">
+          <span class="mi-ico">退</span>退出登录
+        </button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- 主体：侧栏 + 内容 iframe -->
+<div class="shell-main">
+  <nav class="shell-side" id="shellSide" aria-label="主导航">
+    <!-- 菜单由 shell.js 按角色渲染 -->
+  </nav>
+
+  <div class="shell-content">
+    <!-- file:// 等受限环境下的提示条 -->
+    <div class="shell-frame-error" id="frameError" hidden>
+      <b>当前以「本地文件」方式打开，部分浏览器会拦截内嵌页面。</b>
+      <span>想要完整的两端协同体验，请用本地服务器打开，或直接访问线上版本。功能本身不受影响，仅切换页面时会整页刷新。</span>
+    </div>
+
+    <iframe id="contentFrame" class="shell-frame" title="页面内容"
+            src="about:blank"></iframe>
+    <div class="shell-loading" id="frameLoading">
+      <div class="shell-spinner" aria-hidden="true"></div>
+      <span>正在加载…</span>
+    </div>
+  </div>
+</div>
+
+<!-- 折叠侧栏时的遮罩（小屏） -->
+<div class="shell-scrim" id="scrim" hidden></div>
+
+<!-- 弹窗挂载点（添加课程等） -->
+<div id="modalHost" hidden></div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/shell.js"></script>
+</body>
+</html>

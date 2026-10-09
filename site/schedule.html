@@ -1,0 +1,1285 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="teacher">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>课表与事项 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  :root { --font-sans: "Inter", system-ui; }
+
+  /* 周课表 */
+  /* 列数由 --day-cols 决定（导入 7 天的课表就变 7 列），默认 5 天 */
+  .week-body { overflow-x: auto; }
+  .week-head, .week-grid {
+    display: grid;
+    grid-template-columns: 64px repeat(var(--day-cols, 5), minmax(0, 1fr));
+    gap: 8px;
+    min-width: 560px;
+  }
+  .week-head { margin-bottom: 8px; }
+  .week-head span {
+    font-size: 12px; color: var(--muted-foreground);
+    text-align: center; padding: 6px 0;
+  }
+  .week-head span:first-child { text-align: left; padding-left: 4px; }
+
+  .week-slot-label {
+    font-size: 11.5px; color: var(--muted-foreground);
+    padding-top: 12px; font-variant-numeric: tabular-nums; line-height: 1.5;
+  }
+  .week-cell {
+    min-height: 66px; border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    padding: 9px 10px;
+    display: flex; flex-direction: column; gap: 3px;
+    min-width: 0;
+  }
+  .week-cell.empty { background: transparent; border-style: dashed; opacity: .5; }
+  /* 正在上课：实线 + 主色底 */
+  .week-cell.now {
+    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+    background: color-mix(in srgb, var(--primary) 7%, transparent);
+  }
+  /* 下一节：虚线 + 更淡的底，和「正在上课」一眼分得开 */
+  .week-cell.next {
+    border-color: color-mix(in srgb, var(--primary) 32%, transparent);
+    border-style: dashed;
+    background: color-mix(in srgb, var(--primary) 3%, transparent);
+  }
+  .week-cell .c-flag {
+    font-size: 10px; font-weight: 500; letter-spacing: .02em;
+    color: var(--primary); line-height: 1.4;
+  }
+  .week-cell.next .c-flag { color: var(--muted-foreground); }
+  .week-cell .c-name {
+    font-size: 12.5px; font-weight: 500; line-height: 1.4;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .week-cell .c-meta { font-size: 11px; color: var(--muted-foreground); line-height: 1.5; }
+  .week-cell .c-room { font-size: 11px; color: var(--muted-foreground); }
+  /* 卡片头那行「正在上课 / 下一节」 */
+  #weekFocus b { font-weight: 500; color: var(--foreground); }
+
+  /* 课表卡片头部的操作区 */
+  .week-tools { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* 导入弹窗：格式说明 + 解析预览 */
+  .imp-help { font-size: 12.5px; color: var(--muted-foreground); line-height: 1.7; }
+  .imp-help summary { cursor: pointer; color: var(--primary); font-size: 12.5px; }
+  .imp-help pre {
+    margin: 8px 0 0; padding: 10px 12px; border-radius: 9px;
+    background: var(--secondary); border: 1px solid var(--border);
+    font-size: 11.5px; line-height: 1.65; overflow-x: auto;
+  }
+  .imp-preview {
+    font-size: 12.5px; line-height: 1.7; padding: 10px 12px; border-radius: 9px;
+    background: var(--success-surface); color: var(--success);
+    border: 1px solid color-mix(in srgb, var(--success) 26%, transparent);
+  }
+  .imp-preview b { font-weight: 500; }
+
+  /* 方式三：把活儿交给 AI 助手 */
+  .imp-alt { border-top: 1px solid var(--border); padding-top: 14px; }
+  .imp-alt-text {
+    margin: 0 0 10px; font-size: 12.5px; line-height: 1.7;
+    color: var(--muted-foreground);
+  }
+
+  /* 设置课表：节次编辑行 */
+  .slot-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .slot-row .input { flex: 1; min-width: 0; }
+  .slot-row .input.t { flex: 0 0 96px; font-variant-numeric: tabular-nums; }
+  .slot-del {
+    flex: 0 0 auto; width: 30px; height: 30px; padding: 0;
+    display: grid; place-items: center; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: transparent; color: var(--muted-foreground); font: inherit; font-size: 12px;
+  }
+  .slot-del:hover { color: var(--destructive); border-color: var(--destructive); }
+
+  /* 事项 */
+  .todo-list { list-style: none; padding: 0; margin: 0; }
+  .todo-item {
+    display: flex; align-items: flex-start; gap: 11px;
+    padding: 12px 2px; border-bottom: 1px solid var(--border);
+  }
+  .todo-item:last-child { border-bottom: 0; }
+  .todo-check {
+    width: 17px; height: 17px; margin-top: 1px; flex: 0 0 auto;
+    border-radius: 5px; border: 1.5px solid var(--border);
+    background: transparent; cursor: pointer; padding: 0;
+    display: grid; place-items: center;
+    color: transparent; font-size: 10px; line-height: 1;
+    transition: background .14s, border-color .14s, color .14s;
+  }
+  .todo-check:hover { border-color: var(--primary); }
+  .todo-check[aria-checked="true"] {
+    background: var(--primary); border-color: var(--primary);
+    color: var(--primary-foreground);
+  }
+  .todo-body { flex: 1; min-width: 0; }
+  .todo-title { font-size: 13.5px; line-height: 1.55; }
+  .todo-item[data-done="1"] .todo-title {
+    color: var(--muted-foreground); text-decoration: line-through;
+  }
+  .todo-meta {
+    display: flex; gap: 9px; flex-wrap: wrap;
+    margin-top: 4px; font-size: 11.5px; color: var(--muted-foreground);
+  }
+  .todo-meta .due.urgent { color: var(--destructive); }
+  .todo-meta .due.soon { color: var(--warning); }
+  /* 每条右侧的删除按钮：平时淡，悬停才变红，不抢视线 */
+  .todo-del {
+    flex: 0 0 auto; align-self: center;
+    width: 26px; height: 26px; padding: 0;
+    display: grid; place-items: center; cursor: pointer;
+    border: 1px solid transparent; border-radius: 7px;
+    background: transparent; color: var(--muted-foreground);
+    font: inherit; font-size: 12px; line-height: 1;
+    opacity: .45; transition: opacity .14s, color .14s, border-color .14s;
+  }
+  .todo-item:hover .todo-del { opacity: 1; }
+  .todo-del:hover { color: var(--destructive); border-color: var(--destructive); }
+  .todo-del:focus-visible {
+    opacity: 1; outline: none; color: var(--destructive);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 30%, transparent);
+  }
+  /* 空列表提示 */
+  .todo-empty {
+    padding: 18px 2px; font-size: 13px; color: var(--muted-foreground);
+  }
+  .todo-empty b { font-weight: 500; color: var(--primary); }
+
+  @media (max-width: 760px) {
+    .week-body { margin: 0 -4px; padding: 0 4px; }
+  }
+</style>
+</head>
+<body>
+
+
+<div class="page-wrap">
+    <div class="page" style="padding-top:0">
+      <div class="page-head">
+        <div class="crumb">我的工作 · 教师端</div>
+        <h1>课表与事项</h1>
+        <p>本周授课安排与待处理事项，勾选即可标记完成</p>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="k">本周课时</div>
+          <div class="v"><span id="weekHours">9</span> <small>节</small></div>
+        </div>
+        <div class="stat-card">
+          <div class="k">待办事项</div>
+          <div class="v" id="pendingCount">4</div>
+        </div>
+        <div class="stat-card">
+          <div class="k">待批作业</div>
+          <div class="v" style="color:var(--warning)">3 <small>份</small></div>
+        </div>
+        <div class="stat-card">
+          <div class="k">今日课程</div>
+          <div class="v"><span id="todayHours">2</span> <small>节</small></div>
+        </div>
+      </div>
+
+      <section class="card card-raised" style="padding:20px;margin-bottom:20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+          <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;min-width:0">
+            <h3 style="margin:0;font-size:14px;font-weight:500">本周课表</h3>
+            <span style="font-size:12.5px;color:var(--muted-foreground)">
+              第 <span id="weekNo">5</span> 教学周 · <span id="weekFocus">按当前时间高亮</span>
+            </span>
+          </div>
+          <div class="week-tools">
+            <button class="btn btn-sm" type="button" id="importBtn">导入课表</button>
+            <button class="btn btn-sm" type="button" id="configBtn">设置课表</button>
+          </div>
+        </div>
+
+        <div class="week-body" id="weekBody">
+          <div class="week-head" id="weekHead">
+            <span>节次</span>
+            <span>周一</span><span>周二</span><span>周三</span><span>周四</span><span>周五</span>
+          </div>
+          <div class="week-grid" id="weekGrid"></div>
+        </div>
+      </section>
+
+      <section class="card card-raised" style="padding:20px;margin-bottom:20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap">
+          <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;min-width:0">
+            <h3 style="margin:0;font-size:14px;font-weight:500">待办事项</h3>
+            <span style="font-size:12.5px;color:var(--muted-foreground)">点击左侧方框标记完成</span>
+          </div>
+          <div class="week-tools">
+            <button class="btn btn-sm" type="button" id="todoAddBtn"
+                    aria-label="添加待办事项">＋ 添加事项</button>
+          </div>
+        </div>
+        <ul class="todo-list" id="todoList"></ul>
+      </section>
+    </div>
+  </div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+/* ============================================================
+   课表状态
+   ------------------------------------------------------------
+   三个来源，优先级：本机保存 > 预置课表。
+     · 「导入课表」把解析结果写进来（节次 / 天数 / 每格内容都换掉）
+     · 「设置课表」改节次名称与时间、当前教学周
+   持久化在 localStorage 的 st_schedule，刷新后还在。
+
+   ⚠️ 纯静态站没有后端，浏览器也跨域取不到教务系统，
+      所以「导入」走的是**本地解析**：粘贴文本或读 .csv/.txt 文件。
+   ============================================================ */
+const SCHEDULE_KEY = "st_schedule";
+const DAY_POOL = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+
+/** 预置课表（「恢复预置课表」即还原成它） */
+function demoState() {
+  return {
+    weekNo: 5,
+    /* 节次带**开始 / 结束**时间，供「按当前时间自动高亮」用 */
+    slots: [
+      { label: "第 1–2 节", time: "08:00", end: "09:40" },
+      { label: "第 3–4 节", time: "10:10", end: "11:50" },
+      { label: "第 5–6 节", time: "14:00", end: "15:40" },
+      { label: "第 7–8 节", time: "16:10", end: "17:50" },
+    ],
+    days: ["周一", "周二", "周三", "周四", "周五"],
+    /* 一格 = 课程名 + 教室 + 班级；null = 空堂 */
+    week: [
+      [ { name: "数据结构与算法", room: "6A-301", cls: "一班" }, null, { name: "数据结构与算法", room: "6A-301", cls: "二班" }, null, { name: "算法设计", room: "6A-208", cls: "三班" } ],
+      [ null, { name: "操作系统", room: "6B-105", cls: "一班" }, null, { name: "操作系统", room: "6B-105", cls: "二班" }, null ],
+      [ null, null, { name: "数据结构与算法", room: "6A-301", cls: "一班" }, null, { name: "算法设计", room: "6A-208", cls: "三班" } ],
+      [ { name: "答疑与辅导", room: "教师办公室", cls: "预约制" }, null, null, { name: "操作系统", room: "6B-105", cls: "三班" }, null ],
+    ],
+  };
+}
+
+/** 把任意来源的数据规整成「行数 = 节次数、列数 = 天数」的矩形，缺的补空格子 */
+function normalizeState(s) {
+  const d = demoState();
+  if (!s || typeof s !== "object") return d;
+
+  const slots = Array.isArray(s.slots) && s.slots.length
+    ? s.slots.map((x, i) => ({
+        label: String((x && x.label) || `第 ${i + 1} 节`).trim(),
+        time: String((x && x.time) || "").trim(),
+        end: String((x && x.end) || "").trim(),
+      }))
+    : d.slots;
+
+  const days = Array.isArray(s.days) && s.days.length
+    ? s.days.filter((x) => DAY_POOL.includes(x))
+    : d.days;
+  const safeDays = days.length ? days : d.days;
+
+  const week = slots.map((_, r) => {
+    const row = Array.isArray(s.week && s.week[r]) ? s.week[r] : [];
+    return safeDays.map((__, c) => row[c] || null);
+  });
+
+  const n = Math.floor(Number(s.weekNo));
+  const weekNo = Number.isFinite(n) && n > 0 ? n : d.weekNo;
+
+  return { weekNo, slots, days: safeDays, week };
+}
+
+/* 运行时状态（验证器会直接读 SLOTS / WEEK，所以保持成独立变量） */
+let SLOTS = [], WEEK = [], DAYS = [], WEEK_NO = 0;
+let SOURCE = "";
+
+function setState(s, source) {
+  const st = normalizeState(s);
+  SLOTS = st.slots;
+  WEEK = st.week;
+  DAYS = st.days;
+  WEEK_NO = st.weekNo;
+  if (source) SOURCE = source;
+  LS.set(SCHEDULE_KEY, st);
+  renderWeek();
+}
+
+/* ============================================================
+   按当前时间自动定位「正在上的课 / 下一节课」
+   ------------------------------------------------------------
+   规则：
+     1) 现在正好落在某节课的时间段内，且那一格有课 → 高亮它（state: "now"）
+     2) 否则看今天剩下还没开始的课，取最早的一节 → 高亮（state: "next"）
+     3) 今天没有了 → 往后顺延找（含循环回本周开头），取那天的第一节
+     4) 节次全都没填时间 → 无法判断，不高亮（并由调色文案提示去补时间）
+
+   ⚠️ 时间比较全按「当天 0 点起的分钟数」，不碰时区/Date 比较，避免跨时区出怪事。
+   ⚠️ computeFocus 是**纯函数**（时间从参数进来），所以能直接喂固定时间做断言。
+   ============================================================ */
+
+/** 一节默认多长（分钟）—— 没填结束时间、也没有下一节可参照时的兜底 */
+const DEFAULT_SLOT_MIN = 100;
+
+/** "08:00" → 480；认不出来返回 null */
+function hhmm(v) {
+  const m = String(v == null ? "" : v).trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]), mi = Number(m[2]);
+  if (h > 23 || mi > 59) return null;
+  return h * 60 + mi;
+}
+
+/**
+ * 第 i 个节次的时间段 [开始分钟, 结束分钟]；没填开始时间则返回 null。
+ * 结束时间的取值顺序：
+ *   ① 明确填了 end 就用它
+ *   ② 否则用**下一节的开始时间**（上一节上到下一节开始）
+ *   ③ 再否则 开始 + DEFAULT_SLOT_MIN
+ * 但 ② ③ 都会和「开始 + DEFAULT_SLOT_MIN」取较小值 ——
+ * 免得把 30 分钟的课间也算成上课时间（08:00 的课不该管到 10:10）。
+ */
+function slotRange(i) {
+  const s = SLOTS[i] || {};
+  const st = hhmm(s.time);
+  if (st === null) return null;
+
+  const explicit = hhmm(s.end);
+  if (explicit !== null) return [st, Math.max(explicit, st)];
+
+  let next = null;
+  for (let j = i + 1; j < SLOTS.length; j++) {
+    const nx = hhmm(SLOTS[j].time);
+    if (nx !== null && nx > st) { next = nx; break; }
+  }
+  const capped = Math.min(next === null ? Infinity : next, st + DEFAULT_SLOT_MIN);
+  return [st, capped];
+}
+
+/** 时间是 "HH:MM" 的节次有几个（一个都没有就没法自动高亮） */
+function timedSlotCount() {
+  let n = 0;
+  for (let i = 0; i < SLOTS.length; i++) if (slotRange(i)) n += 1;
+  return n;
+}
+
+const focusHasClass = (i, d) => d >= 0 && !!(WEEK[i] && WEEK[i][d]);
+
+/**
+ * 算出该高亮哪一格。返回 { slot, day, state }：
+ *   state: "now" 正在上课 / "next" 下一节 / "" 无法判断（或整周没课）
+ *   slot / day 为 -1 表示没有目标
+ */
+function computeFocus(now) {
+  // ⚠️ 不要写 `now instanceof Date` —— 跨 realm（vm / jsdom / iframe）时
+  //    instanceof 会失败，于是**静默退回当前时间**，测试喂进去的时间点被无声忽略。
+  //    改成鸭子类型判断，任何「像 Date 的东西」都能用。
+  const at = (now && typeof now.getHours === "function" && typeof now.getDay === "function")
+    ? now : new Date();
+  const ranges = SLOTS.map((_, i) => slotRange(i));
+  if (!ranges.some(Boolean)) return { slot: -1, day: -1, state: "" };
+
+  const nowMin = at.getHours() * 60 + at.getMinutes();
+  // getDay(): 0=周日 … 6=周六 → 换算成 DAY_POOL 的下标；今天不在显示的天数里则为 -1
+  const today = DAYS.indexOf(DAY_POOL[(at.getDay() + 6) % 7]);
+
+  // ① 正在上课（必须该格真的有课；空堂不算「在上课」）
+  if (today >= 0) {
+    for (let i = 0; i < SLOTS.length; i++) {
+      const r = ranges[i];
+      if (r && nowMin >= r[0] && nowMin < r[1] && focusHasClass(i, today)) {
+        return { slot: i, day: today, state: "now" };
+      }
+    }
+  }
+
+  // ② 今天接下来的最近一节（按开始时间最早）
+  if (today >= 0) {
+    let best = -1, bestStart = Infinity;
+    for (let i = 0; i < SLOTS.length; i++) {
+      const r = ranges[i];
+      if (r && r[0] > nowMin && focusHasClass(i, today) && r[0] < bestStart) {
+        bestStart = r[0]; best = i;
+      }
+    }
+    if (best >= 0) return { slot: best, day: today, state: "next" };
+  }
+
+  // ③ 往后顺延（含绕回本周开头），取那天时间最早的一节
+  const from = today >= 0 ? today : DAYS.length - 1;
+  for (let step = 1; step <= DAYS.length; step++) {
+    const d = (from + step) % DAYS.length;
+    let best = -1, bestStart = Infinity;
+    for (let i = 0; i < SLOTS.length; i++) {
+      const r = ranges[i];
+      if (r && focusHasClass(i, d) && r[0] < bestStart) { bestStart = r[0]; best = i; }
+    }
+    if (best >= 0) return { slot: best, day: d, state: "next" };
+  }
+
+  return { slot: -1, day: -1, state: "" };
+}
+
+/** 当前高亮（每次渲染时重算） */
+let FOCUS = { slot: -1, day: -1, state: "" };
+
+/* ---------------- 渲染 ---------------- */
+function renderWeek() {
+  const head = $("#weekHead");
+  const grid = $("#weekGrid");
+
+  // 列数走 CSS 变量（不写内联 grid-template-columns，否则会盖掉小屏媒体查询）
+  $("#weekBody").style.setProperty("--day-cols", String(DAYS.length));
+
+  head.innerHTML = `<span>节次</span>` + DAYS.map((d) => `<span>${d}</span>`).join("");
+
+  // 每次渲染都按「当前时间」重算该高亮哪一格
+  FOCUS = computeFocus(new Date());
+
+  grid.innerHTML = SLOTS.map((s, si) => `
+    <div class="week-slot-label">${s.label}${s.time ? `<br>${s.time}${s.end ? "–" + s.end : ""}` : ""}</div>
+    ${DAYS.map((_, di) => {
+      const c = (WEEK[si] || [])[di];
+      if (!c) return `<div class="week-cell empty" aria-hidden="true"></div>`;
+      const state = (si === FOCUS.slot && di === FOCUS.day) ? FOCUS.state : "";
+      const flag = state === "now" ? "正在上课" : state === "next" ? "下一节" : "";
+      return `<div class="week-cell${state ? " " + state : ""}"
+                   ${state ? `title="${flag}：${c.name}"` : ""}>
+        ${flag ? `<span class="c-flag">${flag}</span>` : ""}
+        <span class="c-name">${c.name}</span>
+        ${c.cls ? `<span class="c-meta">${c.cls}</span>` : ""}
+        ${c.room ? `<span class="c-room">${c.room}</span>` : ""}
+      </div>`;
+    }).join("")}
+  `).join("");
+
+  $("#weekNo").textContent = WEEK_NO;
+  // 数据来源（预置课表 / 本机保存 / 导入 · N 节课 / 本机设置）不再显示成徽标 ——
+  // 用户反馈那个小胶囊太抢眼。改成挂在容器上的 data-*，界面不占位但状态仍可观测。
+  $("#weekBody").dataset.source = SOURCE || "预置课表";
+  $("#weekFocus").innerHTML = focusText();
+
+  // 统计卡片按真实课表算，不写死 —— 导入后能立刻看出变化
+  const total = WEEK.reduce((n, row) => n + row.filter(Boolean).length, 0);
+  // 「今日课程」= 今天那一列，今天不在显示的天数里则为 0
+  const dow = DAYS.indexOf(DAY_POOL[(new Date().getDay() + 6) % 7]);
+  const today = dow < 0 ? 0 : WEEK.reduce((n, row) => n + (row[dow] ? 1 : 0), 0);
+  $("#weekHours").textContent = total;
+  $("#todayHours").textContent = today;
+}
+
+/** 卡片头上那行「正在上课 / 下一节」说明文字 */
+function focusText() {
+  if (!timedSlotCount()) {
+    return `<span style="color:var(--warning)">节次还没填上课时间，无法自动高亮</span>` +
+           `（去「设置课表」补上）`;
+  }
+  const f = FOCUS;
+  if (f.slot < 0 || !WEEK[f.slot] || !WEEK[f.slot][f.day]) return "本周暂无排课";
+
+  const c = WEEK[f.slot][f.day];
+  const s = SLOTS[f.slot] || {};
+  const where = `${DAYS[f.day]} ${s.label}${s.time ? " " + s.time : ""}`;
+  if (f.state === "now") {
+    return `正在上课：<b>${c.name}</b>` + (c.room ? `（${c.room}）` : "");
+  }
+  return `下一节：${where} · ${c.name}`;
+}
+
+/* ============================================================
+   课表文本解析
+   ------------------------------------------------------------
+   支持两种输入，自动识别（含制表符 → 二维表，否则 → 逐行）：
+
+   A. 二维表（从教务系统「选中表格 → 复制」直接粘贴）
+        制表符分列；首行为星期表头；其余行首格为节次名
+        第1-2节	数据结构与算法/6A-301/一班		操作系统/6B-105
+
+   B. 逐行（每行一节课，逗号 / 制表符 / 分号 / 顿号 分隔）
+        周一,第1-2节,数据结构与算法,6A-301,一班
+
+   单元格内「课程 / 教室 / 班级」用 / @ | 分隔，后两项可省。
+   空白、-、—、无 等一律当空堂。
+   ============================================================ */
+const CN_DIGIT = { "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 7, "天": 7 };
+const EMPTY_CELL = /^(?:[-—–~·.\s]*|无|无课|空|休息|—)$/;
+
+function parseDayName(s) {
+  const m = String(s || "").trim().match(/^(?:周|星期|礼拜)([一二三四五六日天1-7])$/);
+  if (!m) return 0;
+  return CN_DIGIT[m[1]] || Number(m[1]) || 0;
+}
+
+function parseCell(raw) {
+  const t = String(raw == null ? "" : raw).replace(/\s+/g, " ").trim();
+  if (!t || EMPTY_CELL.test(t)) return null;
+  const parts = t.split(/\s*[/@|]\s*/).map((x) => x.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  return { name: parts[0], room: parts[1] || "", cls: parts[2] || "" };
+}
+
+/**
+ * 节次单元格 → { label, time, end }。
+ * 节次名里可以带时间，这样导入的课表才有时间做「自动高亮」：
+ *   第1-2节 08:00-09:40   → label「第1-2节」 time「08:00」 end「09:40」
+ *   第1-2节 08:00         → label「第1-2节」 time「08:00」 end「」
+ *   第1-2节               → label「第1-2节」 时间留空（后面可以在设置里补）
+ * ⚠️ 只认带冒号的时刻，"第1-2节" 里的 1-2 不会被误当成时间。
+ */
+function slotOf(raw) {
+  const t = String(raw == null ? "" : raw).trim();
+  const m = t.match(/(\d{1,2}:\d{2})\s*(?:[-–—~～至到]\s*(\d{1,2}:\d{2}))?/);
+  if (!m) return { label: t, time: "", end: "" };
+  const label = t.replace(m[0], "").replace(/[\s·,，()（）]+$/, "").replace(/^[\s·,，()（）]+/, "").trim();
+  return { label: label || t, time: m[1], end: m[2] || "" };
+}
+
+/** 找星期表头行：一行里至少有 2 格能认出星期名 */
+function findHeaderIndex(rawLines) {
+  for (let i = 0; i < rawLines.length; i++) {
+    const hits = rawLines[i].split("\t").map((c) => parseDayName(c)).filter(Boolean);
+    if (hits.length >= 2) return i;
+  }
+  return -1;
+}
+
+/**
+ * 按节次里的第一个数字排序（「第 3-4 节」→ 3），保证左列从早到晚。
+ * ⚠️ 逐行格式是**按天分组**写的，节次首次出现的顺序往往不是时间顺序
+ *    （周一先出现 1-2 和 5-6，周二才出现 3-4），不排序的话左列会乱跳。
+ * 名字里没有数字（如「上午」「下午」）的排在最后，且保持原有相对顺序。
+ */
+function sortSlots(slots, week) {
+  const key = (s) => {
+    const m = String(s.label || "").match(/\d+/);
+    return m ? Number(m[0]) : Number.MAX_SAFE_INTEGER;
+  };
+  const order = slots.map((_, i) => i).sort((a, b) => {
+    const d = key(slots[a]) - key(slots[b]);
+    return d !== 0 ? d : a - b;      // 同号（或无号）时保持原顺序
+  });
+  return { slots: order.map((i) => slots[i]), week: order.map((i) => week[i]) };
+}
+
+function parseTable(rawLines, headerIdx) {
+  const headerCells = rawLines[headerIdx].split("\t").map((c) => c.trim());
+  const colDay = {};
+  headerCells.forEach((c, i) => { const d = parseDayName(c); if (d) colDay[i] = d; });
+
+  const dayNums = [...new Set(Object.values(colDay))].sort((a, b) => a - b);
+  const days = dayNums.map((d) => DAY_POOL[d - 1]);
+  const colIdx = {};
+  Object.keys(colDay).forEach((c) => { colIdx[c] = dayNums.indexOf(colDay[c]); });
+
+  /* 合并「单元格内换行」：表头**之后**不含制表符的行，并入上一行最后一个非空单元格
+     （教务系统复制出来常见「课程名」换行「教室」，靠这一步救回来）
+     ⚠️ 只对表头之后的行生效，否则噪声行会被并进表头、把星期名弄脏。
+     ⚠️ 首格是节次名的行（如整行只有一个「第 5-6 节」）不合并，否则会被并进上一行。 */
+  const SLOT_LIKE = /^第\s*[\d〇一二三四五六七八九十]+\s*(?:[-–~至]\s*[\d〇一二三四五六七八九十]+)?\s*节/;
+  const rows = [];
+  rawLines.forEach((line, i) => {
+    if (i > headerIdx && !line.includes("\t") && rows.length && !SLOT_LIKE.test(line)) {
+      const last = rows[rows.length - 1];
+      for (let k = last.length - 1; k >= 0; k--) {
+        if (last[k]) { last[k] += "/" + line; return; }
+      }
+    }
+    rows.push(line.split("\t").map((c) => c.trim()));
+  });
+
+  // 表头之后每行 = 一个节次
+  const slots = [];
+  const week = [];
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row.some(Boolean)) continue;
+    const rawLabel = row[0] || "";
+    if (!rawLabel) continue;                               // 没有节次名的行无从归属
+    const filled = days.map(() => null);
+    Object.keys(colIdx).forEach((c) => { filled[colIdx[c]] = parseCell(row[Number(c)]); });
+    // 既没有内容、名字里又看不出「节/课」的，基本是表头残留或噪声，丢掉
+    if (!filled.some(Boolean) && !/节|课/.test(rawLabel)) continue;
+    slots.push(slotOf(rawLabel));
+    week.push(filled);
+  }
+
+  if (!slots.length) return { error: "表头认出来了，但下面没有可用的节次行。" };
+  const sorted = sortSlots(slots, week);
+  return { slots: sorted.slots, days, week: sorted.week,
+           count: sorted.week.reduce((n, r) => n + r.filter(Boolean).length, 0) };
+}
+
+function parseRows(lines) {
+  const slotDefs = [];        // 保序
+  const dayNums = [];
+  const cells = {};           // `${星期序号}|${节次名}` → 格子
+  const skipped = [];
+
+  // 表头行（如 `星期,节次,课程,教室,班级`）要静默跳过，
+  // 否则会报「已跳过无法识别的第 1 行」，让用户以为文件有问题。
+  const HEADER_WORD = /^(?:星期|周次|星期几|节次|课程|课程名|教室|班级|教师|任课教师|时间)$/;
+
+  lines.forEach((line, i) => {
+    if (/^\s*(?:#|\/\/)/.test(line)) return;               // 跳过注释
+    let f = line.split(/\s*[,;、]\s*|\t/).map((x) => x.trim());
+    if (f.length < 3) {
+      const g = line.split(/\s{2,}/).map((x) => x.trim()).filter(Boolean);
+      if (g.length >= 3) f = g;
+    }
+    if (f.filter((x) => HEADER_WORD.test(x)).length >= 2) return;   // 表头行，静默略过
+
+    const day = parseDayName(f[0]);
+    if (!day || !f[1] || !f[2]) { skipped.push(i + 1); return; }
+
+    const def = slotOf(f[1]);
+    // 同一个节次名可能在不同天的行里重复出现 —— 只要其中一行带了时间就补上
+    const exist = slotDefs.find((s) => s.label === def.label);
+    if (exist) {
+      if (!exist.time && def.time) { exist.time = def.time; exist.end = def.end; }
+    } else {
+      slotDefs.push(def);
+    }
+    if (!dayNums.includes(day)) dayNums.push(day);
+    cells[day + "|" + def.label] = parseCell(f.slice(2).join("/"));
+  });
+
+  if (!slotDefs.length) {
+    return { error: "没解析出任何一节课。逐行格式每行至少 3 列：星期, 节次, 课程名（后接教室、班级）。" };
+  }
+
+  const daySorted = dayNums.slice().sort((a, b) => a - b);
+  const days = daySorted.map((d) => DAY_POOL[d - 1]);
+  const raw = slotDefs.map((s) => days.map((_, di) => cells[daySorted[di] + "|" + s.label] || null));
+  const sorted = sortSlots(slotDefs, raw);          // 按时间先后重排左列
+  const count = sorted.week.reduce((n, r) => n + r.filter(Boolean).length, 0);
+  const out = { slots: sorted.slots, days, week: sorted.week, count };
+  if (skipped.length) out.skipped = skipped;
+  return out;
+}
+
+function parseSchedule(text) {
+  const src = String(text == null ? "" : text).replace(/\r\n?/g, "\n").replace(/[ \t]+$/gm, "");
+  if (!src.trim()) return { error: "请先粘贴课表内容，或选择一个 .csv / .txt 文件。" };
+  const raw = src.split("\n").filter((l) => l.trim());
+  if (!raw.length) return { error: "内容为空。" };
+
+  // 🔴 判定与解析都必须用**未 trim 首部**的行：
+  //    教务系统复制出来的表头首格常为空（行首就是一个制表符 `\t周一\t周二`），
+  //    若先 trim 会把行首制表符吃掉 → 所有列整体左移一位 → 星期与内容错位。
+  //
+  // ⚠️ 含制表符的不一定是二维表 —— 逐行格式也常用制表符分列。
+  //    所以先找星期表头；找不到就退回逐行解析，而不是直接报错。
+  if (raw.some((l) => l.includes("\t"))) {
+    const h = findHeaderIndex(raw);
+    if (h >= 0) {
+      const t = parseTable(raw, h);
+      if (!t.error) return t;
+    }
+  }
+  return parseRows(raw.map((l) => l.trim()));
+}
+
+/** 直接给一份可解析的示例，省得用户猜格式 */
+const IMPORT_SAMPLE = [
+  "节次\t周一\t周二\t周三\t周四\t周五",
+  "第1-2节 08:00-09:40\t数据结构与算法/6A-301/计科2301\t\t操作系统/6B-105/计科2302\t\t算法设计/6A-208/软工2301",
+  "第3-4节 10:10-11:50\t\t算法设计/6A-208/软工2301\t\t数据结构与算法/6A-301/计科2301\t",
+  "第5-6节 14:00-15:40\t\t\t数据结构与算法/6A-301/计科2302\t\t算法设计/6A-208/计科2301",
+  "第7-8节 16:10-17:50\t答疑与辅导/教师办公室/预约制\t\t\t操作系统/6B-105/计科2301\t",
+].join("\n");
+
+/**
+ * 「方式三：让 AI 帮你转格式」用的提示词。
+ * 用户粘贴的课表千奇百怪（教务系统各家不同），本地解析认不出来时，
+ * 把原文 + 这段提示词交给 AI 助手，让模型转成方式一 / 方式二的标准格式再导回来。
+ *
+ * TODO(agent)：agent.html 目前**还没消费它**。目前的行为只是：
+ *   把 { task, text, prompt } 写进 STORE_KEY.agentTask 然后跳转过去。
+ *   将来 agent.html 要做的是：读这个键 → 用 prompt 起一个对话 →
+ *   把 AI 输出的结果填进会话，并在结尾附一个「回到课表页导入」的入口。
+ *   具体规格见 agent.html 顶部的 TODO 注释。
+ */
+const AI_PARSE_PROMPT = `你是课表格式转换助手。请把我给你的课表内容转成下面两种格式之一，只输出结果，不要解释。
+
+格式一（逐行，每行一节课）：
+星期,节次,课程,教室,班级
+例：周一,第1-2节,数据结构与算法,6A-301,计科2301
+
+格式二（二维表，制表符分隔）：
+首行是星期表头（第一格可留空或写「节次」）；之后每行第一个格是节次名；
+单元格内写成「课程/教室/班级」，用斜杠分隔，缺失的部分可以省略。
+例：
+节次\t周一\t周二
+第1-2节\t数据结构与算法/6A-301/计科2301\t操作系统/6B-105
+
+要求：
+1. 保持原有的星期、节次、课程名、教室、班级，不要编造也不要遗漏；
+2. 空堂留空，不要填「无」；
+3. 节次名保留原样（如「第1-2节」）；
+4. 只输出转换后的内容，不要加解释或代码块标记。
+
+以下是需要转换的课表内容：
+`;
+
+/* ============================================================
+   导入课表弹窗
+   ============================================================ */
+function openImport() {
+  const host = pageModalHost();
+  host.innerHTML = `
+    <div class="modal-scrim" data-close="1"></div>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-head">
+        <h3 id="modalTitle">导入课表</h3>
+        <button class="modal-x" type="button" data-close="1" aria-label="关闭">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="field">
+          <label for="impText">方式一：粘贴课表内容 <span class="req">*</span></label>
+          <textarea class="textarea mono" id="impText" rows="7" spellcheck="false"
+            placeholder="节次&#9;周一&#9;周二&#9;周三&#9;周四&#9;周五&#10;第1-2节&#9;数据结构与算法/6A-301&#9;&#9;操作系统/6B-105&#9;&#9;"></textarea>
+        </div>
+
+        <div class="field">
+          <label for="impFile">方式二：选择文件（.csv / .txt）</label>
+          <input class="input" id="impFile" type="file" accept=".csv,.txt,text/csv,text/plain">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:9px">
+            <span style="font-size:12px;color:var(--muted-foreground)">没有现成文件？下载样例试试：</span>
+            <a class="btn btn-sm btn-ghost" href="sample-schedule.csv" download>逐行 CSV 样例</a>
+            <a class="btn btn-sm btn-ghost" href="sample-schedule-grid.txt" download>二维表样例</a>
+          </div>
+        </div>
+
+        <details class="imp-help">
+          <summary>支持哪两种格式？点开看示例</summary>
+          <p style="margin:8px 0 0">
+            ① <b>二维表</b>：在教务系统里选中整张课表复制粘贴即可。首行是星期表头，
+            其余行首格是节次名；单元格里「课程 / 教室 / 班级」用斜杠分隔，后两项可省。
+          </p>
+          <pre>节次	周一	周二	周三
+第1-2节 08:00-09:40	数据结构与算法/6A-301/计科2301		操作系统/6B-105
+第3-4节 10:10-11:50		算法设计/6A-208	</pre>
+          <p style="margin:10px 0 0">
+            ② <b>逐行</b>：每行一节课，逗号或制表符分列，顺序是
+            <code>星期, 节次, 课程, 教室, 班级</code>。
+          </p>
+          <pre>周一,第1-2节 08:00-09:40,数据结构与算法,6A-301,计科2301
+周二,第3-4节 10:10-11:50,算法设计,6A-208,软工2301</pre>
+          <p style="margin:10px 0 0">
+            <b>节次名后面可以跟上时间</b>（<code>08:00-09:40</code>，也可以只写开始时间）。
+            填了时间，课表才能按当前时间自动高亮「正在上课 / 下一节」；
+            没填就只按节次顺序显示，不会自动高亮。
+          </p>
+          <p style="margin:10px 0 0">
+            Excel 文件请先在 Excel 里「另存为 → CSV UTF-8」再导入 ——
+            浏览器读不了 .xlsx，纯静态站也不引第三方解析库。
+          </p>
+        </details>
+
+        <div style="display:flex;gap:9px;flex-wrap:wrap">
+          <button class="btn btn-sm" type="button" id="impSample">填入示例</button>
+          <button class="btn btn-sm btn-ghost" type="button" id="impClear">清空</button>
+        </div>
+
+        <p class="login-error" id="impError" role="alert" hidden></p>
+        <div class="imp-preview" id="impPreview" hidden></div>
+
+        <div class="field imp-alt">
+          <label>方式三：让 AI 帮你转格式</label>
+          <p class="imp-alt-text">
+            粘贴的内容格式太乱、上面认不出来？把它交给 AI 助手，
+            让 AI 转成方式一或方式二的标准格式，再回来粘贴导入。
+          </p>
+          <button class="btn btn-sm" type="button" id="impAi">打开 AI 助手去解析 →</button>
+        </div>
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn" type="button" data-close="1">取消</button>
+        <button class="btn btn-primary" type="button" id="impApply">导入并覆盖课表</button>
+      </div>
+    </div>`;
+
+  host.hidden = false;
+  document.body.classList.add("modal-open");
+  host.querySelectorAll("[data-close]").forEach((n) =>
+    n.addEventListener("click", closePageModal));
+  document.addEventListener("keydown", pageModalEsc);
+  setTimeout(() => document.getElementById("impText")?.focus?.(), 0);
+
+  const textEl = document.getElementById("impText");
+  const errEl  = document.getElementById("impError");
+  const prevEl = document.getElementById("impPreview");
+
+  /** 边输边预览：能解析就报「将导入多少节」，不能就报原因 */
+  function preview() {
+    const p = parseSchedule(textEl.value);
+    if (p.error) {
+      errEl.textContent = p.error;
+      errEl.hidden = false;
+      prevEl.hidden = true;
+      return;
+    }
+    errEl.hidden = true;
+    prevEl.hidden = false;
+    prevEl.innerHTML =
+      `可解析：<b>${p.count}</b> 节课 · ${p.slots.length} 个节次 × ${p.days.length} 天（${p.days.join(" ")}）` +
+      (p.skipped && p.skipped.length
+        ? `<br>已跳过无法识别的第 ${p.skipped.join("、")} 行`
+        : "");
+  }
+
+  textEl.addEventListener("input", preview);
+
+  document.getElementById("impSample").addEventListener("click", () => {
+    textEl.value = IMPORT_SAMPLE;
+    preview();
+  });
+  document.getElementById("impClear").addEventListener("click", () => {
+    textEl.value = "";
+    preview();
+  });
+
+  // 读本地文件：FileReader 纯前端，不上传任何东西
+  document.getElementById("impFile").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (typeof FileReader === "undefined") {
+      errEl.textContent = "当前环境不支持读取本地文件，请改用粘贴方式。";
+      errEl.hidden = false;
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      textEl.value = String(reader.result || "");
+      preview();
+    };
+    reader.onerror = () => {
+      errEl.textContent = "文件读取失败，请重试，或改用粘贴方式。";
+      errEl.hidden = false;
+    };
+    reader.readAsText(file);
+  });
+
+  document.getElementById("impApply").addEventListener("click", () => {
+    const p = parseSchedule(textEl.value);
+    if (p.error) {
+      errEl.textContent = p.error;
+      errEl.hidden = false;
+      prevEl.hidden = true;
+      textEl.focus();
+      return;
+    }
+    // TODO: 目前不校验与已有课程/班级的一致性 —— 归属规则待定
+    setState({ weekNo: WEEK_NO, slots: p.slots, days: p.days, week: p.week },
+             `导入 · ${p.count} 节课`);
+    closePageModal();
+  });
+
+  /* 方式三：把原文 + 提示词交给 AI 助手，然后跳转过去。
+     ⚠️ agent.html 目前**还没实现**「AI 解析课表」——本轮只做跳转。
+        现在写进 STORE_KEY.agentTask 是为了将来 agent 页能直接接上，
+        用户粘过的内容不会在跳转时丢掉。 */
+  document.getElementById("impAi").addEventListener("click", () => {
+    LS.set(STORE_KEY.agentTask, {
+      task: "parse-schedule",
+      from: "schedule.html",
+      text: textEl.value.trim(),      // 可能为空：也有人会直接跟 AI 讲
+      prompt: AI_PARSE_PROMPT,
+      at: Date.now(),
+    });
+    closePageModal();
+    navigate("agent.html?task=parse-schedule");
+  });
+
+  preview();
+}
+
+/* ============================================================
+   设置课表弹窗
+   ------------------------------------------------------------
+   本轮做的是「节次名称与时间」+「当前教学周」。
+   逐格手动排课（点格子选课程）留待后续。
+   ============================================================ */
+function openConfig() {
+  const host = pageModalHost();
+  host.innerHTML = `
+    <div class="modal-scrim" data-close="1"></div>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-head">
+        <h3 id="modalTitle">设置课表</h3>
+        <button class="modal-x" type="button" data-close="1" aria-label="关闭">✕</button>
+      </div>
+
+      <form class="modal-body" id="cfgForm" novalidate>
+        <div class="field">
+          <label for="cfgWeekNo">当前教学周</label>
+          <input class="input" id="cfgWeekNo" type="number" min="1" max="30"
+                 inputmode="numeric" value="${WEEK_NO}">
+        </div>
+
+        <div class="field">
+          <label>每天节次与时间</label>
+          <div id="cfgSlots"></div>
+          <button class="btn btn-sm" type="button" id="cfgAddSlot">＋ 添加节次</button>
+        </div>
+
+        <p class="modal-hint">
+          <span class="hint-mark" aria-hidden="true">i</span>
+          <span>改节次只影响左列的显示；减少节次时，<b>末尾</b>几行的排课会一起去掉。</span>
+        </p>
+
+        <p class="login-error" id="cfgError" role="alert" hidden></p>
+      </form>
+
+      <div class="modal-foot">
+        <button class="btn btn-ghost" type="button" id="cfgReset">恢复预置课表</button>
+        <button class="btn" type="button" data-close="1">取消</button>
+        <button class="btn btn-primary" type="button" id="cfgSave">保存设置</button>
+      </div>
+    </div>`;
+
+  host.hidden = false;
+  document.body.classList.add("modal-open");
+  host.querySelectorAll("[data-close]").forEach((n) =>
+    n.addEventListener("click", closePageModal));
+  document.addEventListener("keydown", pageModalEsc);
+  setTimeout(() => document.getElementById("cfgWeekNo")?.focus?.(), 0);
+
+  // 编辑中的节次先拷一份，取消即丢弃
+  let draft = SLOTS.map((s) => ({ label: s.label, time: s.time, end: s.end || "" }));
+
+  function renderSlots() {
+    const box = document.getElementById("cfgSlots");
+    box.innerHTML = draft.map((s, i) => `
+      <div class="slot-row">
+        <input class="input" type="text" data-i="${i}" data-f="label"
+               value="${s.label}" aria-label="第 ${i + 1} 个节次的名称" placeholder="第 1–2 节">
+        <input class="input t" type="text" data-i="${i}" data-f="time"
+               value="${s.time}" aria-label="第 ${i + 1} 个节次的开始时间" placeholder="08:00">
+        <input class="input t" type="text" data-i="${i}" data-f="end"
+               value="${s.end}" aria-label="第 ${i + 1} 个节次的结束时间" placeholder="09:40">
+        <button class="slot-del" type="button" data-del="${i}"
+                aria-label="删除${s.label}">✕</button>
+      </div>`).join("");
+  }
+
+  const readDraft = () => {
+    document.querySelectorAll("#cfgSlots .slot-row").forEach((row, i) => {
+      if (!draft[i]) return;
+      ["label", "time", "end"].forEach((f) => {
+        const el = row.querySelector(`[data-f="${f}"]`);
+        if (el) draft[i][f] = (el.value || "").trim();
+      });
+    });
+  };
+
+  // 删/加走事件委托（行是动态渲染的）
+  document.getElementById("cfgSlots").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-del]");
+    if (!btn) return;
+    readDraft();
+    draft.splice(Number(btn.dataset.del), 1);
+    renderSlots();
+  });
+
+  document.getElementById("cfgAddSlot").addEventListener("click", () => {
+    readDraft();
+    const n = draft.length + 1;
+    draft.push({ label: `第 ${n} 节`, time: "", end: "" });
+    renderSlots();
+  });
+
+  document.getElementById("cfgSave").addEventListener("click", () => {
+    readDraft();
+    const err = document.getElementById("cfgError");
+    const kept = draft.filter((s) => s.label);
+    if (!kept.length) {
+      err.textContent = "至少要保留一个节次。";
+      err.hidden = false;
+      return;
+    }
+    const n = Math.floor(Number(document.getElementById("cfgWeekNo").value));
+    if (!Number.isFinite(n) || n < 1 || n > 30) {
+      err.textContent = "教学周请填 1–30 之间的数字。";
+      err.hidden = false;
+      return;
+    }
+    err.hidden = true;
+    // 节次数变化时按「保留前 N 行」重排，多余的格子丢掉（提示里已说明）
+    const week = kept.map((_, r) => DAYS.map((__, c) => (WEEK[r] && WEEK[r][c]) || null));
+    setState({ weekNo: n, slots: kept, days: DAYS, week }, "本机设置");
+    closePageModal();
+  });
+
+  document.getElementById("cfgReset").addEventListener("click", () => {
+    setState(demoState(), "预置课表");
+    closePageModal();
+  });
+
+  renderSlots();
+}
+
+/* ---------------- 接上两个入口 ---------------- */
+$("#importBtn").addEventListener("click", openImport);
+$("#configBtn").addEventListener("click", openConfig);
+
+/* 启动：先读本机保存的课表，没有就用预置课表 */
+{
+  const saved = LS.get(SCHEDULE_KEY, null);
+  setState(saved, saved ? "本机保存" : "预置课表");
+}
+
+/* 高亮是按「当前时间」算的，所以时间往前走要跟着刷新：
+   · 切回标签页 / 窗口重新聚焦时立刻重算（最常见的情形）
+   · 页面长时间开着，每分钟兜底重算一次（不可见时跳过，不白烧 CPU） */
+function refreshFocus() {
+  if (document.visibilityState === "hidden") return;
+  renderWeek();
+}
+document.addEventListener("visibilitychange", refreshFocus);
+window.addEventListener("focus", refreshFocus);
+setInterval(refreshFocus, 60 * 1000);
+
+/* ============================================================
+   待办事项
+   ------------------------------------------------------------
+   持久化在 localStorage 的 st_todos（形如 [{id,title,due,tag,done}]）。
+   「添加事项」走 #todoAddBtn → 弹窗；每条右侧有删除按钮。
+
+   ⚠️ due 存的是 **YYYY-MM-DD**，不是「今天 18:00」这种人话 ——
+      人话会随日期变旧（存的时候是"明天"，明天再看还是"明天"就错了）。
+      显示文案与**紧急度都从日期现算**，见 dueInfo()。
+   ============================================================ */
+const TODOS_KEY = "st_todos";
+const TODO_TAGS = ["批改", "出题", "备课", "个别辅导", "教务", "其他"];
+const WEEK_CN = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+/** Date → "YYYY-MM-DD"（本地时区，不用 toISOString 以免被 UTC 拽偏一天） */
+function fmtDate(d) {
+  return d.getFullYear() + "-" +
+    String(d.getMonth() + 1).padStart(2, "0") + "-" +
+    String(d.getDate()).padStart(2, "0");
+}
+
+/** 相对今天偏移 n 天的日期串（预置课表用，保证永远落在"今天/明天"） */
+function dayFrom(n) {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return fmtDate(d);
+}
+
+/**
+ * 截止日期 → 显示文案 + 紧急度。
+ * ⚠️ 纯函数：`today` 从参数进来（默认取真实今天），否则测试没法喂固定日期。
+ * 紧急度是**算出来的**，不让用户手选 —— 少一个字段，也不会出现「标了紧急但日期是下周」的矛盾。
+ */
+function dueInfo(dueStr, today) {
+  const s = String(dueStr || "").trim();
+  if (!s) return { text: "未设截止", urgent: "" };
+
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return { text: s, urgent: "" };            // 认不出来就原样显示
+
+  const due = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const base = today ? new Date(today) : new Date();
+  base.setHours(0, 0, 0, 0);
+
+  const days = Math.round((due - base) / 864e5);
+  const md = `${Number(m[2])}-${m[3]}`;
+
+  if (days < 0)  return { text: `已过期 ${md}`, urgent: "urgent" };
+  if (days === 0) return { text: "今天",       urgent: "urgent" };
+  if (days === 1) return { text: "明天",       urgent: "soon" };
+  if (days === 2) return { text: "后天",       urgent: "soon" };
+  if (days <= 6)  return { text: WEEK_CN[due.getDay()], urgent: "soon" };
+  return { text: md, urgent: "" };
+}
+
+/** 预置待办（首次打开 / 本机没记录时用）—— 日期是相对今天算的，永远不过期 */
+function demoTodos() {
+  return [
+    { id: "t1", title: "批改「第 6 章 图」作业（一班 42 份）", due: dayFrom(0), tag: "批改",     done: false },
+    { id: "t2", title: "审核第 7 章 AI 生成的 8 道题并组卷",   due: dayFrom(1), tag: "出题",     done: false },
+    { id: "t3", title: "准备下节课「最短路径」重讲课件",       due: dayFrom(2), tag: "备课",     done: false },
+    { id: "t4", title: "给张同学单独推送补差材料",             due: dayFrom(4), tag: "个别辅导", done: false },
+    { id: "t5", title: "提交本学期期中教学进度表",             due: dayFrom(-3), tag: "教务",    done: true  },
+  ];
+}
+
+/** 规整任意来源的数据，坏条目直接丢掉（存档坏了也不能白屏） */
+function normalizeTodos(list) {
+  if (!Array.isArray(list)) return null;
+  return list
+    .filter((t) => t && typeof t === "object" && String(t.title || "").trim())
+    .map((t, i) => ({
+      id: String(t.id || `t${i + 1}`),
+      title: String(t.title).trim(),
+      due: String(t.due || "").trim(),
+      tag: String(t.tag || "其他").trim(),
+      done: !!t.done,
+    }));
+}
+
+let TODOS = (() => {
+  const saved = normalizeTodos(LS.get(TODOS_KEY, null));
+  return saved || demoTodos();
+})();
+
+function saveTodos() {
+  LS.set(TODOS_KEY, TODOS);
+}
+
+function renderTodos() {
+  const box = $("#todoList");
+
+  if (!TODOS.length) {
+    box.innerHTML = `<li class="todo-empty">还没有待办。点右上角 <b>＋ 添加事项</b> 记一条。</li>`;
+  } else {
+    box.innerHTML = TODOS.map((t) => {
+      const d = dueInfo(t.due);
+      // 已完成的事项不再报警：否则一条做完了的事项会红着「已过期」躺在那儿添堵
+      const uc = t.done ? "" : d.urgent;
+      return `
+    <li class="todo-item" data-done="${t.done ? "1" : "0"}">
+      <button class="todo-check" type="button" role="checkbox"
+              id="chk-${t.id}"
+              aria-checked="${t.done ? "true" : "false"}"
+              aria-label="标记「${t.title}」${t.done ? "未完成" : "已完成"}">✓</button>
+      <div class="todo-body">
+        <div class="todo-title">${t.title}</div>
+        <div class="todo-meta">
+          <span class="due ${uc}">${d.text}</span>
+          <span class="tag tag-primary">${t.tag}</span>
+        </div>
+      </div>
+      <button class="todo-del" type="button" data-del="${t.id}"
+              aria-label="删除「${t.title}」">✕</button>
+    </li>`;
+    }).join("");
+  }
+
+  const left = TODOS.filter((t) => !t.done).length;
+  $("#pendingCount").textContent = left;
+  $("#pendingCount").style.color = left ? "" : "var(--success)";
+}
+
+/* 事件委托：列表是动态渲染的，绑在容器上更稳。
+   勾选与删除共用一个监听，按目标分派。 */
+$("#todoList").addEventListener("click", (e) => {
+  const del = e.target.closest(".todo-del");
+  if (del) {
+    const i = TODOS.findIndex((t) => t.id === del.dataset.del);
+    if (i >= 0) { TODOS.splice(i, 1); saveTodos(); renderTodos(); }
+    return;
+  }
+
+  const btn = e.target.closest(".todo-check");
+  if (!btn) return;
+  const id = btn.id.replace(/^chk-/, "");
+  const item = TODOS.find((t) => t.id === id);
+  if (!item) return;
+  item.done = !item.done;
+  saveTodos();
+  renderTodos();
+});
+
+/* ---------------- 添加事项弹窗 ---------------- */
+function openAddTodo() {
+  const host = pageModalHost();
+  if (!host) return;
+
+  host.innerHTML = `
+    <div class="modal-scrim" data-close="1"></div>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-head">
+        <h3 id="modalTitle">添加事项</h3>
+        <button class="modal-x" type="button" data-close="1" aria-label="关闭">✕</button>
+      </div>
+
+      <form class="modal-body" id="todoForm" novalidate>
+        <div class="field">
+          <label for="dTitle">事项内容 <span class="req">*</span></label>
+          <input class="input" id="dTitle" type="text" autocomplete="off"
+                 placeholder="例如：批改第 7 章作业">
+        </div>
+
+        <div class="modal-row">
+          <div class="field">
+            <label for="dDue">截止日期</label>
+            <input class="input" id="dDue" type="date">
+          </div>
+          <div class="field">
+            <label for="dTag">分类</label>
+            <select class="select" id="dTag">
+              ${TODO_TAGS.map((t) => `<option>${t}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+
+        <p class="modal-hint">
+          <span class="hint-mark" aria-hidden="true">i</span>
+          <span>不填截止日期也能添加。紧急度按日期自动算（今天/已过期标红、
+            本周内标黄），不用手选。</span>
+        </p>
+
+        <p class="login-error" id="todoError" role="alert" hidden></p>
+      </form>
+
+      <div class="modal-foot">
+        <button class="btn" type="button" data-close="1">取消</button>
+        <button class="btn btn-primary" type="button" id="todoSave">添加</button>
+      </div>
+    </div>`;
+
+  host.hidden = false;
+  document.body.classList.add("modal-open");
+
+  host.querySelectorAll("[data-close]").forEach((n) =>
+    n.addEventListener("click", closePageModal));
+  document.addEventListener("keydown", pageModalEsc);
+  setTimeout(() => document.getElementById("dTitle")?.focus?.(), 0);
+
+  const submit = () => {
+    const title = (document.getElementById("dTitle")?.value || "").trim();
+    const err = document.getElementById("todoError");
+    if (!title) {
+      err.textContent = "请先填写事项内容";
+      err.hidden = false;
+      document.getElementById("dTitle")?.focus?.();
+      return;
+    }
+    err.hidden = true;
+    // id 用「已有条数 + 时间戳」拼，避免删删加加后撞号
+    TODOS.push({
+      id: `t${TODOS.length + 1}-${Date.now().toString(36)}`,
+      title,
+      due: (document.getElementById("dDue")?.value || "").trim(),
+      tag: (document.getElementById("dTag")?.value || "其他").trim(),
+      done: false,
+    });
+    saveTodos();
+    renderTodos();
+    closePageModal();
+  };
+
+  document.getElementById("todoSave").addEventListener("click", submit);
+  // 输入框里按回车直接添加（表单默认行为会刷新页面，要拦掉）
+  document.getElementById("todoForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submit();
+  });
+}
+
+$("#todoAddBtn").addEventListener("click", openAddTodo);
+
+renderTodos();
+</script>
+</body>
+</html>

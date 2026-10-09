@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="student">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>实训 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  :root { --font-sans: "Inter", system-ui; }
+
+  /* ---------- 工具条 ---------- */
+  .train-bar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 14px; margin-bottom: 16px;
+  }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    border: 1px solid var(--border); border-radius: 999px; background: transparent;
+    color: var(--muted-foreground); font-family: inherit; font-size: 12.5px;
+    padding: 5px 11px; cursor: pointer; transition: background .14s, color .14s, border-color .14s;
+  }
+  .chip:hover { background: var(--secondary); color: var(--foreground); }
+  .chip.on {
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--primary) 32%, transparent);
+    color: var(--foreground);
+  }
+  .tb-spacer { flex: 1 1 auto; }
+  .tb-meta { font-size: 12.5px; color: var(--muted-foreground); }
+
+  /* ---------- 两栏 ---------- */
+  .train-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; }
+  .train-list { padding: 14px; }
+  .tl-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .tl-head h3 { margin: 0; font-size: 13px; font-weight: 500; }
+  .tl-head span { font-size: 12px; color: var(--muted-foreground); }
+
+  .act-list { display: flex; flex-direction: column; gap: 6px; }
+  .act-item {
+    display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left;
+    border: 1px solid transparent; border-radius: 10px; background: transparent;
+    color: var(--foreground); font-family: inherit; cursor: pointer;
+    padding: 10px 11px; transition: background .14s, border-color .14s;
+  }
+  .act-item:hover { background: var(--secondary); }
+  .act-item.on {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    border-color: color-mix(in srgb, var(--primary) 26%, transparent);
+  }
+  .ai-top { display: flex; align-items: flex-start; gap: 8px; }
+  .ai-title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.45; }
+  .ai-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted-foreground); }
+  .ai-time { font-size: 11.5px; color: var(--muted-foreground); }
+  .list-empty { font-size: 12.5px; line-height: 1.8; color: var(--muted-foreground); }
+
+  /* ---------- 右栏 ---------- */
+  .train-pane { padding: 18px; min-height: 320px; }
+  .pane-empty { font-size: 13px; line-height: 1.9; color: var(--muted-foreground); }
+  .pane-empty p { margin: 0 0 9px; }
+  .pane-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .ph-main { flex: 1 1 320px; min-width: 0; }
+  .pane-title { font-size: 15px; font-weight: 500; line-height: 1.5; }
+  .pane-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; font-size: 12.5px; }
+  .muted { color: var(--muted-foreground); font-size: 12.5px; }
+
+  .blk { margin-bottom: 18px; }
+  .blk-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .blk-head h3 { margin: 0; font-size: 13px; font-weight: 500; }
+  .blk-head .hint { font-size: 12px; color: var(--muted-foreground); }
+  .src-line {
+    font-size: 12.5px; color: var(--muted-foreground); line-height: 1.7;
+    padding: 9px 11px; border-radius: 9px; margin-bottom: 10px;
+    background: color-mix(in srgb, var(--primary) 7%, transparent);
+  }
+  .src-line b { color: var(--foreground); font-weight: 500; }
+
+  /* ---------- 进度条 ---------- */
+  .prog-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .prog-track { flex: 1 1 auto; height: 6px; border-radius: 999px; background: var(--border); overflow: hidden; }
+  .prog-fill { height: 100%; background: var(--success); transition: width .25s; }
+  .prog-label { font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
+
+  /* ---------- 骨架步骤 ---------- */
+  .stage { border: 1px solid var(--border); border-radius: 11px; padding: 12px; margin-bottom: 9px; }
+  .stage.done { border-left: 3px solid var(--success); background: color-mix(in srgb, var(--success) 5%, transparent); }
+  .stage.now { border-left: 3px solid var(--primary); background: color-mix(in srgb, var(--primary) 7%, transparent); }
+  .stage-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  .stage-no {
+    flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; font-variant-numeric: tabular-nums;
+    background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--foreground);
+  }
+  .stage.done .stage-no { background: var(--success); color: #fff; }
+  .stage-title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 500; }
+  .stage-flag { flex: 0 0 auto; font-size: 11.5px; }
+  .stage-flag.done { color: var(--success); }
+  .stage-flag.now { color: var(--primary); }
+  .stage-f { display: block; margin-top: 8px; }
+  .stage-f > span { display: block; font-size: 11.5px; color: var(--muted-foreground); margin-bottom: 4px; }
+  .stage-f .txt { font-size: 13px; line-height: 1.7; }
+  .stage-act { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* ---------- 路线笔记 / 新发现 ---------- */
+  .notes { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .note { border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; }
+  .note .n-top { font-size: 11.5px; color: var(--muted-foreground); margin-bottom: 4px; }
+  .note .n-text { font-size: 12.5px; line-height: 1.7; margin: 0; }
+  .note-form { display: flex; gap: 8px; align-items: flex-start; }
+  .note-form .textarea { flex: 1 1 auto; min-height: 42px; font-size: 12.5px; }
+
+  .findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .finding { border: 1px solid var(--border); border-left-width: 3px; border-radius: 10px; padding: 10px 11px; }
+  .finding.pinned { border-left-color: var(--success); background: color-mix(in srgb, var(--success) 7%, transparent); }
+  .f-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 5px; font-size: 12.5px; }
+  .f-text { margin: 0; font-size: 12.5px; line-height: 1.7; }
+  .find-form { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; }
+  .find-form .textarea { flex: 1 1 auto; min-height: 42px; font-size: 12.5px; }
+
+  .collab { display: flex; gap: 6px; flex-wrap: wrap; }
+  .collab .tag { font-size: 11.5px; }
+
+  /* ---------- 发起弹窗 ---------- */
+  .mk-preview { border: 1px solid var(--border); border-radius: 10px; padding: 11px; margin-top: 4px; }
+  .mk-src { font-size: 12.5px; line-height: 1.7; color: var(--muted-foreground); margin-bottom: 8px; }
+  .mk-src b { color: var(--foreground); font-weight: 500; }
+  .mk-steps { display: flex; flex-direction: column; gap: 6px; }
+  .mk-step { font-size: 12.5px; line-height: 1.6; }
+  .mk-step b { font-weight: 500; }
+  .mk-step span { color: var(--muted-foreground); }
+  .pick-list { display: flex; flex-direction: column; gap: 5px; max-height: 160px; overflow-y: auto; }
+  .pick-list label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; cursor: pointer; }
+  .pick-list input { margin: 0; }
+
+  @media (max-width: 900px) {
+    .train-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<div class="page-wrap">
+  <div class="page" style="padding-top:0">
+    <div class="page-head">
+      <div class="crumb">学习 · 实训</div>
+      <h1>实训</h1>
+      <p>跟着一条「路径」重走一遍人类发现它的过程 —— <b>只给路径，不给答案</b>。老师发布的活动在这里参与，你也可以自己发起一个探究。</p>
+    </div>
+
+    <div class="card train-bar">
+      <div class="chips" id="stFilters"></div>
+      <span class="tb-spacer"></span>
+      <span class="tb-meta" id="stMeta"></span>
+      <button class="btn btn-primary btn-sm" type="button" id="btnNewAct">＋ 发起实训</button>
+    </div>
+
+    <div class="train-grid">
+      <section class="card train-list">
+        <div class="tl-head">
+          <h3>实训</h3>
+          <span id="stCount">—</span>
+        </div>
+        <div class="act-list" id="stList"></div>
+      </section>
+
+      <section class="card train-pane" id="stPane"></section>
+    </div>
+
+    <div class="notice notice-info">
+      <span aria-hidden="true">◎</span>
+      <div>
+        <b>为什么是「不给答案，给路径」</b> —— 课程只会讲到结论，但结论是怎么被创造出来的，恰恰是最能学东西的地方。
+        所以每一步只给「往哪想」的问题、可查的线索、和一件能动手做的事，结论留给你自己走到。<br>
+        <b>诚实说明</b>：纯静态站不能真的联网检索，「检索创造史」这一版固化成了本地路径库（命不命中都会如实标注）。
+        协作者与新发现是<b>本机浏览器内</b>的模拟 —— 换一台机器就查不到，正式版由服务端承载。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 内容页自己的弹窗宿主（壳的 #modalHost 在 iframe 里取不到） -->
+<div id="modalHost" hidden></div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function me() { return (typeof currentUserKey === "function") ? currentUserKey() : ""; }
+  function myName() { return (typeof accountDisplayName === "function") ? accountDisplayName(me()) : "我"; }
+
+  /* ---------------- 轻提示（样式在 design.css 的 #flash）---------------- */
+  var flashTimer = 0;
+  function flash(msg, tone) {
+    var box = $("flash");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "flash";
+      document.body.appendChild(box);
+    }
+    box.className = tone || "";
+    box.textContent = msg;
+    box.hidden = false;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(function () { box.hidden = true; }, 2800);
+  }
+
+  var VIEW = { filter: "all", currentId: "" };
+
+  var FILTERS = [
+    { k: "all",  label: "全部"   },
+    { k: "open", label: "进行中" },
+    { k: "mine", label: "我发起的" },
+    { k: "done", label: "已归档" },
+  ];
+
+  /* ---------------- 数据读取 ---------------- */
+  function mine() {
+    return activitiesForStudent(me());
+  }
+
+  /** 学生视角的状态标签：直接走统一状态（学生发起即「进行中」） */
+  function stLabel(a) {
+    return activityStatus(a.status);
+  }
+
+  function courseName(id) {
+    if (!id) return "";
+    if (typeof studentCourseName === "function") {
+      var n = studentCourseName(id);
+      if (n) return n;
+    }
+    if (typeof ENROLLED !== "undefined") {
+      var e = (ENROLLED || []).filter(function (x) { return x.courseId === id; })[0];
+      if (e) return e.name || "";
+    }
+    return "";
+  }
+
+  function visible() {
+    var all = mine();
+    var u = (me() || "").toLowerCase();
+    if (VIEW.filter === "all") return all;
+    if (VIEW.filter === "open") return all.filter(function (a) { return a.status === "open"; });
+    if (VIEW.filter === "done") return all.filter(function (a) { return a.status === "done"; });
+    if (VIEW.filter === "mine") {
+      return all.filter(function (a) {
+        return a.origin === "student" && String(a.createdBy || "").toLowerCase() === u;
+      });
+    }
+    return all;
+  }
+
+  function currentActivity() {
+    var list = visible();
+    if (VIEW.currentId) {
+      var hit = list.filter(function (a) { return a.id === VIEW.currentId; })[0];
+      if (hit) return hit;
+    }
+    return list[0] || null;
+  }
+
+  /* ---------------- 渲染：筛选 / 列表 ---------------- */
+  function renderFilters() {
+    var box = $("stFilters");
+    if (!box) return;
+    var all = mine();
+    box.innerHTML = FILTERS.map(function (f) {
+      var n;
+      if (f.k === "all") n = all.length;
+      else if (f.k === "open") n = all.filter(function (a) { return a.status === "open"; }).length;
+      else if (f.k === "done") n = all.filter(function (a) { return a.status === "done"; }).length;
+      else {
+        var u = (me() || "").toLowerCase();
+        n = all.filter(function (a) { return a.origin === "student" && String(a.createdBy || "").toLowerCase() === u; }).length;
+      }
+      return '<button class="chip' + (VIEW.filter === f.k ? " on" : "") + '" type="button" data-filter="' + f.k +
+        '" aria-pressed="' + (VIEW.filter === f.k) + '">' + f.label + " " + n + "</button>";
+    }).join("");
+  }
+
+  function renderMeta() {
+    var meta = $("stMeta");
+    if (meta) meta.textContent = "共 " + mine().length + " 条实训";
+    var count = $("stCount");
+    if (count) {
+      var list = visible();
+      count.textContent = VIEW.filter === "all" ? list.length + " 条" : list.length + " / " + mine().length + " 条";
+    }
+  }
+
+  function actItemHtml(a) {
+    var st = stLabel(a);
+    var pill = st.tone === "ok" ? "st-ok" : st.tone === "warn" ? "st-warn" : "";
+    var steps = (a.skeleton && a.skeleton.stages) || [];
+    var isMine = a.origin === "student" && String(a.createdBy || "").toLowerCase() === (me() || "").toLowerCase();
+    return (
+      '<button class="act-item' + (a.id === VIEW.currentId ? " on" : "") + '" type="button" data-act-id="' + esc(a.id) +
+        '" aria-current="' + (a.id === VIEW.currentId) + '">' +
+        '<span class="ai-top">' +
+          '<span class="ai-title">' + esc(a.title) + "</span>" +
+          '<span class="status-pill ' + pill + '">' + st.label + "</span>" +
+        "</span>" +
+        '<span class="ai-meta">' +
+          '<span class="tag' + (a.origin === "student" ? " tag-warning" : "") + '">' +
+            (isMine ? "我发起的" : activityOrigin(a.origin)) + "</span>" +
+          "<span>" + steps.length + " 步</span>" +
+          (a.participants.length ? "<span>" + a.participants.length + " 人</span>" : "") +
+        "</span>" +
+        '<span class="ai-time">' + agoText(a.updatedAt, Date.now()) +
+          (courseName(a.courseId) ? " · " + esc(courseName(a.courseId)) : "") + "</span>" +
+      "</button>"
+    );
+  }
+
+  function renderList() {
+    var box = $("stList");
+    if (!box) return;
+    var list = visible();
+    if (!list.length) {
+      box.innerHTML = '<p class="list-empty">' + (VIEW.filter === "all"
+        ? "老师还没发布实训。点右上角「＋ 发起实训」，自己写一句想探究的目标，也能发起一个。"
+        : "这个状态下没有实训。") + "</p>";
+      return;
+    }
+    box.innerHTML = list.map(actItemHtml).join("");
+  }
+
+  /* ---------------- 渲染：右栏（参与视图） ---------------- */
+  function progressInfo(a) {
+    var steps = (a.skeleton && a.skeleton.stages) || [];
+    var p = myProgressOf(a.id);
+    var cur = p ? p.currentStage : "";
+    var idx = cur ? steps.map(function (s) { return s.id; }).indexOf(cur) : -1;
+    var doneCount = (p && p.done) ? steps.length : (idx >= 0 ? idx + 1 : 0);
+    return { p: p, steps: steps, doneCount: doneCount, now: steps[doneCount] || null };
+  }
+
+  function stageHtml(a, s, i, info) {
+    var done = i < info.doneCount;
+    var now = !(info.p && info.p.done) && i === info.doneCount && !done;
+    var isDone = !!(info.p && info.p.done);
+    var locked = a.status === "done";   // 已归档只回顾，不再推进
+    var cls = done ? "done" : (now ? "now" : "");
+    var flag = done ? '<span class="stage-flag done">✓ 已走到</span>'
+      : (now ? '<span class="stage-flag now">● 当前这一步</span>'
+        : (isDone ? '<span class="stage-flag done">✓ 已走到</span>' : ""));
+
+    var actBtns = "";
+    if (!locked) {
+      if (!done) {
+        actBtns = '<div class="stage-act"><button class="btn btn-sm' + (now ? " btn-primary" : "") +
+          '" type="button" data-mark="' + esc(s.id) + '">' + (now ? "我走到这一步了" : "标记：走到这一步") + "</button></div>";
+      }
+    }
+
+    return (
+      '<div class="stage ' + cls + '" data-stage="' + esc(s.id) + '">' +
+        '<div class="stage-head">' +
+          '<span class="stage-no">' + (i + 1) + "</span>" +
+          '<span class="stage-title">' + esc(s.title) + "</span>" + flag +
+        "</div>" +
+        (s.prompt ? '<label class="stage-f"><span>引导问题 · 往哪想</span><div class="txt">' + esc(s.prompt) + "</div></label>" : "") +
+        (s.clue ? '<label class="stage-f"><span>线索 · 去哪儿找</span><div class="txt">' + esc(s.clue) + "</div></label>" : "") +
+        (s.tryIt ? '<label class="stage-f"><span>动手做 · 一件事</span><div class="txt">' + esc(s.tryIt) + "</div></label>" : "") +
+        actBtns +
+      "</div>"
+    );
+  }
+
+  function notesHtml(a) {
+    var p = myProgressOf(a.id);
+    var notes = (p && p.notes) || [];
+    var list = notes.length
+      ? '<ul class="notes">' + notes.slice().reverse().map(function (n) {
+          return '<li class="note"><div class="n-top">' + esc(agoText(n.at, Date.now())) + "</div>" +
+            '<p class="n-text">' + esc(n.text) + "</p></li>";
+        }).join("") + "</ul>"
+      : '<p class="muted">还没记过路线。每走一步，随手记下你的想法 —— 这是「你的路线」，不是标准答案。</p>';
+    return list +
+      '<div class="note-form">' +
+        '<textarea class="textarea" id="noteInput" rows="2" placeholder="例：我先把圆切成 8 个扇形，拼起来有点像长方形…"></textarea>' +
+        '<button class="btn btn-sm" type="button" id="noteAdd">记下</button>' +
+      "</div>";
+  }
+
+  function findingsHtml(a) {
+    var fs = a.findings || [];
+    var list = fs.length
+      ? '<ul class="findings">' + fs.slice().reverse().map(function (f) {
+          return '<li class="finding' + (f.pinned ? " pinned" : "") + '">' +
+            '<div class="f-top"><b>' + esc(f.who) + "</b>" +
+            '<span class="muted">' + esc(agoText(f.at, Date.now())) + "</span>" +
+            (f.pinned ? '<span class="tag tag-success">老师推荐方向</span>' : "") + "</div>" +
+            '<p class="f-text">' + esc(f.text) + "</p></li>";
+        }).join("") + "</ul>"
+      : '<p class="muted">还没有人标记「新发现」。如果你走出了一条和骨架不一样、但走得通的路，把它标出来。</p>';
+    return list;
+  }
+
+  function renderPane() {
+    var pane = $("stPane");
+    if (!pane) return;
+    var a = currentActivity();
+
+    if (!a) {
+      pane.innerHTML =
+        '<div class="pane-empty">' +
+          '<h3 style="margin:0 0 8px;font-size:14px;font-weight:500;color:var(--foreground)">还没有选中实训</h3>' +
+          "<p>左边列表里还没有可参与的实训。</p>" +
+          "<p>点右上角「＋ 发起实训」，写一句你想探究的目标 —— 系统会先给出一条「引导路径」，你沿着它走，也可以试自己的方向。</p>" +
+        "</div>";
+      return;
+    }
+
+    var st = stLabel(a);
+    var pill = st.tone === "ok" ? "st-ok" : st.tone === "warn" ? "st-warn" : "";
+    var info = progressInfo(a);
+    var locked = a.status === "done";
+    var pct = info.steps.length ? Math.round(info.doneCount / info.steps.length * 100) : 0;
+    var isMine = a.origin === "student" && String(a.createdBy || "").toLowerCase() === (me() || "").toLowerCase();
+
+    var head =
+      '<div class="pane-head">' +
+        '<div class="ph-main">' +
+          '<div class="pane-title">' + esc(a.title) + "</div>" +
+          '<div class="pane-meta">' +
+            '<span class="status-pill ' + pill + '">' + st.label + "</span>" +
+            '<span class="tag' + (a.origin === "student" ? " tag-warning" : "") + '">' +
+              (isMine ? "我发起的" : activityOrigin(a.origin)) + "</span>" +
+            (courseName(a.courseId) ? '<span class="muted">' + esc(courseName(a.courseId)) + "</span>" : "") +
+            '<span class="muted">更新于 ' + esc(agoText(a.updatedAt, Date.now())) + "</span>" +
+          "</div>" +
+        "</div>" +
+      "</div>";
+
+    var goal = a.goal
+      ? '<div class="blk"><div class="blk-head"><h3>我们要探究什么</h3></div>' +
+        '<p style="margin:0;font-size:13px;line-height:1.7">' + esc(a.goal) + "</p></div>"
+      : "";
+
+    // 骨架 + 进度
+    var skel =
+      '<div class="blk">' +
+        '<div class="blk-head"><h3>引导路径 · 共 ' + info.steps.length + " 步</h3>" +
+          '<span class="hint">只给路径 —— 结论留给你自己走到</span></div>' +
+        '<div class="src-line">来源：<b>' + esc(skeletonSourceText(a.skeleton)) + "</b></div>" +
+        '<div class="prog-row"><div class="prog-track"><div class="prog-fill" style="width:' + pct + '%"></div></div>' +
+          '<span class="prog-label">已走 ' + info.doneCount + " / " + info.steps.length + " 步" +
+          (info.p && info.p.done ? " · 已走完" : "") + "</span></div>" +
+        '<div id="stStages">' + info.steps.map(function (s, i) { return stageHtml(a, s, i, info); }).join("") + "</div>" +
+        (info.p && info.p.done && !locked
+          ? '<div style="margin-top:10px"><button class="btn btn-ghost btn-sm" type="button" id="reopen">重新再走一遍</button></div>'
+          : "") +
+      "</div>";
+
+    // 协作对象
+    var collab = "";
+    if (a.participants.length) {
+      collab = '<div class="blk"><div class="blk-head"><h3>一起探究的人</h3>' +
+        '<span class="hint">本机浏览器内模拟的协作</span></div>' +
+        '<div class="collab">' + a.participants.map(function (n) {
+          return '<span class="tag">' + esc(n) + "</span>";
+        }).join("") + "</div></div>";
+    }
+
+    // 我的路线
+    var notes = '<div class="blk"><div class="blk-head"><h3>我的路线</h3>' +
+      '<span class="hint">每一步的想法，都是你自己的探究记录</span></div>' + notesHtml(a) + "</div>";
+
+    // 新发现
+    var finds = '<div class="blk"><div class="blk-head"><h3>新发现 · ' + (a.findings || []).length + " 条</h3>" +
+      '<span class="hint">走通了和别人不一样的路？标出来，老师会看到</span></div>' + findingsHtml(a);
+    if (!locked) {
+      finds += (a.openEnded === false
+        ? '<p class="muted">这个实训要求沿着骨架走完，暂时不开放「试自己的方向」。</p>'
+        : '<div class="find-form">' +
+            '<textarea class="textarea" id="findInput" rows="2" placeholder="我试了一条不一样的路：…"></textarea>' +
+            '<button class="btn btn-sm" type="button" id="findAdd">标记为新发现</button>' +
+          "</div>");
+    }
+    finds += "</div>";
+
+    pane.innerHTML = head + goal + skel + collab + notes + finds;
+  }
+
+  function renderAll() {
+    renderFilters();
+    renderMeta();
+    renderList();
+    renderPane();
+  }
+
+  /* ---------------- 交互：筛选 / 选活动 ---------------- */
+  $("stFilters").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-filter]");
+    if (!b) return;
+    VIEW.filter = b.getAttribute("data-filter");
+    VIEW.currentId = "";
+    renderAll();
+  });
+
+  $("stList").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-act-id]");
+    if (!b) return;
+    VIEW.currentId = b.getAttribute("data-act-id");
+    renderAll();
+  });
+
+  /* ---------------- 交互：右栏（推进 / 笔记 / 新发现） ---------------- */
+  $("stPane").addEventListener("click", function (e) {
+    var a = currentActivity();
+    if (!a) return;
+
+    // 走到某一步
+    var mark = e.target.closest("[data-mark]");
+    if (mark) {
+      markStageDone(a.id, mark.getAttribute("data-mark"), false);
+      flash("已记录进度", "ok");
+      renderAll();
+      return;
+    }
+
+    // 重新走一遍
+    if (e.target.closest("#reopen")) {
+      markStageDone(a.id, "", false);
+      flash("已重置，从头再走一遍", "ok");
+      renderAll();
+      return;
+    }
+
+    // 记笔记
+    if (e.target.closest("#noteAdd")) {
+      var ni = $("noteInput");
+      var r = addRouteNote(a.id, ni ? ni.value : "");
+      if (!r.ok) { flash(r.error, "bad"); return; }
+      if (ni) ni.value = "";
+      flash("已记下", "ok");
+      renderAll();
+      return;
+    }
+
+    // 标记新发现
+    if (e.target.closest("#findAdd")) {
+      var fi = $("findInput");
+      var r2 = addMyFinding(a.id, fi ? fi.value : "", myName());
+      if (!r2.ok) { flash(r2.error, "bad"); return; }
+      if (fi) fi.value = "";
+      flash("已标记为新发现 —— 老师会看到", "ok");
+      renderAll();
+    }
+  });
+
+  /* ============================================================
+     发起实训（内容页弹窗）—— 灵感 02：发起权不只属于教师
+     ------------------------------------------------------------
+     学生写一句话目标 → 实时预览「引导路径」→ 选协作者 → 发起（**直接开启**，不等老师确认）。
+     数据层 createStudentActivity()：写学生桶 + 同步本机教师桶。
+     ============================================================ */
+
+  function courseOptionsHtml() {
+    var list = (typeof ENROLLED !== "undefined") ? (ENROLLED || []) : [];
+    if (!list.length) return '<option value="">（还没加入课堂）</option>';
+    return '<option value="">不关联课程</option>' + list.map(function (e) {
+      return '<option value="' + esc(e.courseId) + '">' + esc(e.name || e.courseId) + "</option>";
+    }).join("");
+  }
+
+  /** 协作者候选：本机同学（排除自己）+ 本机老师 */
+  function collaboratorOptions() {
+    var u = (me() || "").toLowerCase();
+    var rows = [];
+    var students = (typeof localStudentAccounts === "function") ? localStudentAccounts() : [];
+    var teachers = (typeof localTeacherAccounts === "function") ? localTeacherAccounts() : [];
+    students.forEach(function (s) {
+      if (s.key.toLowerCase() === u) return;
+      rows.push({ key: s.key, label: s.name + "（同学）" });
+    });
+    teachers.forEach(function (t) {
+      rows.push({ key: t.key, label: t.name + "（老师）" });
+    });
+    return rows;
+  }
+
+  function renderPreview() {
+    var goal = ($("mkGoal").value || "").trim();
+    var box = $("mkSrc");
+    var steps = $("mkStages");
+    if (!box || !steps) return;
+    if (!goal) {
+      box.innerHTML = "在下面写一句目标 —— 这里会立刻给出<b>引导路径</b>的样子（只给路径，不给答案）。";
+      steps.innerHTML = "";
+      return;
+    }
+    var skel = draftSkeleton(goal);
+    box.innerHTML = "来源：<b>" + esc(skeletonSourceText(skel)) + "</b>" +
+      (skel.source === "generic" ? "<br>换个说法试试（带上课程里的具体名词）：圆面积 / 勾股定理 / 瞬时变化" : "");
+    steps.innerHTML = skel.stages.map(function (s, i) {
+      return '<div class="mk-step"><b>' + (i + 1) + ". " + esc(s.title) + "</b><br>" +
+        "<span>" + esc(s.prompt) + "</span></div>";
+    }).join("");
+  }
+
+  function closeNewAct() { closePageModal(); }
+
+  function openNewAct() {
+    var host = pageModalHost();
+    var collabs = collaboratorOptions();
+    host.innerHTML =
+      '<div class="modal-scrim" data-close="1"></div>' +
+      '<div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="mkTitle">' +
+        '<div class="modal-head">' +
+          '<h3 id="mkTitle">发起实训</h3>' +
+          '<button class="modal-x" type="button" data-close="1" aria-label="关闭">✕</button>' +
+        "</div>" +
+        '<div class="modal-body">' +
+          '<div class="field">' +
+            '<label for="mkGoal">一句话目标 <span class="req">*</span></label>' +
+            '<textarea class="textarea" id="mkGoal" rows="3" placeholder="例：既然有快排了，为什么还要学冒泡、归并？"></textarea>' +
+          "</div>" +
+          '<div class="field">' +
+            '<label for="mkCourse">关联课程</label>' +
+            '<select class="input" id="mkCourse">' + courseOptionsHtml() + "</select>" +
+          "</div>" +
+          (collabs.length
+            ? '<div class="field">' +
+                "<label>拉上谁一起（可选）</label>" +
+                '<div class="pick-list">' + collabs.map(function (c) {
+                  return '<label><input type="checkbox" value="' + esc(c.key) + '">' + esc(c.label) + "</label>";
+                }).join("") + "</div>" +
+              "</div>"
+            : "") +
+          '<div class="mk-preview">' +
+            '<div class="mk-src" id="mkSrc"></div>' +
+            '<div class="mk-steps" id="mkStages"></div>' +
+          "</div>" +
+          '<p class="login-error" id="mkErr" role="alert" hidden></p>' +
+        "</div>" +
+        '<div class="modal-foot">' +
+          '<button class="btn" type="button" data-close="1">取消</button>' +
+          '<button class="btn btn-primary" type="button" id="mkCreate">发起实训</button>' +
+        "</div>" +
+      "</div>";
+
+    host.hidden = false;
+    document.body.classList.add("modal-open");
+    host.querySelectorAll("[data-close]").forEach(function (n) { n.addEventListener("click", closeNewAct); });
+    document.addEventListener("keydown", pageModalEsc);
+
+    $("mkGoal").addEventListener("input", renderPreview);
+    renderPreview();
+    setTimeout(function () { var g = $("mkGoal"); if (g && g.focus) g.focus(); }, 0);
+
+    $("mkCreate").addEventListener("click", function () {
+      var goal = ($("mkGoal").value || "").trim();
+      var err = $("mkErr");
+
+      var picked = [];
+      var names = [];
+      var checked = host.querySelectorAll(".pick-list input:checked");
+      Array.prototype.forEach.call(checked, function (c) {
+        var key = c.value;
+        picked.push(key);
+        names.push((typeof accountDisplayName === "function") ? accountDisplayName(key) : key.split(":")[1]);
+      });
+
+      var r = createStudentActivity({
+        goal: goal,
+        courseId: $("mkCourse").value,
+        participants: names.filter(function (n, i) { return n && names.indexOf(n) === i; }),
+      });
+      if (!r.ok) {
+        err.textContent = r.error;
+        err.hidden = false;
+        var g2 = $("mkGoal"); if (g2 && g2.focus) g2.focus();
+        return;
+      }
+      err.hidden = true;
+      closeNewAct();
+      VIEW.filter = "mine";
+      VIEW.currentId = r.activity.id;
+      renderAll();
+      flash("已发起，现在就能参与", "ok");
+    });
+  }
+
+  $("btnNewAct").addEventListener("click", openNewAct);
+
+  /* ---------------- 起手 ---------------- */
+  renderAll();
+})();
+</script>
+</body>
+</html>

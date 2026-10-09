@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="teacher">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>课程成员 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  :root { --font-sans: "Inter", system-ui; }
+
+  .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .card-head h3 { margin: 0; font-size: 14px; font-weight: 500; }
+  .muted-note { font-size: 12.5px; line-height: 1.8; color: var(--muted-foreground); margin: 0; }
+
+  /* 名单里的姓名：做成链接的样子，但语义是按钮（点开个人详情） */
+  .link-btn {
+    border: 0; background: transparent; padding: 0; cursor: pointer;
+    color: var(--primary); font-family: inherit; font-size: 13px; font-weight: 500; text-align: left;
+  }
+  .link-btn:hover { text-decoration: underline; }
+
+  /* 详情弹窗里的字段表 */
+  .kv { margin: 0; display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px 12px; font-size: 13px; }
+  .kv dt { color: var(--muted-foreground); font-size: 12.5px; }
+  .kv dd { margin: 0; line-height: 1.7; word-break: break-word; }
+
+  .miss-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .miss-list li { font-size: 13px; display: flex; align-items: baseline; gap: 8px; }
+  .miss-list .acct { font-size: 12.5px; color: var(--muted-foreground); }
+
+  .class-facts { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 12px; }
+  .class-facts div { display: flex; align-items: baseline; gap: 5px; font-size: 13px; }
+  .class-facts span { color: var(--muted-foreground); font-size: 12.5px; }
+  .class-facts b { font-weight: 500; }
+
+  /* ---------- 详情弹窗：他在「我的学情」看到的东西（紧凑版） ---------- */
+  .stu-section { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 4px; }
+  .stu-section > h4 {
+    margin: 0 0 10px; font-size: 13px; font-weight: 500;
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  }
+  .stu-section > h4 span { font-size: 11.5px; color: var(--muted-foreground); font-weight: 400; }
+  .stu-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+  .stu-stat { background: var(--secondary); border-radius: 10px; padding: 10px 11px; }
+  .stu-stat .k { font-size: 11.5px; color: var(--muted-foreground); margin-bottom: 5px; }
+  .stu-stat .v { font-size: 19px; font-weight: 500; letter-spacing: -.01em; }
+  .stu-stat .v small { font-size: 11.5px; font-weight: 400; color: var(--muted-foreground); }
+
+  /* 近 14 天迷你柱 */
+  .stu-days { display: flex; align-items: flex-end; gap: 3px; height: 62px; }
+  .stu-day { flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; background: var(--muted); border-radius: 3px; }
+  .stu-day i { display: block; width: 100%; background: var(--primary); border-radius: 3px; min-height: 0; }
+  .stu-day.today i { background: var(--success); }
+  .stu-days-x { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted-foreground); margin-top: 5px; }
+
+  .stu-bar { margin-bottom: 10px; }
+  .stu-bar:last-child { margin-bottom: 0; }
+  .stu-bar-head { display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 5px; }
+  .stu-bar-track { height: 7px; border-radius: 4px; background: var(--muted); overflow: hidden; }
+  .stu-bar-fill { height: 100%; border-radius: 4px; background: var(--primary); }
+  .stu-bar-fill.ok { background: var(--success); }
+
+  .stu-tl { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
+  .stu-tl li { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+  .stu-tl li:last-child { border-bottom: 0; }
+  .stu-tl .t { flex: 0 0 62px; color: var(--muted-foreground); font-size: 11.5px; }
+  .stu-tl .k { flex: 0 0 auto; color: var(--primary); }
+  .stu-empty {
+    font-size: 12.5px; line-height: 1.8; color: var(--muted-foreground);
+    background: var(--secondary); border-radius: 10px; padding: 12px 13px;
+  }
+  @media (max-width: 560px) { .stu-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+</style>
+</head>
+<body>
+
+<div class="page-wrap">
+  <div class="page" style="padding-top:0">
+    <div class="page-head">
+      <div class="crumb" id="crumbText">课程成员</div>
+      <h1 id="pageTitle">课程成员</h1>
+      <p id="pageSub">谁加入了这门课 —— 全部来自本机的真实记录</p>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="k">在课学生</div>
+        <div class="v"><span id="stIn">—</span><small> 人</small></div>
+      </div>
+      <div class="stat-card">
+        <div class="k">本机学生账号</div>
+        <div class="v"><span id="stTotal">—</span><small> 个</small></div>
+      </div>
+      <div class="stat-card">
+        <div class="k">还没加入本课</div>
+        <div class="v" id="stMissing">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="k">最近加入</div>
+        <div class="v" style="font-size:17px" id="stLast">—</div>
+      </div>
+    </div>
+
+    <section class="card card-raised" style="padding:20px;margin-bottom:20px">
+      <div class="card-head">
+        <h3 id="rosterTitle">在课学生</h3>
+        <span class="muted-note" id="rosterCount">—</span>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data">
+          <caption class="sr-only">本机已加入这门课的学生名单</caption>
+          <thead>
+            <tr>
+              <th scope="col">学生</th>
+              <th scope="col">账号</th>
+              <th scope="col">加入时间</th>
+              <th scope="col">加入用的邀请码</th>
+              <th scope="col">近期活跃</th>
+              <th scope="col">操作</th>
+            </tr>
+          </thead>
+          <tbody id="stuRows"></tbody>
+        </table>
+      </div>
+
+      <p class="muted-note" id="rosterNote" style="margin-top:12px"></p>
+    </section>
+
+    <section class="card card-raised" id="inviteCard" style="padding:20px;margin-bottom:20px">
+      <h3 style="margin:0 0 4px;font-size:14px;font-weight:500">课堂邀请码</h3>
+      <p class="muted-note" style="margin-bottom:6px">
+        把码发给同学 —— 他们在学生端「我的课程 ＋」里输入，就能加入这门课堂。
+      </p>
+      <p class="join-code" id="courseCode">—</p>
+      <div id="missingBox"></div>
+    </section>
+
+    <section class="card card-raised" id="classCard" hidden style="padding:20px">
+      <h3 style="margin:0 0 10px;font-size:14px;font-weight:500">班级信息</h3>
+      <div class="class-facts" id="classFacts"></div>
+      <p class="muted-note" id="classNote"></p>
+    </section>
+  </div>
+</div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+/* ============================================================
+   课程成员（教师端）—— 第 33 轮重写
+   ------------------------------------------------------------
+   用户原话：
+     「不要假数据了，要真的看谁在课程里列出来」+「点学生姓名看详细」
+
+   🔴 这一页**不再有任何编造的数字**。改之前它长这样：
+       · 6 个写死的"学生"（李同学 90% 70% 95%…） + "其余 42 名同学（平均掌握度 72%）"
+       · 拿班级 id 伪随机派生的平均分 / 提交率 / 需关注人数 / 已完成作业
+       · 底部一块数据来源的免责说明
+       —— 前三样按用户要求删干净，第四块也整块去掉（用户要求）。
+
+   现在页面上每个数字都能追到来源：
+       · 在课学生   ← enrolledStudentsOf(courseId)
+                      （本机账号库里 role=student 的账号 × 他们自己的选课桶）
+       · 本机学生账号 ← localStudentAccounts()
+       · 还没加入本课 ← studentsNotInCourse(courseId)
+       · 最近加入   ← lastEnrollAt(courseId)
+       · 邀请码     ← joinCodeOf(课程)（与教师端「⋯→查看邀请码」、学生端输入的是同一个）
+   查不到就是空状态，**不编造名单**；成绩 / 掌握度 / 作业提交率没有真实来源 →
+   干脆不显示（详情弹窗里如实说明，而不是编一个数填上）。
+
+   ⚠️ 口径：这些都是**本机浏览器内**的记录（别的机器上的学生查不到）。
+      正式版由服务端提供选课与学习数据。页面上写明了，答辩照这个讲。
+
+   `?cls=` 视角（从「班级管理」进来）保留：班级在册名单需要教务系统，
+   所以这里只显示"这个班关联的课程、本机谁真在课里"，不再按班级编造人数与成绩。
+   ============================================================ */
+
+const QUERY = {
+  course: (location.search.match(/[?&]course=([^&]+)/) || [])[1],
+  cls: (location.search.match(/[?&]cls=([^&]+)/) || [])[1],
+};
+
+/** 从「班级管理」进来的那个班（非法值 → null，安全回落） */
+const PICK_CLASS = (QUERY.cls && typeof CLASSES !== "undefined")
+  ? (CLASSES.find((c) => c.id === decodeURIComponent(QUERY.cls)) || null) : null;
+const CLASS_ASKED = !!QUERY.cls;
+
+/** 当前课程：?course= 优先；?cls= 时取该班关联的课程（按课程名匹配）；否则第一门课 */
+function pickCourse() {
+  if (QUERY.course) {
+    const id = decodeURIComponent(QUERY.course);
+    const c = (COURSES || []).find((x) => x.id === id);
+    if (c) return c;
+  }
+  if (PICK_CLASS && PICK_CLASS.course) {
+    const byName = (COURSES || []).find((x) => x.name === PICK_CLASS.course);
+    if (byName) return byName;
+  }
+  return (COURSES || [])[0] || null;
+}
+const COURSE = pickCourse();
+
+/* ---------------- 时间显示 ---------------- */
+function two(n) { return (n < 10 ? "0" : "") + n; }
+function fmtTime(at) {
+  const t = Number(at) || 0;
+  if (!t) return "未记录";
+  const d = new Date(t);
+  return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate()) +
+    " " + two(d.getHours()) + ":" + two(d.getMinutes());
+}
+
+/* ---------------- 渲染 ---------------- */
+
+function renderHead() {
+  const crumb = $("#crumbText");
+  const title = $("#pageTitle");
+  const sub = $("#pageSub");
+
+  if (CLASS_ASKED && PICK_CLASS) {
+    crumb.textContent = PICK_CLASS.label + " · " + PICK_CLASS.major + " · " + PICK_CLASS.grade;
+    title.textContent = "课程成员";
+    sub.textContent = COURSE
+      ? "这个班关联「" + COURSE.name + "」—— 下面列的是真实加入了这门课的本机学生"
+      : "这个班关联的课程在本机不存在（可能还没建课）—— 先去「我的课程」把课建起来";
+    return;
+  }
+  if (COURSE) {
+    crumb.textContent = COURSE.name + (COURSE.code ? " · " + COURSE.code : "") +
+      (COURSE.term ? " · " + COURSE.term : "");
+    title.textContent = "课程成员";
+    sub.textContent = "谁加入了这门课 —— 数据来自本机的学生账号与他们的选课记录";
+  } else {
+    crumb.textContent = "还没有课程";
+    title.textContent = "课程成员";
+    sub.textContent = "本机还没有任何课程 —— 先去左侧「我的课程 ＋」建一门课";
+  }
+}
+
+function renderStats(students, all, missing) {
+  $("#stIn").textContent = String(students.length);
+  $("#stTotal").textContent = String(all.length);
+  $("#stMissing").textContent = String(missing.length);
+  const last = COURSE ? lastEnrollAt(COURSE.id) : 0;
+  // ⚠️ 别写成"有 1 个在课学生，最近加入却是『还没有人加入』"——自相矛盾。
+  //    种子选课（预置账号的预置记录）本来就没有时间戳 → 如实说「时间未记录」。
+  $("#stLast").textContent = last ? agoText(last, Date.now())
+    : (students.length ? "时间未记录" : (all.length ? "还没有人加入" : "—"));
+}
+
+function renderRoster(students) {
+  const rows = $("#stuRows");
+  const note = $("#rosterNote");
+  const count = $("#rosterCount");
+
+  if (!COURSE) {
+    count.textContent = "—";
+    rows.innerHTML = `<tr><td colspan="6" class="muted-note">还没有课程可选。</td></tr>`;
+    note.textContent = "";
+    return;
+  }
+
+  count.textContent = "共 " + students.length + " 人";
+  note.textContent =
+    "本页只列本机能查到的真实记录：本机注册过的学生账号 × 他们自己的选课记录。" +
+    "「近期活跃」读的是该学生自己的行为日志（与他自己打开「我的学情」看到的是同一份）；" +
+    "点姓名能看他在「我的学情」里看到的内容。" +
+    "成绩 / 掌握度 / 作业提交率需要服务端与多用户数据，本版没有真实来源，因此不显示。";
+
+  if (!students.length) {
+    rows.innerHTML = `<tr><td colspan="6" class="muted-note">` +
+      "本机还没有学生加入这门课 —— 把下面的邀请码发给同学，" +
+      "他们在学生端「我的课程 ＋」里输入就能进来。</td></tr>";
+    return;
+  }
+
+  rows.innerHTML = students.map((s) => {
+      // 「近期活跃」= 该学生自己的行为日志里近 7 天的条数 ——
+      // 与他打开「我的学情」看到的**是同一份记录**（behaviorOf 读他自己那个桶）
+      // ⚠️ 按**本课**筛（behaviorInCourse）—— 与学生自己打开本课学情看到的是同一个口径
+      const bs = behaviorSummary(
+        behaviorInCourse(behaviorOf(s.key), COURSE && COURSE.id), Date.now());
+      const act = bs.total
+        ? '<span class="mini-num">' + bs.week + " 次</span>" +
+          ' <span class="muted-note">（' + (bs.lastAt ? escHtml(agoText(bs.lastAt, Date.now())) : "—") + "）</span>"
+        : '<span class="muted-note">还没有记录</span>';
+      return `
+    <tr>
+      <td><button class="link-btn" type="button" data-stu="${escHtml(s.user)}">${escHtml(s.name)}</button></td>
+      <td><span class="mini-num">${escHtml(s.user)}</span></td>
+      <td>${s.at
+        ? escHtml(fmtTime(s.at)) + ' <span class="muted-note">（' + escHtml(agoText(s.at, Date.now())) + "）</span>"
+        : "未记录"}</td>
+      <td>${s.joinCode ? `<span class="mini-num">${escHtml(s.joinCode)}</span>` : "—"}</td>
+      <td>${act}</td>
+      <td><button class="btn btn-ghost btn-sm" type="button" data-stu="${escHtml(s.user)}">查看详情</button></td>
+    </tr>`;
+    }).join("");
+}
+
+function renderInvite(all, missing) {
+  const card = $("#inviteCard");
+  if (!COURSE) { card.hidden = true; return; }
+  card.hidden = false;
+  $("#courseCode").textContent = joinCodeOf(COURSE);
+
+  const box = $("#missingBox");
+  if (!all.length) {
+    box.innerHTML = `<p class="muted-note">` +
+      "本机还没有学生账号。用学生身份在登录页注册一个、再输入上面的邀请码，" +
+      "这里就会出现他的加入记录。</p>";
+    return;
+  }
+  if (!missing.length) {
+    box.innerHTML = `<p class="muted-note">本机的 ` + all.length + " 个学生账号都在这门课里了。</p>";
+    return;
+  }
+  box.innerHTML = `<h4 style="margin:14px 0 0;font-size:13px;font-weight:500">还没进来（本机还有 ` +
+    missing.length + " 个学生账号）</h4><ul class=\"miss-list\">" +
+    missing.map((s) => `<li><span class="who">${escHtml(s.name)}</span>` +
+      `<span class="acct">${escHtml(s.user)}</span></li>`).join("") + `</ul>
+    <p class="muted-note" style="margin-top:10px">把上面的邀请码发给他们即可。</p>`;
+}
+
+function renderClassCard() {
+  const card = $("#classCard");
+  if (!CLASS_ASKED || !PICK_CLASS) { card.hidden = true; return; }
+  card.hidden = false;
+  $("#classFacts").innerHTML =
+    "<div><b>" + escHtml(PICK_CLASS.label) + "</b><span>班级</span></div>" +
+    "<div><b>" + escHtml(PICK_CLASS.major) + "</b><span>专业</span></div>" +
+    "<div><b>" + escHtml(PICK_CLASS.grade) + "</b><span>年级</span></div>" +
+    "<div><b>" + escHtml(PICK_CLASS.course || "—") + "</b><span>关联课程</span></div>";
+  $("#classNote").textContent =
+    "班级在册名单与在册人数需要教务系统 —— 本版没有这个来源，所以不列、也不编。" +
+    "上方「在课学生」是真实的：本机学生账号里，谁加入了这门课谁就会出现。";
+}
+
+function render() {
+  const students = COURSE ? enrolledStudentsOf(COURSE.id) : [];
+  const all = localStudentAccounts();
+  const missing = COURSE ? studentsNotInCourse(COURSE.id) : all;
+  renderHead();
+  renderStats(students, all, missing);
+  renderRoster(students);
+  renderInvite(all, missing);
+  renderClassCard();
+}
+
+/* ============================================================
+   学生详情 = 他在「我的学情」里看到的东西（第 34 轮）
+   ------------------------------------------------------------
+   用户原话：「点开看详细信息就是学生自己看详细信息的那个图表之类的」。
+   🔴 老师看到的和学生自己看到的**必须是同一份记录、同一组聚合函数**：
+      数据源 behaviorOf(学生账号)（读他自己那个 st_behavior 桶），
+      聚合一律走 nav.js 的 behaviorSummary / behaviorByKind / behaviorByTopic /
+      behaviorTraits / behaviorTimeline / behaviorWeakTopics。
+      **两个页面各写一套算法**迟早会算出不同的数，一对质就穿帮。
+   ⚠️ 这个学生在本机没有任何行为记录时，如实写「还没有记录」，
+      不给一个"看起来还不错"的空白图表 —— 编出来的图形比编出来的数字更容易骗人。
+   ============================================================ */
+
+/** 近 N 天迷你柱（同一个学生、同一份日志） */
+function stuDays(list, days, now) {
+  const arr = behaviorByDay(list, days, now);
+  const max = Math.max(1, ...arr.map((d) => d.count));
+  const today = dayStart(now);
+  return `<div class="stu-days">` + arr.map((d) =>
+    `<span class="stu-day${d.at === today ? " today" : ""}" title="${d.label}：${d.count} 次">` +
+    `<i style="height:${d.count ? Math.max(10, Math.round((d.count / max) * 100)) : 0}%"></i></span>`).join("") +
+    `</div><div class="stu-days-x"><span>${arr[0].label}</span><span>14 天</span><span>今天</span></div>`;
+}
+
+/** 一行横条 */
+function stuBar(label, count, max, ok) {
+  return `<div class="stu-bar">
+    <div class="stu-bar-head"><span>${escHtml(label)}</span><span class="mini-num">${count} 次</span></div>
+    <div class="stu-bar-track"><div class="stu-bar-fill${ok ? " ok" : ""}" ` +
+      `style="width:${Math.max(4, Math.round((count / Math.max(1, max)) * 100))}%"></div></div>
+  </div>`;
+}
+
+/** 一整块「他在我的学情里看到的」——没有记录就返回 null（调用方给空状态） */
+function stuBehaviorBlock(roleUser) {
+  // 🔴 与本课口径一致：学生他自己的学情页也是按当前课堂筛的（同一条 behaviorInCourse）
+  const list = behaviorInCourse(behaviorOf(roleUser), COURSE && COURSE.id);
+  const now = Date.now();
+  const sum = behaviorSummary(list, now);
+  if (!sum.total) return null;
+
+  const kinds = behaviorByKind(list);
+  const kindsMax = Math.max(1, ...kinds.map((k) => k.count));
+  const topics = behaviorByTopic(list, 5);
+  const topicsMax = Math.max(1, ...topics.map((t) => t.count));
+  const weak = behaviorWeakTopics(list, 3);
+  const tl = behaviorTimeline(list, 5);
+  const seeds = behaviorSeedCount(list);
+
+  return `
+    <div class="stu-section">
+      <h4>他在「我的学情」里看到的 <span>本课记录 ${sum.total} 条 · 同一份数据</span></h4>
+      <div class="stu-stats">
+        <div class="stu-stat"><div class="k">近 7 天行为</div>
+          <div class="v">${sum.week}<small> 次</small></div></div>
+        <div class="stu-stat"><div class="k">答疑提问</div>
+          <div class="v">${sum.byKind.ask}<small> 次</small></div></div>
+        <div class="stu-stat"><div class="k">课件批注</div>
+          <div class="v">${sum.byKind.note}<small> 条</small></div></div>
+        <div class="stu-stat"><div class="k">连续学习</div>
+          <div class="v">${sum.streak}<small> 天</small></div></div>
+      </div>
+      <p class="muted-note" style="margin-top:10px">最近一次动作：${
+        sum.lastAt ? escHtml(agoText(sum.lastAt, now)) + "（" + escHtml(fmtTime(sum.lastAt)) + "）" : "—"
+      } · 覆盖 ${sum.activeDays} 天${seeds ? " · 其中 " + seeds + " 条为预置示例记录" : ""}</p>
+    </div>
+
+    <div class="stu-section">
+      <h4>近 14 天活跃 <span>柱越高＝那天动作越多</span></h4>
+      ${stuDays(list, 14, now)}
+    </div>
+
+    <div class="stu-section">
+      <h4>做了些什么 <span>按行为类型统计</span></h4>
+      ${kinds.map((k) => stuBar(k.label, k.count, kindsMax, k.kind === "got")).join("")}
+    </div>
+
+    ${topics.length ? `<div class="stu-section">
+      <h4>他在关注什么 <span>提问 / 重讲 / 批注 按话题归类</span></h4>
+      ${topics.map((t) => stuBar(t.topic, t.count, topicsMax, false)).join("")}
+    </div>` : ""}
+
+    <div class="stu-section">
+      <h4>学习方式 <span>行为次数 ÷ 提问次数，不是模型判断</span></h4>
+      ${behaviorTraits(list, now).map((t) => {
+        const cls = t.score >= 50 ? "" : t.score >= 25 ? "mid" : "low";
+        return `<div class="stu-bar">
+          <div class="stu-bar-head"><span>${escHtml(t.name)} · ${t.label}</span>` +
+          `<span class="mini-num">${t.count} / ${t.base} 次</span></div>
+          <div class="stu-bar-track"><div class="stu-bar-fill ${cls}" ` +
+          `style="width:${Math.max(3, t.score)}%"></div></div>
+        </div>`;
+      }).join("")}
+    </div>
+
+    <div class="stu-section">
+      <h4>最近的学习轨迹 <span>就是页面上的真实动作</span></h4>
+      <ul class="stu-tl">
+        ${tl.map((e) => `<li>
+          <span class="t">${escHtml(agoText(e.at, now))}</span>
+          <span class="k">${escHtml(behaviorKind(e.kind).label)}</span>
+          <span>${escHtml(e.label || "（无描述）")}</span>
+        </li>`).join("")}
+      </ul>
+    </div>
+
+    ${weak.length ? `<div class="stu-section">
+      <h4>我要提醒他去补的 <span>反复问（≥2 次）却从没标记「懂了」</span></h4>
+      <ul class="weak-list">
+        ${weak.map((w, i) => `<li><span class="weak-rank">${i + 1}</span>` +
+          `<span class="grow">${escHtml(w.topic)}</span>` +
+          `<span class="rate">问过 ${w.count} 次</span></li>`).join("")}
+      </ul>
+    </div>` : ""}`;
+}
+
+/* ---------------- 点学生姓名 → 个人详情 ---------------- */
+function openStudent(user) {
+  const s = localStudentAccounts().find((x) => x.user === user);
+  if (!s) return;
+  const list = coursesOfStudent(s.key);
+  const mine = COURSE ? list.find((x) => x.courseId === COURSE.id) : null;
+
+  const block = stuBehaviorBlock(s.key);
+
+  const host = pageModalHost();
+  host.innerHTML = `
+    <div class="modal-scrim" data-close="1"></div>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="stuTitle">
+      <div class="modal-head">
+        <h3 id="stuTitle">${escHtml(s.name)}</h3>
+        <button class="modal-x" type="button" data-close="1" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <dl class="kv">
+          <dt>账号</dt><dd>${escHtml(s.user)} · 学生</dd>
+          <dt>注册时间</dt><dd>${escHtml(fmtTime(s.createdAt))}</dd>
+          ${mine ? `<dt>加入本课</dt><dd>${mine.at
+            ? escHtml(fmtTime(mine.at)) + " · " + escHtml(agoText(mine.at, Date.now()))
+            : "时间未记录（这条预置选课没带时间）"}</dd>` : ""}
+          ${mine && mine.joinCode ? `<dt>加入方式</dt><dd>课堂邀请码 <span class="mini-num">${escHtml(mine.joinCode)}</span></dd>` : ""}
+          <dt>加入的课堂</dt>
+          <dd>${list.length
+            ? list.map((c) => escHtml(c.name) + (c.joinCode ? "（" + escHtml(c.joinCode) + "）" : "")).join("<br>")
+            : "还没有加入任何课堂"}</dd>
+        </dl>
+        ${block || `<div class="stu-section">
+          <h4>他在「我的学情」里看到的 <span>本课记录 · 同一份数据</span></h4>
+          <div class="stu-empty">
+            这个学生在本机还没有任何学习行为记录 —— 他每问一句、每写一条批注，
+            这里就会跟着出现。现在空着就是空着，不拿示例数据填。
+          </div>
+        </div>`}
+        <p class="field-hint" style="margin-top:14px">
+          上面每一块都来自本机的真实记录：选课用邀请码加入，行为日志由学生自己的
+          答疑页 / 课件页写入。他在自己那边的「我的学情」看到的是<b>同一份数据</b>。
+          成绩 / 掌握度 / 作业提交率需要服务端与多用户数据，本版没有真实来源，因此不显示。
+        </p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-primary" type="button" data-close="1">知道了</button>
+      </div>
+    </div>`;
+
+  host.hidden = false;
+  document.body.classList.add("modal-open");
+  host.querySelectorAll("[data-close]").forEach((n) => n.addEventListener("click", closePageModal));
+  document.addEventListener("keydown", pageModalEsc);
+}
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-stu]");
+  if (!b) return;
+  openStudent(b.dataset.stu);
+});
+
+/* ---------------- 跨 iframe：课程目录变了要跟着重算 ---------------- */
+document.addEventListener("st:courses-changed", render);
+
+render();
+</script>
+</body>
+</html>

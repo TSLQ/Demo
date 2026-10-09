@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="teacher">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>学生管理 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<!--
+  ============================================================
+  学生管理（教师端）—— 第 48 轮
+  ------------------------------------------------------------
+  以「人」为中心的本机学生总册，与「课程成员」（以课为中心）互补：
+    · 课程成员 class.html  → 这门课里有哪些人
+    · 学生管理 stu.html    → 本机有哪些学生、各人跨课什么样、谁该跟进
+
+  🔴 三条硬规矩
+   1. **数据全部来自真实来源**（账号库 / 选课桶 / 行为桶 / 提交桶），查不到就是空，**不编**。
+   2. 「考勤」在本机**没有**课堂考勤数据（无教务系统、无签到）——
+      所以这里显示的是**学习活跃**（来自 st_behavior），**不是课堂点名**，界面必须写清。
+   3. 每个学生的数据都**跨账号桶读**（行为 `behaviorOf`、提交 `examAnsOfStudent`），
+      与他自己打开「我的学情 / 我的作业」看到的是同一份。
+  ============================================================
+-->
+<style>
+  :root { --font-sans: "Inter", system-ui; }
+
+  .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .card-head h3 { margin: 0; font-size: 14px; font-weight: 500; }
+  .muted-note { font-size: 12.5px; line-height: 1.8; color: var(--muted-foreground); margin: 0; }
+
+  .stu-tools { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .q-search {
+    flex: 1 1 200px; min-width: 160px; font: inherit; font-size: 13px; padding: 6px 10px;
+    border-radius: 8px; border: 1px solid var(--border); background: var(--background); color: var(--foreground);
+  }
+  .q-filter {
+    font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--background); color: var(--foreground);
+  }
+
+  .link-btn {
+    border: 0; background: transparent; padding: 0; cursor: pointer;
+    color: var(--primary); font-family: inherit; font-size: 13px; font-weight: 500; text-align: left;
+  }
+  .link-btn:hover { text-decoration: underline; }
+  .mono { font-variant-numeric: tabular-nums; color: var(--muted-foreground); font-size: 12.5px; }
+
+  /* 近 7 天活跃格子 */
+  .act-days { display: inline-flex; gap: 3px; vertical-align: middle; }
+  .act-days i {
+    display: block; width: 13px; height: 13px; border-radius: 3px;
+    background: var(--muted); border: 1px solid var(--border);
+  }
+  .act-days i.on { background: var(--primary); border-color: var(--primary); }
+  .act-days i.today { outline: 2px solid color-mix(in srgb, var(--success) 55%, transparent); outline-offset: 1px; }
+
+  .kv { margin: 0; display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 8px 12px; font-size: 13px; }
+  .kv dt { color: var(--muted-foreground); font-size: 12.5px; }
+  .kv dd { margin: 0; line-height: 1.7; word-break: break-word; }
+  .stu-section { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
+  .stu-section > h4 { margin: 0 0 10px; font-size: 13px; font-weight: 500; }
+  .stu-empty {
+    font-size: 12.5px; line-height: 1.8; color: var(--muted-foreground);
+    background: var(--secondary); border-radius: 10px; padding: 12px 13px;
+  }
+  .wk-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .wk-list li { font-size: 13px; display: flex; align-items: baseline; gap: 8px; }
+  .wk-list .at { font-size: 12px; color: var(--muted-foreground); margin-left: auto; }
+  .pill { font-size: 11.5px; padding: 1px 8px; border-radius: 20px; background: var(--secondary); color: var(--muted-foreground); }
+  .pill.ok { background: var(--success-surface); color: var(--success); }
+  .pill.warn { background: var(--warning-surface); color: var(--warning); }
+</style>
+</head>
+<body>
+
+<div class="page-wrap">
+  <div class="page" style="padding-top:0">
+    <div class="page-head">
+      <div class="crumb">学生管理</div>
+      <h1>学生管理</h1>
+      <p>以「人」为中心的本机学生总册 —— 学习活跃 + 作业提交，全部来自本机真实记录</p>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="k">本机学生</div>
+        <div class="v"><span id="stTotal">—</span><small> 人</small></div>
+      </div>
+      <div class="stat-card">
+        <div class="k">有学习记录</div>
+        <div class="v"><span id="stActive">—</span><small> 人</small></div>
+      </div>
+      <div class="stat-card">
+        <div class="k">未加入任何课</div>
+        <div class="v" id="stNoCourse">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="k">需跟进</div>
+        <div class="v" id="stFollow">—</div>
+      </div>
+    </div>
+
+    <section class="card card-raised" style="padding:20px;margin-bottom:20px">
+      <div class="card-head">
+        <h3>学生总册</h3>
+        <span class="muted-note" id="rosterCount">—</span>
+      </div>
+
+      <div class="stu-tools">
+        <input id="q" class="q-search" type="search" placeholder="搜姓名 / 账号" aria-label="搜索学生">
+        <select id="filter" class="q-filter" aria-label="筛选">
+          <option value="all">全部</option>
+          <option value="follow">要跟进（久未活跃 / 有作业未交）</option>
+          <option value="nocourse">未加入任何课</option>
+          <option value="silent7">沉默 ≥ 7 天</option>
+        </select>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data">
+          <caption class="sr-only">本机学生总册</caption>
+          <thead>
+            <tr>
+              <th scope="col">学生</th>
+              <th scope="col">账号</th>
+              <th scope="col">所在课堂</th>
+              <th scope="col">近 7 天活跃</th>
+              <th scope="col">连续</th>
+              <th scope="col">最后活跃</th>
+              <th scope="col">作业</th>
+            </tr>
+          </thead>
+          <tbody id="stuRows"></tbody>
+        </table>
+      </div>
+
+      <p class="muted-note" id="rosterNote" style="margin-top:12px"></p>
+    </section>
+  </div>
+</div>
+
+<!-- 内容页自己的弹窗宿主（壳的 #modalHost 在 iframe 里取不到） -->
+<div id="modalHost" hidden></div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+  function stamp(ts) {
+    if (!ts) return "—";
+    if (typeof fmtStamp === "function") return fmtStamp(ts);
+    var d = new Date(ts);
+    return (d.getMonth() + 1) + "月" + d.getDate() + "日";
+  }
+  function dayLabel(at) {
+    var d = new Date(at);
+    return (d.getMonth() + 1) + "/" + d.getDate();
+  }
+
+  var TODAY = dayStart(Date.now());
+
+  /** 近 7 天活跃格子（最后一格是今天，加描边） */
+  function daysHtml(recent) {
+    var last = (recent || []).length - 1;
+    return '<span class="act-days">' + (recent || []).map(function (d, i) {
+      var cls = d.active ? "on" : "";
+      if (i === last) cls += " today";
+      return '<i class="' + cls + '" title="' + esc(dayLabel(d.at)) + "：" + d.count +
+        ' 条行为"></i>';
+    }).join("") + "</span>";
+  }
+
+  function lastText(a) {
+    if (a.silent === -1) return '<span class="muted-note">无记录</span>';
+    if (a.silent === 0) return "今天";
+    if (a.silent === 1) return "昨天";
+    return a.silent + " 天前";
+  }
+
+  /** 需不需要跟进：久未活跃（≥3 天或从无记录）或 有作业未交 */
+  function needsFollow(s) {
+    var idle = (s.active.silent === -1 || s.active.silent >= 3);
+    return idle || (s.doneCount < s.dueCount);
+  }
+
+  function passes(s, mode, kw) {
+    if (kw && (s.name + " " + s.user).toLowerCase().indexOf(kw) < 0) return false;
+    if (mode === "nocourse") return s.courseCount === 0;
+    if (mode === "silent7") return s.active.silent === -1 || s.active.silent >= 7;
+    if (mode === "follow") return needsFollow(s);
+    return true;
+  }
+
+  var ALL = [];
+
+  function render() {
+    ALL = studentOverview(Date.now());
+
+    var withBeh = ALL.filter(function (s) { return s.active.total > 0; }).length;
+    var noCourse = ALL.filter(function (s) { return s.courseCount === 0; }).length;
+    var follow = ALL.filter(needsFollow).length;
+    $("stTotal").textContent = ALL.length;
+    $("stActive").textContent = withBeh;
+    $("stNoCourse").textContent = noCourse + " 人";
+    $("stFollow").textContent = follow + " 人";
+
+    var mode = $("filter").value;
+    var kw = String($("q").value || "").trim().toLowerCase();
+    var list = ALL.filter(function (s) { return passes(s, mode, kw); });
+
+    var body = $("stuRows");
+    body.innerHTML = "";
+    if (!list.length) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = '<td colspan="7" class="muted-note">' +
+        (ALL.length ? "没有符合条件的学生。" : "本机还没有学生账号 —— 学生用邀请码注册进来后，这里就能看到。") +
+        "</td>";
+      body.appendChild(tr);
+    } else {
+      list.forEach(function (s) {
+        var tr = document.createElement("tr");
+        tr.innerHTML =
+          '<td><button class="link-btn" data-open="' + esc(s.key) + '" type="button">' + esc(s.name) + "</button></td>" +
+          '<td class="mono">' + esc(s.user) + "</td>" +
+          "<td>" + (s.courseCount
+            ? esc(s.courses.map(function (c) { return c.name; }).join("、"))
+            : '<span class="muted-note">未加入</span>') + "</td>" +
+          "<td>" + daysHtml(s.active.recent) + "</td>" +
+          "<td>" + (s.active.streak || 0) + " 天</td>" +
+          "<td>" + lastText(s.active) + "</td>" +
+          "<td>" + (s.dueCount
+            ? (s.doneCount === s.dueCount
+              ? '<span class="pill ok">' + s.doneCount + "/" + s.dueCount + "</span>"
+              : '<span class="pill warn">' + s.doneCount + "/" + s.dueCount + "</span>")
+            : "—") + "</td>";
+        body.appendChild(tr);
+      });
+    }
+
+    $("rosterCount").textContent = "显示 " + list.length + " / " + ALL.length + " 人";
+    $("rosterNote").innerHTML =
+      "「学习活跃」读的是每个学生**自己**的行为日志（与他在「我的学情」看到的是同一份）。" +
+      "本机**没有课堂考勤与成绩数据** —— 所以这里不显示出勤率、不显示分数，也不按班级编人数。";
+  }
+
+  /* ---------------- 单人详情（跨课档案） ---------------- */
+
+  function openStudent(key) {
+    var s = null;
+    for (var i = 0; i < ALL.length; i++) if (ALL[i].key === key) s = ALL[i];
+    if (!s) { render(); return; }
+
+    var beh = (typeof behaviorOf === "function") ? behaviorOf(key) : [];
+    var prof = behaviorProfile(beh, Date.now());
+
+    // 作业：把"老师发给他的卷"与"他交过的"对上
+    var doneMap = {};
+    (s.answers || []).forEach(function (a) { doneMap[a.examId] = a; });
+    var papers = (s.due || []).map(function (e) {
+      var a = doneMap[e.id];
+      return {
+        title: e.title || "未命名试卷", courseName: e.courseName || "",
+        done: !!a, at: a && a.submittedAt, got: a && a.objectiveGot,
+        tot: a && a.objectiveTotal, pending: a && a.pending,
+      };
+    }).sort(function (x, y) { return (x.done ? 1 : 0) - (y.done ? 1 : 0) || (y.at || 0) - (x.at || 0); });
+
+    var courseLines = (s.courses || []).length
+      ? '<ul class="wk-list">' + s.courses.map(function (c) {
+          return "<li><b>" + esc(c.name) + "</b>" +
+            (c.joinCode ? '<span class="at">邀请码 ' + esc(c.joinCode) + "</span>" : "") + "</li>";
+        }).join("") + "</ul>"
+      : '<div class="stu-empty">还没加入任何课堂 —— 把某门课的邀请码发给他，他在学生端「我的课程 ＋」输入就能进。</div>';
+
+    var paperLines = papers.length
+      ? '<ul class="wk-list">' + papers.map(function (p) {
+          return "<li>" + (p.done ? '<span class="pill ok">已交</span>' : '<span class="pill warn">未交</span>') +
+            "<b>" + esc(p.title) + "</b>" +
+            (p.done
+              ? '<span class="at">' + esc(stamp(p.at)) + " · 客观题 " + p.got + "/" + p.tot +
+                (p.pending ? "（" + p.pending + " 题待批）" : "") + "</span>"
+              : '<span class="at">' + esc(p.courseName) + "</span>") + "</li>";
+        }).join("") + "</ul>"
+      : '<div class="stu-empty">老师还没有发卷子给他。</div>';
+
+    var knownLine = prof.known.length
+      ? prof.known.map(function (k) { return esc(k.topic) + "（" + k.got + "）"; }).join("、")
+      : "还没有标过「懂了」";
+    var gapLine = prof.gaps.length
+      ? prof.gaps.map(function (g) { return esc(g.topic) + "（问过 " + g.count + " 次）"; }).join("、")
+      : "没有反复卡住的话题";
+
+    var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
+    host.hidden = false;
+    host.className = "modal-host";
+    host.innerHTML =
+      '<div class="modal" role="dialog" aria-modal="true" style="max-width:640px">' +
+        '<div class="modal-head"><b>' + esc(s.name) + " · " + esc(s.user) + "</b></div>" +
+        '<div class="modal-body">' +
+          '<dl class="kv">' +
+            "<dt>账号</dt><dd>" + esc(s.user) + "</dd>" +
+            "<dt>注册时间</dt><dd>" + esc(stamp(s.createdAt)) + "</dd>" +
+            "<dt>所在课堂</dt><dd>" + (s.courseCount ? s.courseCount + " 门" : "未加入") + "</dd>" +
+            "<dt>学习活跃</dt><dd>" +
+              (s.active.total
+                ? "共 " + s.active.total + " 条记录 · 活跃 " + s.active.activeDays + " 天 · 连续 " + s.active.streak +
+                  " 天 · " + (s.active.silent === 0 ? "今天有活动" : s.active.silent === -1 ? "无记录" : "已沉默 " + s.active.silent + " 天")
+                : "还没有学习记录") +
+            "</dd>" +
+            "<dt>近 7 天</dt><dd>" + daysHtml(s.active.recent) + "</dd>" +
+            "<dt>作业</dt><dd>应交 " + s.dueCount + " · 已交 " + s.doneCount + "</dd>" +
+          "</dl>" +
+
+          '<div class="stu-section"><h4>他加入的课堂</h4>' + courseLines + "</div>" +
+          '<div class="stu-section"><h4>作业情况</h4>' + paperLines + "</div>" +
+          '<div class="stu-section"><h4>学习概况（跨课合并）</h4>' +
+            '<p class="muted-note">已经懂的：' + knownLine + "<br>反复卡住的：" + gapLine + "</p></div>" +
+        "</div>" +
+        '<div class="modal-foot"><button class="btn btn-primary" data-mc="ok" type="button">知道了</button></div>' +
+      "</div>";
+    document.body.classList.add("modal-open");
+
+    function close() {
+      host.hidden = true; host.innerHTML = "";
+      document.body.classList.remove("modal-open");
+      host.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    }
+    function onClick(ev) {
+      var b = ev.target.closest ? ev.target.closest("[data-mc]") : null;
+      if (b || ev.target === host) close();
+    }
+    function onKey(ev) { if (ev.key === "Escape") close(); }
+    host.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+  }
+
+  $("stuRows").addEventListener("click", function (ev) {
+    var b = ev.target.closest ? ev.target.closest("[data-open]") : null;
+    if (!b) return;
+    openStudent(b.getAttribute("data-open"));
+  });
+  $("q").addEventListener("input", render);
+  $("filter").addEventListener("change", render);
+
+  render();
+})();
+</script>
+</body>
+</html>

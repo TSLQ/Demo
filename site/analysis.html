@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="student">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>我的学情 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  :root { --font-sans: "Inter", system-ui; }
+  .donut-wrap { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+  .donut { flex: 0 0 auto; }
+  .donut circle { transition: stroke-dasharray .6s ease; }
+  .donut-legend { display: flex; flex-direction: column; gap: 9px; font-size: 13px; }
+  .donut-legend span { display: flex; align-items: center; gap: 8px; }
+  .donut-legend i { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+  .donut-legend b { margin-left: auto; font-weight: 500; color: var(--muted-foreground); }
+  .timeline { list-style: none; margin: 0; padding: 0; }
+  .timeline li {
+    position: relative; padding: 0 0 18px 22px;
+    border-left: 1.5px solid var(--border); font-size: 13px;
+  }
+  .timeline li:last-child { border-left-color: transparent; padding-bottom: 0; }
+  .timeline li::before {
+    content: ""; position: absolute; left: -5.5px; top: 5px;
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--border);
+  }
+  .timeline li.hot::before { background: var(--primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 18%, transparent); }
+  .tl-time { font-size: 11.5px; color: var(--muted-foreground); margin-bottom: 3px; }
+  .tl-kind { font-size: 11.5px; color: var(--muted-foreground); margin-left: 6px; }
+
+  /* 近 14 天活跃：纯 CSS 柱状，每天一列（没有记录的那天是一小截灰底） */
+  .daybars { display: flex; align-items: flex-end; gap: 5px; height: 132px; margin-top: 4px; }
+  .daybar { flex: 1 1 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; min-width: 0; }
+  .daybar-track { width: 100%; height: 100px; display: flex; align-items: flex-end; background: var(--muted); border-radius: 4px; overflow: hidden; }
+  .daybar-fill { width: 100%; background: var(--primary); border-radius: 4px 4px 0 0; min-height: 2px; }
+  .daybar-fill.zero { background: transparent; }
+  .daybar.daybar-today .daybar-fill { background: var(--success); }
+  .daybar-x { font-size: 10px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+
+  .kbar { margin-bottom: 13px; }
+  .kbar-head { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+  .kbar-track { height: 8px; border-radius: 4px; background: var(--muted); overflow: hidden; }
+  .kbar-fill { height: 100%; border-radius: 4px; background: var(--primary); }
+</style>
+</head>
+<body>
+
+
+<div class="page-wrap">
+    <div class="page" style="padding-top:0">
+      <div class="page-head">
+        <div class="crumb" id="crumbText">我的学情</div>
+        <h1>我的学情</h1>
+        <p id="pageSub">从你在本机的提问、批注与阅读行为统计 —— 不是考试分数，而是学习状态的画像</p>
+      </div>
+
+      <div id="emptyBox" hidden>
+        <section class="card card-raised" style="padding:22px">
+          <h3 style="margin:0 0 6px;font-size:15px;font-weight:500">这个课堂还没有你的学习记录</h3>
+          <p style="margin:0 0 14px;font-size:13px;line-height:1.8;color:var(--muted-foreground)">
+            这一页不是一份填好的报告 —— 它统计的是<b>你自己</b>在本机的动作：
+            问过什么、批注了什么、读过哪几段、哪些标了「懂了」。<br>
+            去答疑页问一句，或者去课件页写一条批注，这里立刻就有内容。
+          </p>
+          <a class="btn btn-primary btn-sm" id="goAsk" href="chat.html">去答疑页问一句</a>
+        </section>
+      </div>
+
+      <div id="dataBox" hidden>
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="k">近 7 天行为</div>
+            <div class="v"><span id="stWeek">—</span><small> 次</small></div>
+          </div>
+          <div class="stat-card">
+            <div class="k">答疑提问</div>
+            <div class="v"><span id="stAsk">—</span><small> 次</small></div>
+          </div>
+          <div class="stat-card">
+            <div class="k">课件批注</div>
+            <div class="v"><span id="stNote">—</span><small> 条</small></div>
+          </div>
+          <div class="stat-card">
+            <div class="k">连续学习</div>
+            <div class="v"><span id="stStreak">—</span><small> 天</small></div>
+          </div>
+        </div>
+
+        <div class="chart-grid" style="margin-bottom:20px">
+          <!-- 行为类型分布（真实：日志里每类行为的条数） -->
+          <section class="card card-raised chart-box">
+            <h3>行为类型分布</h3>
+            <p id="kindSub">共 N 条本机记录</p>
+            <div class="donut-wrap">
+              <svg class="donut" id="ring" width="146" height="146" viewBox="0 0 146 146" role="img"
+                   aria-label="行为类型分布环形图"></svg>
+              <div class="donut-legend" id="ringLegend"></div>
+            </div>
+          </section>
+
+          <!-- 近 14 天活跃 -->
+          <section class="card card-raised chart-box">
+            <h3>近 14 天活跃</h3>
+            <p id="daySub">按天统计你的学习动作，今天高亮</p>
+            <div class="daybars" id="days"></div>
+          </section>
+        </div>
+
+        <div class="chart-grid" style="margin-bottom:20px">
+          <!-- 话题分布：提问 / 重讲 / 批注 落在哪些话题上 -->
+          <section class="card card-raised chart-box">
+            <h3>你在关注什么</h3>
+            <p>按话题统计提问、请求重讲与批注（关键词归类，归不上就进「其他」）</p>
+            <div id="topics"></div>
+          </section>
+
+          <!-- 学习方式画像：行为比例，不是模型判断 -->
+          <section class="card card-raised chart-box">
+            <h3>我的学习方式</h3>
+            <p>每一项都是「行为次数 ÷ 提问次数」，原始次数写在下面，可以自己核；
+              比例低只说明这一类比提问少，<b>不等于你不活跃</b></p>
+            <div id="traits"></div>
+          </section>
+        </div>
+
+        <div class="chart-grid" style="margin-bottom:20px">
+          <!-- 学习轨迹 -->
+          <section class="card card-raised chart-box">
+            <h3>最近学习轨迹</h3>
+            <p>按时间倒序 —— 记录的是你在页面上的真实动作</p>
+            <ul class="timeline" id="timeline"></ul>
+          </section>
+
+          <!-- 该补的地方：从行为推出来的 -->
+          <section class="card card-raised chart-box">
+            <h3>我该补的地方</h3>
+            <p>口径：被反复问（提问 + 重讲 ≥ 2 次）却从没标记过「懂了」的话题 —— 不是评分</p>
+            <ul class="weak-list" id="weak"></ul>
+          </section>
+        </div>
+
+        <div class="notice notice-info">
+          <span aria-hidden="true">ℹ</span>
+          <div id="srcNote"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+/* ============================================================
+   我的学情（学生端）—— 第 34 轮重写成**真实统计**
+   ------------------------------------------------------------
+   改之前：整页是写死的（12/16 知识点、9 次答疑、17 条批注、16 个知识点环形图、
+   4 个章节掌握度百分比、4 条风格画像、4 条时间线、3 个薄弱点），
+   底部一块「数据来源」说明还声称"由你在本机的行为聚合而成"—— 其实并没有。
+
+   现在：全部来自 nav.js 的行为日志（`BEHAVIOR`），聚合函数也是那一套
+   （behaviorSummary / behaviorByKind / behaviorByTopic / behaviorTraits /
+   behaviorTimeline / behaviorWeakTopics）。
+   🔴 教师端「课程成员」点学生姓名看到的图表，用的**是同一份数据、同一组函数** ——
+      学生自己看到的和老师看到的必须一致。
+
+   ⚠️ 算不出来的指标直接不出现（比如"停留时长"本版没有可靠测量口径），
+      不拿一个编出来的百分比凑卡片。
+   ============================================================ */
+
+/** 当前课堂：?course= 优先，否则取加入的第一门课 */
+const QUERY_COURSE = decodeURIComponent((location.search.match(/[?&]course=([^&]+)/) || [])[1] || "");
+const CUR_ID = QUERY_COURSE ||
+  ((typeof ENROLLED !== "undefined" && ENROLLED[0]) ? ENROLLED[0].courseId : "");
+const CUR_NAME = (CUR_ID && typeof studentCourseName === "function") ? studentCourseName(CUR_ID) : "";
+
+const ALL = (typeof BEHAVIOR !== "undefined") ? BEHAVIOR : [];
+/** 本页只统计**当前课堂**的记录（别的课堂的数混进来，学生自己也会看不懂） */
+const LIST = behaviorInCourse(ALL, CUR_ID);
+const OTHER = ALL.length - LIST.length;
+const NOW = Date.now();
+
+const RING_COLORS = ["var(--primary)", "var(--success)", "var(--warning)", "var(--info)", "var(--destructive)", "var(--muted-foreground)"];
+
+/* ---------------- 页头 ---------------- */
+(function () {
+  const crumb = $("#crumbText");
+  const sub = $("#pageSub");
+  if (!CUR_ID) {
+    crumb.textContent = "还没有加入课堂";
+    sub.textContent = "点左侧「我的课程」右边的 ＋，输入邀请码就能加入课堂";
+    return;
+  }
+  crumb.textContent = CUR_NAME + " · 我的学情";
+  sub.textContent = "从你在本机对「" + CUR_NAME + "」的提问、批注与阅读行为统计 —— 不是考试分数";
+})();
+
+/** 空状态里那个链接也要带上当前课堂 */
+if (CUR_ID) $("#goAsk").setAttribute("href", "chat.html?course=" + encodeURIComponent(CUR_ID));
+
+/* ---------------- 时间 ---------------- */
+function two(n) { return (n < 10 ? "0" : "") + n; }
+function fmtTime(at) {
+  const t = Number(at) || 0;
+  if (!t) return "未记录";
+  const d = new Date(t);
+  return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate()) +
+    " " + two(d.getHours()) + ":" + two(d.getMinutes());
+}
+
+/* ---------------- 渲染 ---------------- */
+function renderStats(sum) {
+  $("#stWeek").textContent = String(sum.week);
+  $("#stAsk").textContent = String(sum.byKind.ask);
+  $("#stNote").textContent = String(sum.byKind.note);
+  $("#stStreak").textContent = String(sum.streak);
+}
+
+/** 环形图：按各类型占比拼 stroke-dasharray（累加偏移，不用外部库） */
+function renderRing(sum) {
+  const items = behaviorByKind(LIST);
+  const total = sum.total || 1;
+  const R = 58, C = 2 * Math.PI * R;
+  let acc = 0;
+  const arcs = items.map((it, i) => {
+    const frac = it.count / total;
+    const dash = frac * C;
+    const seg = `<circle cx="73" cy="73" r="${R}" fill="none" stroke="${RING_COLORS[i % RING_COLORS.length]}"
+        stroke-width="15" stroke-dasharray="${dash.toFixed(2)} ${(C - dash).toFixed(2)}"
+        stroke-dashoffset="${(-acc * C).toFixed(2)}" transform="rotate(-90 73 73)"/>`;
+    acc += frac;
+    return seg;
+  }).join("");
+  $("#ring").innerHTML =
+    `<circle cx="73" cy="73" r="${R}" fill="none" stroke="var(--muted)" stroke-width="15"/>` + arcs +
+    `<text x="73" y="69" text-anchor="middle" font-size="27" font-weight="500" fill="var(--foreground)">${sum.total}</text>
+     <text x="73" y="88" text-anchor="middle" font-size="11.5" fill="var(--muted-foreground)">条记录</text>`;
+
+  $("#ringLegend").innerHTML = items.map((it, i) =>
+    `<span><i style="background:${RING_COLORS[i % RING_COLORS.length]}"></i>${escapeHtml(it.label)}` +
+    `<b>${it.count} 次 · ${Math.round((it.count / total) * 100)}%</b></span>`).join("");
+  $("#kindSub").textContent = "共 " + sum.total + " 条本机记录，覆盖 " + sum.activeDays + " 天";
+}
+
+function renderDays() {
+  const days = behaviorByDay(LIST, 14, NOW);
+  const max = Math.max(1, ...days.map((d) => d.count));
+  const today = (function () { const d = new Date(NOW); d.setHours(0, 0, 0, 0); return d.getTime(); })();
+  $("#days").innerHTML = days.map((d) =>
+    `<div class="daybar${d.at === today ? " daybar-today" : ""}" title="${d.label}：${d.count} 次">` +
+      `<div class="daybar-track"><div class="daybar-fill${d.count ? "" : " zero"}" ` +
+        `style="height:${d.count ? Math.max(6, Math.round((d.count / max) * 100)) : 0}%"></div></div>` +
+      `<span class="daybar-x">${d.at === today ? "今天" : d.label}</span></div>`).join("");
+  $("#daySub").textContent = "共 " + LIST.length + " 条记录分布在 " +
+    days.filter((d) => d.count).length + " / 14 天里，今天高亮";
+}
+
+function renderTopics() {
+  const items = behaviorByTopic(LIST, 8);
+  if (!items.length) {
+    $("#topics").innerHTML = `<p class="field-hint">还没在这次课堂里提过问题、写过批注 —— 有记录后这里会按话题分堆。</p>`;
+    return;
+  }
+  const max = Math.max(1, ...items.map((t) => t.count));
+  $("#topics").innerHTML = items.map((t) =>
+    `<div class="kbar">
+       <div class="kbar-head"><span>${escapeHtml(t.topic)}</span><span class="mini-num">${t.count} 次</span></div>
+       <div class="kbar-track"><div class="kbar-fill" style="width:${Math.round((t.count / max) * 100)}%"></div></div>
+     </div>`).join("");
+}
+
+function renderTraits(sum) {
+  if (!sum.byKind.ask) {
+    $("#traits").innerHTML = `<p class="field-hint">还没有提问记录 —— 画像以「提问次数」为基准，问一句之后就有。</p>`;
+    return;
+  }
+  $("#traits").innerHTML = behaviorTraits(LIST, NOW).map((t) => {
+    const cls = t.score >= 50 ? "" : t.score >= 25 ? "mid" : "low";
+    return `<div class="trait">
+      <div class="trait-head"><b>${escapeHtml(t.name)}</b><span>${t.label}</span></div>
+      <div class="trait-bar"><div class="trait-fill ${cls}" style="width:${Math.max(2, t.score)}%"></div></div>
+      <div style="font-size:11.5px;color:var(--muted-foreground);margin-top:5px">${t.count} 次 / 提问 ${t.base} 次</div>
+    </div>`;
+  }).join("");
+}
+
+function renderTimeline() {
+  const items = behaviorTimeline(LIST, 8);
+  $("#timeline").innerHTML = items.map((e, i) =>
+    `<li class="${i === 0 ? "hot" : ""}">
+      <div class="tl-time">${escapeHtml(agoText(e.at, NOW))} · ${escapeHtml(fmtTime(e.at))}${
+        e.seed ? " · 预置示例记录" : ""}</div>
+      ${escapeHtml(behaviorKind(e.kind).label)}：${escapeHtml(e.label || "（无描述）")}
+      ${e.topic ? `<span class="tl-kind">#${escapeHtml(e.topic)}</span>` : ""}
+    </li>`).join("");
+}
+
+function renderWeak() {
+  const items = behaviorWeakTopics(LIST, 6);
+  if (!items.length) {
+    $("#weak").innerHTML = `<li><span class="grow field-hint">` +
+      "暂时没有「反复问但一直没标懂了」的话题 —— 有的话会自动出现在这里。</span></li>";
+    return;
+  }
+  $("#weak").innerHTML = items.map((w, i) =>
+    `<li>
+      <span class="weak-rank">${i + 1}</span>
+      <span class="grow">${escapeHtml(w.topic)}</span>
+      <span class="rate">问过 ${w.count} 次</span>
+      <a class="btn btn-sm" href="chat.html${CUR_ID ? "?course=" + encodeURIComponent(CUR_ID) : ""}">去问</a>
+    </li>`).join("");
+}
+
+function renderSource(sum) {
+  const seeds = behaviorSeedCount(LIST);
+  $("#srcNote").innerHTML =
+    "<b>这份数据是怎么来的</b> —— 全部是本机浏览器里记下的行为（提问 / 批注 / 阅读 / 重讲 / 标记懂了），" +
+    "没有上传任何服务器；教师端「课程成员」里点开你，看到的是<b>同一份记录</b>。" +
+    (seeds === sum.total ? " 本页记录<b>全部是预置示例记录</b>（预置账号自带的历史，方便一眼看到形状）。"
+      : seeds ? " 其中 <b>" + seeds + "</b> 条是预置示例记录。" : "") +
+    (OTHER ? " 本机另有 <b>" + OTHER + "</b> 条记录属于其它课堂，不计入本页。" : "") +
+    " 本版<b>不记录停留时长</b>（没有可靠的测量口径），所以任何依赖它的指标都不会出现。";
+}
+
+/* ---------------- 启动 ---------------- */
+if (!LIST.length) {
+  $("#dataBox").hidden = true;
+  $("#emptyBox").hidden = false;
+} else {
+  const sum = behaviorSummary(LIST, NOW);
+  $("#emptyBox").hidden = true;
+  $("#dataBox").hidden = false;
+  renderStats(sum);
+  renderRing(sum);
+  renderDays();
+  renderTopics();
+  renderTraits(sum);
+  renderTimeline();
+  renderWeak();
+  renderSource(sum);
+}
+</script>
+</body>
+</html>

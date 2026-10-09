@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-role="both">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设置 — 智课助教</title>
+<link rel="stylesheet" href="assets/design.css">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  :root { --font-sans: "Inter", system-ui; }
+
+  .settings-grid {
+    display: grid;
+    grid-template-columns: 210px minmax(0, 1fr);
+    gap: 24px; align-items: start;
+  }
+
+  /* 设置内锚点导航 */
+  .set-toc { position: sticky; top: 74px; }
+  .set-toc h4 {
+    margin: 0 0 9px; padding: 0 9px;
+    font-size: 11px; font-weight: 500; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted-foreground);
+  }
+  .set-toc a {
+    display: block; padding: 7px 10px; border-radius: 8px;
+    font-size: 13.5px; color: var(--foreground); text-decoration: none;
+    border: 1px solid transparent; transition: background .14s;
+  }
+  .set-toc a:hover { background: var(--secondary); text-decoration: none; }
+  .set-toc a.active {
+    background: color-mix(in srgb, var(--primary) 11%, transparent);
+    color: var(--primary); font-weight: 500;
+    border-color: color-mix(in srgb, var(--primary) 22%, transparent);
+  }
+
+  .set-section { margin-bottom: 20px; scroll-margin-top: 74px; }
+  .set-section > .card { padding: 20px 22px; }
+  .set-section h2 {
+    margin: 0 0 4px; font-size: 15px; font-weight: 500;
+    display: flex; align-items: center; gap: 9px;
+  }
+  .set-section > .card > p {
+    margin: 0 0 18px; font-size: 12.5px; color: var(--muted-foreground);
+  }
+  .set-section h2 .set-ico {
+    width: 24px; height: 24px; border-radius: 7px; flex: 0 0 auto;
+    background: var(--accent); color: var(--primary);
+    display: grid; place-items: center; font-size: 12px;
+  }
+
+  /* 表单行 */
+  .row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 18px; padding: 13px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .row:last-child { border-bottom: 0; padding-bottom: 0; }
+  .row:first-of-type { padding-top: 0; }
+  .row-body { flex: 1; min-width: 0; }
+  .row-body b { display: block; font-size: 13.5px; font-weight: 500; margin-bottom: 3px; }
+  .row-body span { font-size: 12.5px; color: var(--muted-foreground); line-height: 1.6; }
+  .row-ctl { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+
+  .switch {
+    width: 40px; height: 22px; border-radius: 999px; border: none;
+    background: var(--muted); position: relative; cursor: pointer;
+    flex: 0 0 auto; transition: background .18s;
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 2.5px; left: 2.5px;
+    width: 17px; height: 17px; border-radius: 50%;
+    background: var(--card); box-shadow: var(--shadow-sm);
+    transition: transform .18s;
+  }
+  .switch[aria-checked="true"] { background: var(--primary); }
+  .switch[aria-checked="true"]::after { transform: translateX(18px); }
+
+  .seg { display: flex; gap: 2px; background: var(--secondary); padding: 3px; border-radius: 9px; }
+  .seg button {
+    padding: 6px 13px; border-radius: 7px; border: none;
+    background: transparent; color: var(--muted-foreground);
+    font-size: 12.5px; font-family: inherit; cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .seg button:hover { color: var(--foreground); }
+  .seg button.on { background: var(--card); color: var(--foreground); box-shadow: var(--shadow-sm); }
+
+  /* 字号滑块 */
+  .range-wrap { display: flex; align-items: center; gap: 11px; min-width: 210px; }
+  .range-wrap input[type="range"] {
+    flex: 1; accent-color: var(--primary); cursor: pointer;
+  }
+  .range-val {
+    font-size: 12px; color: var(--muted-foreground);
+    font-variant-numeric: tabular-nums; min-width: 38px; text-align: right;
+  }
+
+  /* 无障碍预览 */
+  .a11y-preview {
+    margin-top: 18px; padding: 16px 18px; border-radius: 11px;
+    background: var(--secondary); border: 1px solid var(--border);
+  }
+  .a11y-preview .k { font-size: 11.5px; color: var(--muted-foreground); margin-bottom: 7px; }
+  .a11y-preview .demo-text {
+    font-size: var(--prev-size, 15px);
+    line-height: var(--prev-lh, 1.8);
+    letter-spacing: var(--prev-ls, 0);
+    color: var(--foreground);
+  }
+
+  /* API Key */
+  .key-box { display: flex; gap: 9px; align-items: center; }
+  .key-box .input { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12.5px; }
+  .key-state {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; margin-top: 9px; color: var(--muted-foreground);
+  }
+  .key-state i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-foreground); }
+  .key-state.ok i { background: var(--success); }
+
+  @media (max-width: 900px) {
+    .settings-grid { grid-template-columns: minmax(0, 1fr); }
+    .set-toc { display: none; }
+    .row { flex-direction: column; align-items: flex-start; gap: 9px; }
+  }
+</style>
+</head>
+<body>
+
+
+<div class="page-wrap">
+    <div class="page" style="padding-top:0">
+      <div class="page-head">
+        <div class="crumb">账号与偏好</div>
+        <h1>设置</h1>
+        <p>外观、无障碍、模型接入 —— 全部保存在本机浏览器，不会上传</p>
+      </div>
+
+      <div class="settings-grid">
+        <nav class="set-toc" aria-label="设置目录">
+          <h4>设置项</h4>
+          <a href="#appearance" class="active">外观主题</a>
+          <a href="#a11y">无障碍</a>
+          <a href="#model">模型接入</a>
+          <a href="#account">账号</a>
+          <a href="#data">数据与隐私</a>
+        </nav>
+
+        <div>
+          <!-- 外观 -->
+          <section class="set-section" id="appearance">
+            <div class="card card-raised">
+              <h2><span class="set-ico">色</span>外观主题</h2>
+              <p>三套配色方案，切换立即生效并记住选择</p>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>配色方案</b>
+                  <span>Cream 暖陶土 · Snow 冷白 · 深色护眼</span>
+                </div>
+                <div class="row-ctl">
+                  <div class="seg" id="themeSeg" role="group" aria-label="配色方案"></div>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>跟随系统深色</b>
+                  <span>系统切换到深色模式时自动跟随</span>
+                </div>
+                <div class="row-ctl">
+                  <button class="switch" role="switch" aria-checked="false" aria-label="跟随系统深色"></button>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>界面密度</b>
+                  <span>紧凑模式适合大屏；宽松模式阅读更省力</span>
+                </div>
+                <div class="row-ctl">
+                  <div class="seg" id="densitySeg" role="group" aria-label="界面密度">
+                    <button data-d="compact">紧凑</button>
+                    <button data-d="cozy" class="on">宽松</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 无障碍 -->
+          <section class="set-section" id="a11y">
+            <div class="card card-raised">
+              <h2><span class="set-ico">障</span>无障碍</h2>
+              <p>本页设置会实时反映到下方预览，并作用于全站</p>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>正文字号</b>
+                  <span>适合视力较弱或需要更大字体的用户</span>
+                </div>
+                <div class="row-ctl">
+                  <div class="range-wrap">
+                    <input type="range" id="fontRange" min="14" max="26" step="1" value="15"
+                           aria-label="正文字号">
+                    <span class="range-val" id="fontVal">15px</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>行距</b>
+                  <span>加宽行距有助于阅读障碍用户定位</span>
+                </div>
+                <div class="row-ctl">
+                  <div class="range-wrap">
+                    <input type="range" id="lhRange" min="150" max="240" step="10" value="180"
+                           aria-label="行距">
+                    <span class="range-val" id="lhVal">1.8</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>字间距</b>
+                  <span>加宽字间距，缓解阅读拥挤感</span>
+                </div>
+                <div class="row-ctl">
+                  <div class="range-wrap">
+                    <input type="range" id="lsRange" min="0" max="100" step="10" value="0"
+                           aria-label="字间距">
+                    <span class="range-val" id="lsVal">0</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>高对比度</b>
+                  <span>加深文字与边框，达 WCAG 2.1 AAA 对比度</span>
+                </div>
+                <div class="row-ctl">
+                  <button class="switch" id="contrastSw" role="switch" aria-checked="false" aria-label="高对比度"></button>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>降低动效</b>
+                  <span>关闭过渡与动画，减轻前庭不适</span>
+                </div>
+                <div class="row-ctl">
+                  <button class="switch" id="motionSw" role="switch" aria-checked="false" aria-label="降低动效"></button>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>屏幕朗读</b>
+                  <span>课件与 AI 讲解支持一键朗读（Web Speech API）</span>
+                </div>
+                <div class="row-ctl">
+                  <button class="switch" role="switch" aria-checked="true" aria-label="屏幕朗读"></button>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>朗读语速</b>
+                  <span>影响「朗读这段」的默认速度</span>
+                </div>
+                <div class="row-ctl">
+                  <div class="range-wrap">
+                    <input type="range" id="rateRange" min="60" max="140" step="5" value="95"
+                           aria-label="朗读语速">
+                    <span class="range-val" id="rateVal">0.95×</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="a11y-preview">
+                <div class="k">预览 · 设置效果实时应用</div>
+                <div class="demo-text" id="prevText">
+                  快速排序的平均时间复杂度为 O(n log n)。退化的根本原因是划分不平衡，
+                  而不是数据规模本身 —— 这正是本设置要帮你更轻松读懂的句子。
+                </div>
+                <div style="margin-top:14px;display:flex;gap:9px;flex-wrap:wrap">
+                  <button class="btn btn-sm btn-primary" id="speakBtn">朗读这段</button>
+                  <button class="btn btn-sm" id="resetA11y">恢复默认</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 模型接入 -->
+          <section class="set-section" id="model">
+            <div class="card card-raised">
+              <h2><span class="set-ico">模</span>模型接入</h2>
+              <p>填入自己的 API Key 即可启用真实 AI 能力；不填则用本机内置示例回答</p>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>服务商</b>
+                  <span>需为支持浏览器直调的厂商（DeepSeek / 通义 / 智谱）</span>
+                </div>
+                <div class="row-ctl" style="min-width:180px">
+                  <select class="select" id="provider">
+                    <option value="demo" selected>未接模型（用内置示例回答）</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="qwen">通义千问</option>
+                    <option value="zhipu">智谱 GLM</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body" style="flex:1;max-width:none">
+                  <b>API Key</b>
+                  <span>仅保存在本机浏览器（localStorage），不会上传到任何服务器</span>
+                  <div class="key-box" style="margin-top:11px">
+                    <label class="sr-only" for="apiKey">API Key</label>
+                    <input class="input" id="apiKey" type="password"
+                           placeholder="sk-································"
+                           autocomplete="off" spellcheck="false">
+                    <button class="btn btn-sm" id="toggleKey" style="white-space:nowrap">显示</button>
+                  </div>
+                  <div class="key-state" id="keyState"><i></i><span>未配置 —— 当前用内置示例回答</span></div>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>连接测试</b>
+                  <span>发送一次最小请求，验证 Key 与 CORS 是否可用</span>
+                </div>
+                <div class="row-ctl">
+                  <button class="btn btn-sm btn-primary" id="testBtn">测试连接</button>
+                </div>
+              </div>
+
+              <div class="notice notice-info" style="margin-top:18px">
+                <span aria-hidden="true">ℹ</span>
+                <div>
+                  <b>为什么需要自己的 Key</b> —— 本作品为纯静态页面，没有后端代为转发密钥。
+                  这也是它「可推广」的地方：任何学校部署后，师生各用自己的额度，无需运维服务器。
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 账号 -->
+          <section class="set-section" id="account">
+            <div class="card card-raised">
+              <h2><span class="set-ico">户</span>账号</h2>
+              <p id="acctSub">当前身份由登录页选定</p>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>当前身份</b>
+                  <span id="acctRole">—</span>
+                </div>
+                <div class="row-ctl">
+                  <a class="btn btn-sm" href="index.html">切换身份</a>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>显示名称</b>
+                  <span>仅本机显示，不影响真实账号</span>
+                </div>
+                <div class="row-ctl" style="min-width:200px">
+                  <input class="input" id="displayName" placeholder="李同学">
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 数据与隐私 -->
+          <section class="set-section" id="data">
+            <div class="card card-raised">
+              <h2><span class="set-ico">据</span>数据与隐私</h2>
+              <p>所有数据都在这台设备的浏览器里，可随时清空</p>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>存储占用</b>
+                  <span id="storageInfo">正在统计…</span>
+                </div>
+                <div class="row-ctl">
+                  <button class="btn btn-sm" id="refreshStorage">刷新</button>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>导出学习数据</b>
+                  <span>下载一份 JSON，包含批注、偏好与画像（不含 API Key）</span>
+                </div>
+                <div class="row-ctl">
+                  <button class="btn btn-sm" id="exportBtn">导出</button>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>清空本机数据</b>
+                  <span style="color:var(--destructive)">删除全部偏好与本地记录，此操作不可撤销</span>
+                </div>
+                <div class="row-ctl">
+                  <button class="btn btn-sm" id="clearBtn"
+                          style="color:var(--destructive);border-color:color-mix(in srgb,var(--destructive) 40%,transparent)">
+                    清空
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script src="assets/nav.js"></script>
+<script src="assets/core.js"></script>
+<script>
+/* ============================================================
+   设置页：所有改动写入 Cookie / localStorage，刷新后保留
+   ============================================================ */
+
+const KEY_PREFIX = "st_";
+const store = {
+  get(k, d = null) {
+    try { const v = localStorage.getItem(KEY_PREFIX + k); return v === null ? d : JSON.parse(v); }
+    catch { return d; }
+  },
+  set(k, v) { try { localStorage.setItem(KEY_PREFIX + k, JSON.stringify(v)); } catch {} },
+  del(k) { try { localStorage.removeItem(KEY_PREFIX + k); } catch {} },
+};
+
+/* ---------- 外观：主题分段控件 ---------- */
+function renderThemeSeg() {
+  $("#themeSeg").innerHTML = THEMES.map((t) =>
+    `<button data-t="${t.id}"${Theme.current() === t.id ? ' class="on"' : ""}>${t.label}</button>`
+  ).join("");
+  $$("#themeSeg button").forEach((b) => {
+    b.addEventListener("click", () => {
+      Theme.apply(b.dataset.t);
+      renderThemeSeg();
+    });
+  });
+}
+
+/* ---------- 开关 ---------- */
+$$(".switch").forEach((sw) => {
+  sw.addEventListener("click", () => {
+    const on = sw.getAttribute("aria-checked") === "true";
+    sw.setAttribute("aria-checked", String(!on));
+    applyA11y();
+  });
+});
+
+/* ---------- 无障碍实时预览 ---------- */
+function applyA11y() {
+  const size = +$("#fontRange").value;
+  const lh = +$("#lhRange").value / 100;
+  const ls = +$("#lsRange").value / 100;
+  const rate = +$("#rateRange").value / 100;
+
+  $("#fontVal").textContent = size + "px";
+  $("#lhVal").textContent = lh.toFixed(1);
+  $("#lsVal").textContent = ls.toFixed(2);
+  $("#rateVal").textContent = rate.toFixed(2).replace(/0$/, "") + "×";
+
+  const prev = $("#prevText");
+  prev.style.setProperty("--prev-size", size + "px");
+  prev.style.setProperty("--prev-lh", lh);
+  prev.style.setProperty("--prev-ls", ls + "em");
+
+  // 作用于「全站根元素」——在壳内时即壳的 <html>，单独打开时即自己的
+  const cfg = {
+    size, lh, ls, rate,
+    contrast: !!$("#contrastSw")?.getAttribute("aria-checked")?.match(/^true$/),
+    reduceMotion: !!$("#motionSw")?.getAttribute("aria-checked")?.match(/^true$/),
+  };
+  applyA11yVars(cfg);
+  store.set("a11y", cfg);
+}
+
+["fontRange", "lhRange", "lsRange", "rateRange"].forEach((id) => {
+  $("#" + id).addEventListener("input", applyA11y);
+});
+
+$("#resetA11y").addEventListener("click", () => {
+  $("#fontRange").value = 15;
+  $("#lhRange").value = 180;
+  $("#lsRange").value = 0;
+  $("#rateRange").value = 95;
+  applyA11y();
+});
+
+/* ---------- 朗读 ---------- */
+$("#speakBtn").addEventListener("click", () => {
+  if (!("speechSynthesis" in window)) { alert("当前浏览器不支持语音朗读。"); return; }
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance($("#prevText").textContent.trim());
+  u.lang = "zh-CN";
+  u.rate = +$("#rateRange").value / 100;
+  speechSynthesis.speak(u);
+});
+
+/* ---------- 密度 ---------- */
+$$("#densitySeg button").forEach((b) => {
+  b.addEventListener("click", () => {
+    $$("#densitySeg button").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on");
+    store.set("density", b.dataset.d);
+  });
+});
+
+/* ---------- 模型接入 ---------- */
+const KEY = "st_api_key";
+
+function maskedKey(v) {
+  if (!v) return "";
+  return v.slice(0, 6) + "·".repeat(Math.max(6, Math.min(v.length - 10, 24))) + v.slice(-4);
+}
+
+function syncKeyUI() {
+  const k = localStorage.getItem(KEY) || "";
+  const state = $("#keyState");
+  if (k) {
+    state.className = "key-state ok";
+    state.querySelector("span").textContent = `已配置 · ${maskedKey(k)} —— 真实 AI 已启用`;
+  } else {
+    state.className = "key-state";
+    state.querySelector("span").textContent = "未配置 —— 当前用内置示例回答";
+  }
+}
+
+$("#apiKey").addEventListener("change", (e) => {
+  const v = e.target.value.trim();
+  if (v) localStorage.setItem(KEY, v);
+  else localStorage.removeItem(KEY);
+  syncKeyUI();
+});
+
+$("#toggleKey").addEventListener("click", () => {
+  const inp = $("#apiKey");
+  const show = inp.type === "password";
+  inp.type = show ? "text" : "password";
+  $("#toggleKey").textContent = show ? "隐藏" : "显示";
+});
+
+$("#provider").addEventListener("change", (e) => {
+  store.set("provider", e.target.value);
+});
+
+/**
+ * 连接测试 —— **真发一次最小请求**（第 38 轮）。
+ * 🔴 以前这里是假弹窗（`alert`），即"假装测过了"。现在工作台的
+ *    「生成模拟」真的要用这个 Key，那这里就必须**真的验证** —— 否则用户以为
+ *    配好了、回工作台却一直失败，责任在我们。
+ * 返回信息尽量说清"成没成、为什么不成、下一步做什么"。
+ */
+function testConnection(provider, key) {
+  const cfg = (typeof LLM_PROVIDERS !== "undefined" && LLM_PROVIDERS[provider]) || null;
+  if (!cfg || !cfg.endpoint) {
+    return Promise.resolve({ ok: false, error: "这个服务商没有配置调用地址" });
+  }
+  const body = {
+    model: cfg.model,
+    messages: [{ role: "user", content: "ping" }],
+    max_tokens: 1,
+    stream: false,
+  };
+  const t0 = Date.now();
+  return fetch(cfg.endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + key },
+    body: JSON.stringify(body),
+  }).then(function (res) {
+    const ms = Date.now() - t0;
+    return res.text().then(function (t) {
+      if (res.ok) return { ok: true, ms: ms, model: cfg.model };
+      let msg = "HTTP " + res.status;
+      if (res.status === 401) msg = "Key 无效或已过期（401）";
+      else if (res.status === 403) msg = "Key 被拒绝（403）—— 可能没开通这个模型，或余额不足";
+      else if (res.status === 429) msg = "请求太频繁或额度用完了（429）";
+      else if (res.status === 404) msg = "模型名不对（404）—— " + cfg.model + " 这个型号可能没开通";
+      else if (res.status >= 500) msg = "服务商那边出错了（" + res.status + "），等会儿再试";
+      return { ok: false, error: msg, detail: String(t || "").slice(0, 200) };
+    });
+  }).catch(function (err) {
+    const m = String((err && err.message) || err);
+    const cors = /Failed to fetch|NetworkError|load failed/i.test(m);
+    return {
+      ok: false,
+      error: cors ? "请求没能发出去 —— 多半是浏览器拦了跨域（CORS）" : ("调用失败：" + m),
+      detail: cors ? "换一个支持浏览器直调的厂商试试；也确认下网络是否可达 " + cfg.docs : "",
+    };
+  });
+}
+
+$("#testBtn").addEventListener("click", () => {
+  const btn = $("#testBtn");
+  const key = localStorage.getItem(KEY) || "";
+  const provider = $("#provider").value;
+
+  if (provider === "demo" || !key) {
+    alert(provider === "demo"
+      ? "还没接入模型，没有可测的连接。\n\n选一个服务商（DeepSeek / 通义千问 / 智谱 GLM）并填入 API Key 后，这里会真的发一次请求。"
+      : "还没填 API Key —— 填上就能测。");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "测试中…";
+  testConnection(provider, key).then(function (r) {
+    btn.disabled = false;
+    btn.textContent = "测试连接";
+    if (r.ok) {
+      alert("连接正常 ✓\n\n服务商：" + provider + "\n模型：" + r.model +
+        "\n往返：" + r.ms + " ms\n\n回工作台点「生成模拟」，现在会真的写代码了。");
+      const state = $("#keyState");
+      state.className = "key-state ok";
+      state.querySelector("span").textContent = `已配置 · ${maskedKey(key)} —— 连接已验证（${r.ms} ms）`;
+    } else {
+      alert("连接失败 ✗\n\n" + r.error + (r.detail ? "\n\n" + r.detail : "") +
+        "\n\nKey 仍在本地存着，改好之后可以再测。");
+    }
+  });
+});
+
+/* ---------- 账号 ---------- */
+function syncAccount() {
+  const role = currentRole();
+  $("#acctRole").textContent = role === "teacher" ? "教师" : "学生";
+  $("#acctSub").textContent = `当前身份：${role === "teacher" ? "教师" : "学生"}（由登录页选定）`;
+  const dn = store.get("display_name", "");
+  $("#displayName").value = dn || (role === "teacher" ? "李老师" : "李同学");
+}
+
+$("#displayName").addEventListener("change", (e) => {
+  store.set("display_name", e.target.value.trim());
+});
+
+/* ---------- 存储统计 ---------- */
+function refreshStorage() {
+  let bytes = 0, items = 0;
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(KEY_PREFIX)) {
+        bytes += (k.length + (localStorage.getItem(k) || "").length) * 2;
+        items++;
+      }
+    }
+  } catch {}
+  const kb = (bytes / 1024).toFixed(1);
+  const ck = document.cookie ? document.cookie.split("; ").length : 0;
+  $("#storageInfo").textContent = `本地记录 ${items} 项 / 约 ${kb} KB · Cookie ${ck} 条（上限约 4 KB）`;
+}
+
+$("#refreshStorage").addEventListener("click", refreshStorage);
+
+/* ---------- 导出 / 清空 ---------- */
+$("#exportBtn").addEventListener("click", () => {
+  const dump = { exportedAt: new Date().toISOString(), role: currentRole(), data: {} };
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(KEY_PREFIX)) dump.data[k] = localStorage.getItem(k);
+    }
+  } catch {}
+  try {
+    const blob = new Blob([JSON.stringify(dump, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "smarttutor-data.json";
+    a.click();
+    alert("已导出 learning data。\n\n注：导出内容不含 API Key。");
+  } catch {
+    alert("当前环境不支持导出。");
+  }
+});
+
+$("#clearBtn").addEventListener("click", () => {
+  if (!confirm("确定清空本机全部数据？\n\n将删除：本机注册的账号、偏好设置、批注、风格画像、API Key。\n删除账号后需要重新注册。此操作不可撤销。")) return;
+  try {
+    const drop = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(KEY_PREFIX)) drop.push(k);
+    }
+    drop.forEach((k) => localStorage.removeItem(k));
+  } catch {}
+  localStorage.removeItem(KEY);
+  ["st_theme", "st_role"].forEach((c) => Cookie.del(c));
+  refreshStorage();
+  syncKeyUI();
+  alert("已清空。刷新页面后生效。");
+});
+
+/* ---------- 目录高亮 ---------- */
+$$(".set-toc a").forEach((a) => {
+  a.addEventListener("click", () => {
+    $$(".set-toc a").forEach((x) => x.classList.remove("active"));
+    a.classList.add("active");
+  });
+});
+
+/* ---------- 恢复已保存设置 ---------- */
+(function restore() {
+  const a11y = store.get("a11y");
+  if (a11y) {
+    $("#fontRange").value = a11y.size ?? 15;
+    $("#lhRange").value = (a11y.lh ?? 1.8) * 100;
+    $("#lsRange").value = (a11y.ls ?? 0) * 100;
+    $("#rateRange").value = (a11y.rate ?? 0.95) * 100;
+    $("#contrastSw")?.setAttribute("aria-checked", String(!!a11y.contrast));
+    $("#motionSw")?.setAttribute("aria-checked", String(!!a11y.reduceMotion));
+  }
+  const density = store.get("density");
+  if (density) {
+    $$("#densitySeg button").forEach((x) => x.classList.toggle("on", x.dataset.d === density));
+  }
+  const provider = store.get("provider");
+  if (provider) $("#provider").value = provider;
+})();
+
+renderThemeSeg();
+applyA11y();
+syncKeyUI();
+syncAccount();
+refreshStorage();
+</script>
+</body>
+</html>
