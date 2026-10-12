@@ -509,7 +509,7 @@ a.btn { text-decoration: none; }
 .login-foot { font-size: 11.5px; color: var(--muted-foreground); margin-top: 40px; }
 .login-foot-line { line-height: 1.6; }
 
-/* 左栏底部：无障碍阅读模式勾选（⚠️ 功能尚未实现，只记录状态） */
+/* 左栏底部：无障碍阅读模式勾选（第 57 轮起已实现） */
 .login-a11y {
   display: inline-flex; align-items: center; gap: 8px;
   margin-top: 14px; padding: 6px 12px 6px 10px;
@@ -1096,6 +1096,93 @@ table.data tbody tr:hover { background: color-mix(in srgb, var(--primary) 4%, tr
   .msg { max-width: 95%; }
   .login-hero { font-size: 24px; }
   .demo-bar .brand span { display: none; }
+}
+
+/* ============================================================
+   「任意两版对比」—— 版本历史里的起点提示条 + 起点按钮高亮
+   （教案版本链与大纲版本链共用这一套）
+   ============================================================ */
+.pick-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 10px; padding: 8px 12px; border-radius: 9px;
+  background: var(--info-surface);
+  border: 1px solid color-mix(in srgb, var(--info) 32%, transparent);
+  font-size: 12.5px; color: var(--foreground);
+}
+.pick-bar .btn { margin-left: auto; }
+.pick-bar .mono { font-family: "JetBrains Mono", Consolas, monospace; }
+.ver-acts .btn.is-pick {
+  background: var(--info-surface); color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 45%, transparent);
+}
+
+/* ============================================================
+   无障碍阅读模式（html[data-read-mode]）
+   ------------------------------------------------------------
+   第 57 轮实现：**纯排版增强，不换主题**。目标是把「能读」变成「好读」：
+     · 正文字号 / 行高提升，字距略松（长文更省力）
+     · 正文文字块限宽 76ch —— 一行太长时眼睛回扫会串行
+     · 卡片去掉重阴影、改用清晰边框（边界更明确）
+     · 交互元素加大最小高度（手抖 / 触屏也能点中）
+     · 段落 hover 高亮 + 更强的焦点轮廓（读得清、也知道自己在哪）
+   ⚠️ 属性挂在**根元素**上；壳内时壳与 iframe 各挂一份，因此两份都命中。
+   ============================================================ */
+html[data-read-mode] :is(p, li, dd, blockquote, .pre, .plan-sec p) {
+  max-width: 76ch;
+  line-height: 2.05;
+}
+html[data-read-mode] :is(p, li) { font-size: 1.05em; letter-spacing: .012em; }
+
+/* 段落 hover：淡淡一层底，知道自己读到哪一段 */
+html[data-read-mode] :is(p, li):hover {
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+  border-radius: 6px;
+}
+
+/* 卡片：去浮夸阴影，边界改由边框承担 */
+html[data-read-mode] :is(.card, .box, .modal, .panel) {
+  box-shadow: none;
+  border-color: color-mix(in srgb, var(--border) 60%, var(--foreground));
+}
+
+/* 点击目标加大 */
+html[data-read-mode] :is(.btn, .suggest, .tab, .side-item, .theme-btn) { min-height: 40px; }
+
+/* 键盘焦点更醒目（3px 实线 + 外偏移） */
+html[data-read-mode] :focus-visible {
+  outline: 3px solid var(--foreground);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* 「阅读工具条」—— 只在阅读模式且非登录页时由 core.js 挂出 */
+.reader-bar {
+  position: fixed; right: 18px; bottom: 18px; z-index: 90;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  max-width: calc(100vw - 36px);
+  padding: 7px 10px; border-radius: 12px;
+  background: var(--card); color: var(--foreground);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  font-size: 12.5px;
+}
+.reader-bar .rb-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 32px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--secondary);
+  color: var(--foreground); font: inherit; cursor: pointer;
+}
+.reader-bar .rb-btn:hover { border-color: color-mix(in srgb, var(--primary) 45%, transparent); }
+.reader-bar .rb-btn:disabled { opacity: .45; cursor: default; }
+.reader-bar .rb-main { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+.reader-bar .rb-main:disabled { opacity: .5; }
+.reader-bar .rb-font { display: inline-flex; align-items: center; gap: 4px; color: var(--muted-foreground); }
+.reader-bar .rb-font b { min-width: 34px; text-align: center; font-weight: 500; color: var(--foreground); }
+.reader-bar .rb-off { color: var(--muted-foreground); }
+
+@media (max-width: 620px) {
+  .reader-bar { right: 10px; bottom: 10px; gap: 4px; padding: 6px 8px; }
+  .reader-bar .rb-btn { height: 30px; padding: 0 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

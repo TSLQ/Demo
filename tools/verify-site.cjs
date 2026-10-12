@@ -1,5 +1,5 @@
 /**
- * site/ 静态原型验证器（应用壳架构）
+ * docs/ 静态原型验证器（应用壳架构）
  * ------------------------------------------------------------
  * 架构：app.html（应用壳：顶部栏 + 左侧栏 + iframe）承载 8 个内容页。
  * 本验证器用 Node vm 桩化 DOM，真实执行每个页面的脚本：
@@ -24,7 +24,7 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const SITE = path.resolve(__dirname, "..", "site");
+const SITE = path.resolve(__dirname, "..", "docs");
 
 /** 内容页（由壳的 iframe 承载） */
 const CONTENT_PAGES = [
@@ -652,13 +652,24 @@ function verifyPageSpecific(name, html, inline, probe, sandbox) {
   }
 
   if (name === "reader.html") {
-    const reteach = probe("RETEACH");
-    if (reteach && typeof reteach === "object") {
-      const n = Object.keys(reteach).length;
-      const empty = Object.values(reteach).filter((v) => !v || v.length < 60).length;
-      n >= 6 && empty === 0 ? pass(`重讲内容 ${n} 段齐备且均有实质内容`)
-        : fail(`重讲内容异常：共 ${n} 段，过短 ${empty} 段`);
-    } else fail("RETEACH 未定义");
+    /* 🔴 第 54 轮：删掉内置 RETEACH（不再对老师真发来的课件编内容）——
+       重讲改为「接模型现场重讲 / 没接就如实说」 */
+    probe("typeof RETEACH") === "undefined"
+      ? pass("🔴 已删除内置 RETEACH（不再对老师发的课件编预置重讲）")
+      : fail("RETEACH 还在 —— 应已删除");
+    /llmReady/.test(html) && /llmChat/.test(html)
+      ? pass("🔴 重讲接模型：llmReady 判断 + llmChat 现场重讲")
+      : fail("重讲没接模型");
+    /还没接模型/.test(html)
+      ? pass("🔴 没接模型时如实说明（不假装重讲过）")
+      : fail("没接模型时没有如实兜底");
+    /* 第 54 轮：课程选择器 */
+    /cwCoursesForStudent\(/.test(html)
+      ? pass("🔴 有「选课程」（cwCoursesForStudent 只列已加入且真有课件的课）")
+      : fail("没有课程选择器");
+    /id="cwCourses"/.test(html)
+      ? pass("课程选择器容器 #cwCourses 在")
+      : fail("缺 #cwCourses 容器");
     /* 第 34 轮：批注行为落进行为日志，批注列表也由它渲染（只有一份存储） */
     /data-note="/.test(html)
       ? fail("段落上还挂着写死的 data-note（批注应来自行为日志）")
@@ -680,9 +691,9 @@ function verifyPageSpecific(name, html, inline, probe, sandbox) {
     /cwId/.test(html)
       ? pass("🔴 批注 / 阅读都带 cwId（哪一份课件的第几段）")
       : fail("行为记录没带 cwId");
-    /currentCwId\(\) === "cw-seed-1"/.test(html)
-      ? pass("重讲只对预置示例用内置内容，别的课件如实说明（不假装重讲过）")
-      : fail("重讲对非预置课件没有如实兜底");
+    !/预置示例课件|SEED_CW_QS/.test(stripComments(html))
+      ? pass("🔴 不再依赖预置示例课件（用户要求彻底移除）")
+      : fail("仍依赖预置示例课件");
     !/\bwindow\.prompt\(|(?<![.\w])prompt\(/.test(stripComments(html))
       ? pass("写批注走 pageModalHost()，不再用 window.prompt")
       : fail("还在用 window.prompt");
@@ -1570,9 +1581,36 @@ function verifyShell() {
     probe("(() => { const b = document.getElementById('a11yReadMode'); b.checked = false; b.dispatchEvent(new Event('change')); })()");
     const afterTheme = probe("Theme.current()");
     beforeTheme === afterTheme
-      ? pass("开关不擅自改主题（功能未实现，只记录状态）")
-      : fail(`开关不该改主题：${beforeTheme} → ${afterTheme}`);
+      ? pass("阅读模式不改主题（排版增强 ≠ 换肤）")
+      : fail(`阅读模式不该改主题：${beforeTheme} → ${afterTheme}`);
   } else fail("mountReadMode 未定义（开关无法工作）");
+
+  /* --- 无障碍阅读模式：第 57 轮起有真实实现（不再只是开关） --- */
+  {
+    const coreSrcA = fs.readFileSync(path.join(SITE, "assets", "core.js"), "utf8");
+    const shellSrcA = fs.readFileSync(path.join(SITE, "assets", "shell.js"), "utf8");
+    const cssSrcA = fs.readFileSync(path.join(SITE, "assets", "design.css"), "utf8");
+
+    /function applyReadMode\s*\(/.test(coreSrcA)
+      ? pass("内容页有 applyReadMode —— 阅读模式真的会生效（不再是空壳）")
+      : fail("applyReadMode 缺失：阅读模式仍是空壳");
+    /data-read-mode/.test(coreSrcA) && /html\[data-read-mode\]/.test(cssSrcA)
+      ? pass("开启后给根元素挂 data-read-mode，design.css 提供配套排版规则")
+      : fail("data-read-mode 的实现或样式缺失");
+    /function mountReaderBar\s*\(/.test(coreSrcA) && /id="readerBar"/.test(coreSrcA)
+      ? pass("阅读模式挂出「阅读工具条」（#readerBar）")
+      : fail("缺少阅读工具条");
+    /speechSynthesis/.test(coreSrcA)
+      ? pass("朗读走浏览器自带语音合成（Web Speech API，不依赖模型）")
+      : fail("朗读未接浏览器语音合成");
+    /function applyShellReadMode\s*\(/.test(shellSrcA)
+      ? pass("壳也有阅读态（applyShellReadMode）—— 顶部栏 / 侧栏跟着变")
+      : fail("壳缺少阅读态");
+    const applyBodyA = (coreSrcA.match(/function applyReadMode\s*\([\s\S]*?\n\}/) || [""])[0];
+    !/Theme\.apply/.test(applyBodyA)
+      ? pass("阅读模式不动主题（是排版增强，不是换肤）")
+      : fail("阅读模式擅自改了主题");
+  }
 
   /* --- 壳不因协议差异走不同分支（iframe 优先，失败由提示条兜底） --- */
   {
@@ -1742,6 +1780,11 @@ function verifyShell() {
       /本机还没有学生加入这门课/.test(classHtml)
         ? pass("本课还没有学生时给空状态 + 指路邀请码（不拿样本数据冒充）")
         : fail("没有处理「这门课还没有学生」的情形");
+      /* 🔴 第 55 轮：课程页只讲"谁在课里"，得有一条路通向这门课的教学内容（教案），
+         不然「人 → 课 → 教案」的闭环断在中间。 */
+      /id="goLesson"/.test(classHtml) && /navigate\("lesson\.html\?course="/.test(classHtml)
+        ? pass("class.html 有通往该课教案的入口（人 → 课 → 教案，闭环接上）")
+        : fail("class.html 没有教案入口 —— 看完名单不知道该去哪看教案");
     }
 
     // 教师端渲染出加号按钮
@@ -1994,15 +2037,21 @@ function verifyShell() {
     (sandbox._alerted || []).length === 0
       ? pass("校验失败时不弹提示框") : fail("校验失败却弹了提示框");
 
-    // 填写后提交 → 仅示例提示，不落库
+    // 填写后提交 → **真的建班**（第 55 轮：从"示例提示、不落库"改成落库 + 进侧栏）
+    const clsBefore = probe("CLASSES.length");
     probe("(() => { document.getElementById('kName').value = '计科 2303 班'; })()");
     probe("document.getElementById('classSave').click()");
-    (sandbox._alerted || []).length === 1 && /计科 2303 班/.test(sandbox._alerted[0])
-      ? pass("填好后提交给出「保存逻辑未接入」示例提示")
-      : fail("未给出示例提示: " + JSON.stringify(sandbox._alerted));
-    probe("LS.keys().filter((k) => /class|banji/i.test(k)).length") === 0
-      ? pass("示例弹窗不写入班级数据（保存逻辑待定）")
-      : fail("示例弹窗写了班级数据");
+    probe("CLASSES.length") === clsBefore + 1
+      ? pass("填好后提交**真的新建了班级**（CLASSES +1）")
+      : fail("提交后班级数没变: " + clsBefore + " → " + probe("CLASSES.length"));
+    probe("CLASSES[CLASSES.length - 1].label") === "计科 2303 班"
+      ? pass("新班级按填写的名称落进 CLASSES") : fail("新班级名称不对");
+    /计科 2303 班/.test(String(probe("window.localStorage.getItem(classStoreKey())") || ""))
+      ? pass("新班级写进了本机存档（按账号分桶的 st_classes）")
+      : fail("新班级没落库 —— 刷新就没了");
+    probe("CLASS_NAV_ITEMS.some((i) => i.label === '计科 2303 班')")
+      ? pass("侧栏班级项由 CLASSES 现算（新班立刻出现在菜单里）")
+      : fail("新班没进侧栏菜单");
 
     // Esc 关闭 —— 两个弹窗共用 modalEsc，必须关对的那个
     probe("modalEsc({ key: 'Escape' })");
@@ -2498,7 +2547,8 @@ function verifyCourseware() {
   });
   ["cwStoreKey", "cwSections", "cwTextFromHtml", "normalizeCw", "normalizeCws", "loadCws", "saveCws",
    "cwOf", "cwBucketKeys", "readCwBucket", "cwStats", "createCw", "updateCw", "deleteCw",
-   "cwAssetCount", "publishCw", "recallCwFrom", "cwsForStudent", "cwCountOf", "seedCws", "notesOfCw"]
+   "cwAssetCount", "publishCw", "recallCwFrom", "cwsForStudent", "cwCountOf",
+   "cwCoursesForStudent", "notesOfCw"]
     .forEach(function (fn) {
       probe("typeof " + fn) === "function" ? pass("提供 " + fn + "()") : fail("缺少 " + fn + "()");
     });
@@ -2527,11 +2577,17 @@ function verifyCourseware() {
   probe('cwTextFromHtml("&amp;lt;危险&amp;gt;")').indexOf("&lt;危险&gt;") >= 0
     ? pass("🔴 实体只解一层（&amp;lt; 不二次解码成 <）") : fail("实体被二次解码");
 
-  /* --- 种子：已发布，学生端能读到 --- */
-  const seeds = JSON.parse(probe("JSON.stringify(CWS.map(function(c){return {id:c.id,st:c.status,p:c.publishedTo.length};}))"));
-  seeds.length >= 1 ? pass("预置账号有种子课件（" + seeds.length + " 份）") : fail("没有种子课件");
-  seeds[0] && seeds[0].st === "published" && seeds[0].p >= 1
-    ? pass("🔴 种子是已发布 + 带下发记录（学生端切过去就能读）") : fail("种子不是已发布状态");
+  /* --- 🔴 第 54 轮：不再有预置种子课件（用户明确要求「彻底不要预置示例」） --- */
+  const seeds = JSON.parse(probe("JSON.stringify(CWS.map(function(c){return {id:c.id,st:c.status};}))"));
+  seeds.length === 0
+    ? pass("🔴 不再有预置种子课件（CWS 初始为空 —— 学生端只显示老师真发来的）")
+    : fail("仍有预置种子课件: " + JSON.stringify(seeds));
+  probe("typeof seedCws") === "undefined"
+    ? pass("🔴 已删除 seedCws() / SEED_CW_QS（不再内置示例课件）")
+    : fail("seedCws 还在 —— 应已删除");
+  probe('cwsForStudent("student:student").length') === 0
+    ? pass("🔴 预置账号学生端也读不到任何课件（没有预置示例兜底）")
+    : fail("预置账号学生端竟读到了课件");
 
   /* --- 发布规矩：空名单拒、空正文拒、重发不重复记账 --- */
   const cr = JSON.parse(probe('JSON.stringify(createCw({title:"t", body:"一段\\n\\n二段"}))'));
@@ -2551,6 +2607,17 @@ function verifyCourseware() {
     ? pass("🔴 cwsForStudent 跨桶读到已发布的（含刚发的那份）") : fail("学生读不到刚发的课件");
   probe('JSON.stringify(updateCw("' + cid + '", {body:"一段\\n\\n二段\\n\\n三段"}))')
     .indexOf('"ok":true') >= 0 ? pass("updateCw 能改正文") : fail("改正文失败");
+
+  /* --- 🔴 第 54 轮：按课程过滤 + 课程选择器数据源 --- */
+  const assignCourse = JSON.parse(probe('JSON.stringify(updateCw("' + cid + '", {courseId:"ds", courseName:"数据结构与算法"}))'));
+  assignCourse.ok ? pass("updateCw 能设课程") : fail("设课程失败");
+  probe('cwsForStudent("student:lisi","ds").length') === 1
+    ? pass("🔴 cwsForStudent(who, courseId) 按课程过滤命中") : fail("按课程过滤没命中");
+  probe('cwsForStudent("student:lisi","xx").length') === 0
+    ? pass("🔴 按别的课程过滤 → 读不到") : fail("按别的课程过滤竟读到了");
+  const cc = JSON.parse(probe('JSON.stringify(cwCoursesForStudent("student:lisi"))'));
+  cc.length === 1 && cc[0].courseId === "ds" && cc[0].count === 1
+    ? pass("🔴 cwCoursesForStudent() 列出「有课件的课程 + 份数」") : fail("课程选择器数据源不对: " + JSON.stringify(cc));
 
   /* --- notesOfCw：老记录（无 cwId）算当前这份，别人的排除 --- */
   const nNote = probe('JSON.stringify(notesOfCw([{kind:"note",label:"老",seg:1,courseId:"ds",at:1,cwId:""},' +
@@ -3463,6 +3530,100 @@ function verifyTrainingData() {
   probe("deleteActivity('不存在的 id').ok") === false
     ? pass("删不存在的活动返回 {ok:false}") : fail("删不存在的活动没拦住");
 
+  /* --- ⑨ 第 55 轮（功能完整性）：跨桶删除 / 学生进度跨桶读 / 作业徽标口径 --- */
+  /activityBucketKeys\(\)\.forEach[\s\S]{0,300}left\.length === list\.length/.test(navSrc)
+    ? pass("删实训会把**其余账号桶**里的同一副本一并清掉（跨桶，不留孤儿）")
+    : fail("删实训只删当前桶 —— 学生那边还留着这条已删的活动");
+  ["progressOfActivity", "trainingProgressBucketKeys", "readProgressBucket",
+   "accountNameOf", "accountKeyFromBucket", "unsubmittedExamCount"].every(function (fn) {
+    return new RegExp("function " + fn + "\\s*\\(").test(navSrc);
+  })
+    ? pass("nav.js 提供学生进度跨桶读 / 未交份数（第 55 轮新增）")
+    : fail("nav.js 缺第 55 轮新增的函数");
+  /function progressOfActivity[\s\S]{0,900}deductions: p\.deductions \|\| \[\]/.test(navSrc)
+    ? pass("progressOfActivity 带出学生的推导（老师能看到「他推出了什么」）")
+    : fail("progressOfActivity 没带推导内容");
+  /item\.badge = todo \+ " 份未交"/.test(navSrc)
+    ? pass("「我的作业」徽标 = **未交份数**（原来挂的是总数，全交完也不消失）")
+    : fail("作业徽标口径没改");
+  /hit\.messages\.push\(msg\);[\s\S]{0,160}hit\.updatedAt = Date\.now\(\)/.test(navSrc)
+    ? pass("实训群聊发消息会刷新 updatedAt（列表排序跟着动）")
+    : fail("发消息不更新时间 —— 列表排序永远不动");
+
+  /* --- ⑩ 动作执行层：agent 的「确认执行」真的落地（第 55 轮） --- */
+  /function runAgentStep\s*\(/.test(navSrc) && /action === "publish_exam"/.test(navSrc)
+    ? pass("agent 有动作执行层（runAgentStep 把「确认执行」接到真实数据层）")
+    : fail("agent 没有动作执行层 —— 确认执行只改界面、不动数据");
+  /没有可自动执行的具体对象/.test(navSrc)
+    ? pass("缺具体对象时**如实拒绝**（不假装执行成功）")
+    : fail("缺对象时没说清为什么做不了");
+  probe("runAgentStep({ arg: 'action=publish_exam', skill: 'atom-gen-quiz' }, { role: 'teacher' }).ok") === false
+    ? pass("没有可发的卷子时，执行层返回 ok:false（不硬发一份空卷）")
+    : fail("执行层在没有卷子时仍然说成功");
+
+  /* --- ⑫ 第 57 轮：agent 把「需要模型成文」的技能真的接到模型上 --- */
+  const agSrc57 = fs.readFileSync(path.join(SITE, "agent.html"), "utf8");
+  const scSrc57 = fs.readFileSync(path.join(SITE, "schedule.html"), "utf8");
+  const cdSrc57 = fs.readFileSync(path.join(SITE, "assets", "core.js"), "utf8");
+
+  /function aiRunner\s*\(/.test(navSrc) && /return llmChat\(system, user/.test(navSrc)
+    ? pass("nav.js 有 aiRunner() —— 技能可以真的调模型")
+    : fail("技能仍然只给规则骨架，没有任何一处真调模型");
+  /function aiRunner[\s\S]{0,400}!llmReady\(\)\) return null/.test(navSrc)
+    ? pass("未接模型时 aiRunner 直接返回 null（回落骨架，绝不返回假内容）")
+    : fail("未接模型时可能返回假内容");
+  ["lesson-draft", "lesson-improve", "diff-explain", "schedule-parse"].every(function (k) {
+    return new RegExp('AI_SYS\\["' + k + '"\\]').test(navSrc);
+  })
+    ? pass("四个「要成文」的技能都有系统提示词（起草 / 改进 / 差异 / 课表解析）")
+    : fail("缺技能的系统提示词");
+  {
+    const runnerSrc = navSrc.slice(navSrc.indexOf("var SKILL_RUNNERS = {"),
+      navSrc.indexOf("\n};", navSrc.indexOf("var SKILL_RUNNERS = {")));
+    const nAI = (runnerSrc.match(/aiRunner\(/g) || []).length;
+    nAI >= 4
+      ? pass("四个技能的执行器里都调了 aiRunner（" + nAI + " 处）")
+      : fail("有技能没接上模型（aiRunner 只出现 " + nAI + " 次）");
+  }
+  /function runSkillChain[\s\S]{0,2400}typeof r\.then === "function"/.test(navSrc)
+    ? pass("runSkillChain 支持异步技能（返回 Promise，调用方 then 接住）")
+    : fail("runSkillChain 不支持异步 —— 接了模型也拿不到结果");
+  /task\.prompt \|\| ""/.test(agSrc57)
+    ? pass("agent 页把交接带来的 `prompt` 传进 payload（不再丢掉）")
+    : fail("交接的 prompt 被丢弃 —— 「让 AI 帮你转」点了什么都不会发生");
+  /Promise\.resolve\(runSkills\(/.test(agSrc57)
+    ? pass("agent 页用 Promise.resolve 接住技能链（同步 / 异步都能用）")
+    : fail("agent 页没接住异步技能");
+  /scheduleImport:\s*"st_schedule_import"/.test(cdSrc57)
+    ? pass("新增一次性交接键 STORE_KEY.scheduleImport")
+    : fail("缺 st_schedule_import 键");
+  /STORE_KEY\.scheduleImport/.test(agSrc57) && /STORE_KEY\.scheduleImport/.test(scSrc57)
+    ? pass("课表解析结果会写回导入框（agent → 课表页，真的接着干而不是再粘一遍）")
+    : fail("课表解析结果没有回填");
+
+  /* --- ⑬ 凭据读写必须对称（端到端走查抓到的真坑，加守护防回归） --- */
+  const settSrc57 = fs.readFileSync(path.join(SITE, "settings.html"), "utf8");
+  /function readKeyValue\s*\(/.test(navSrc)
+    ? pass("nav.js 有 readKeyValue（兼容 JSON 串与裸串两种落库方式）")
+    : fail("缺 readKeyValue —— 设置页裸串写的 Key 会被 JSON.parse 吞掉");
+  /key = readKeyValue\(STORE_KEY\.apiKey\)/.test(navSrc) && /try \{ key = readKeyValue/
+    .test(navSrc)
+    ? pass("llmConfig 用 readKeyValue 读 API Key（且保留 try/catch —— nav.js 可能单独加载）")
+    : fail("llmConfig 仍用 LS.get 读 Key —— 用户填了 Key 也永远显示「还没接模型」");
+  /key = readKeyValue\(STORE_KEY\.searchKey\)/.test(navSrc)
+    ? pass("searchConfig 同样兼容裸串（联网搜索 Key）")
+    : fail("searchConfig 读裸串会失败");
+  !/LS\.get\(STORE_KEY\.apiKey/.test(navSrc) && !/LS\.get\(STORE_KEY\.searchKey/.test(navSrc)
+    ? pass("没有任何地方再用 LS.get 直接读 Key（旧的错误读法已清零）")
+    : fail("还有地方用 LS.get 读 Key");
+  /localStorage\.setItem\(KEY, v\)/.test(settSrc57) && /localStorage\.setItem\(SEARCH_KEY, v\)/.test(settSrc57)
+    ? pass("设置页 Key 仍是裸串写入（readKeyValue 就是为兼容它；两端约定一致）")
+    : fail("设置页 Key 的写入方式变了，readKeyValue 的兼容前提要重新复核");
+  const agentHtml = fs.readFileSync(path.join(SITE, "agent.html"), "utf8");
+  /runAgentStep\(s, ctx\)/.test(agentHtml)
+    ? pass("agent 页的「确认执行」调 runAgentStep（真的落地，不是只把节点标 ✓）")
+    : fail("agent 页确认按钮没接执行层");
+
   /* --- ⑧ 未知状态一律兜底，别 undefined.label 崩 --- */
   probe("activityStatus('nonsense').label") === "草案"
     ? pass("未知状态读出来有兜底（不会 undefined.label 崩掉整页）") : fail("状态兜底失效");
@@ -3555,6 +3716,14 @@ function verifyStudentTraining() {
   probe("(function(){ var raw = window.localStorage.getItem('st_training_progress:student:student'); return !!raw; })()")
     ? pass("进度真的落盘到学生桶（st_training_progress:<角色>:<账号>）")
     : fail("进度没落盘到学生桶");
+  probe("addDeduction('act-x', '我推导出长就是半周长', 'me').ok") === true
+    ? pass("能记「推导出来的有帮助的信息」（学生自己推导）") : fail("记推导失败");
+  probe("addDeduction('act-x', 'AI 验证结论', 'ai').ok") === true
+    && probe("myProgressOf('act-x').deductions.length") === 2
+    && probe("myProgressOf('act-x').deductions[1].source") === "ai"
+    ? pass("推导信息读得回（me / ai 两类分得清）") : fail("推导读回失败");
+  probe("addDeduction('act-x', '  ').ok") === false
+    ? pass("空推导被拦") : fail("空推导也被记");
 
   /* --- ⑤ 新发现（广播写回老师桶） --- */
   const f = probe("addMyFinding('act-x', '我试了割补法', '李同学')");
@@ -3990,6 +4159,14 @@ function verifySkillData() {
     ? pass("原子层只在真命中时才挂（没提到那件活就不挂）") : fail("原子层乱挂");
 
   /* --- ⑤ runSkill：能算的当场算（确定性，不假动作） --- */
+  /* 🔴 下面这几条验的是「**没接模型**时给结构骨架」。桩化沙箱是共享的，前面的用例可能
+     写过 Key —— 修好 readKeyValue（兼容裸串）之后它会**真的被读到**，于是技能转去调模型、
+     返回 Promise，这些断言就会拿到 undefined。
+     所以这里先显式清成「未接模型」，让这批断言测的是它想测的那条路径。 */
+  probe("(function () { try { localStorage.removeItem('st_api_key'); localStorage.removeItem('st_provider'); } catch (_) {} return true; })()");
+  probe("(function () { try { return llmReady() === false; } catch (e) { return 'ERR:' + e.message; } })()") === true
+    ? pass("下面这几条验的是「未接模型」路径（桩沙箱未配 Key，前提成立）")
+    : fail("桩沙箱里 llmReady() 不为 false —— 骨架类断言的前提不成立");
   const t2t = probe("JSON.stringify(runSkill('atom-text-to-table', { text: '周一 第1-2节 数据结构与算法 6A-301 计科2301\\n周二,第3-4节,操作系统,6B-105,计科2301\\n这一行缺少节次' }, { role: 'teacher' }).lines)");
   /周一,第1-2节,数据结构与算法,6A-301,计科2301/.test(t2t)
     ? pass("文本转表格：真的解析出了标准格式那一行") : fail("转表格结果不对");
@@ -4208,6 +4385,11 @@ function verifyGlobal() {
   /未建大纲/.test(lessonSrc)
     ? pass("课程下拉标出「未建大纲」的课（一眼看出哪门还没排）")
     : fail("课程下拉没有标注哪门课还没有大纲");
+  // 第 57 轮：版本链不再只能「与上一版对比」—— 任意两版都能比（教案 + 大纲）
+  /data-pick=/.test(lessonSrc) && /data-spick=/.test(lessonSrc)
+    && /state\.pick/.test(lessonSrc) && /state\.sylPick/.test(lessonSrc)
+    ? pass("版本链支持任意两版对比（教案 / 大纲都提供「选作对比」起点）")
+    : fail("版本链只能与上一版对比，缺少任意两版的入口");
 
   /* 🔴 课程必须**按账号分开存** —— 换账号登录要看到自己的课，不是上一个人的。
      键形如 `st_courses:teacher:zhangsan`；没有账号标识时才退回全局桶。 */
@@ -4267,9 +4449,12 @@ function verifyGlobal() {
   !/flex\s*:\s*0\s+0/.test(moreCss)
     ? pass("「⋯」没有 flex 主轴尺寸（不会被当成 flex 兄弟节点）")
     : fail("「⋯」还有 flex 尺寸声明，说明它又回到行内布局了");
-  /pointer-events\s*:\s*none/.test(moreCss) && /pointer-events\s*:\s*auto/.test(scssCode)
-    ? pass("「⋯」隐形时不接点击、显形才可点（右端不会变成隐形陷阱）")
-    : fail("隐形的「⋯」仍会吃掉点击 —— 点课程名边缘会莫名弹出菜单");
+  /* 🔴 第 55 轮改：原来 opacity:0（只有 hover 才浮出来）→ 用户**根本找不到**
+     「编辑 / 删除课程」入口。现在常显、常可点，hover 只负责加深。
+     断言随之从「隐形不接点击」改为「常显且可点」。 */
+  /pointer-events\s*:\s*auto/.test(moreCss) && /opacity\s*:\s*\.?\d/.test(moreCss)
+    ? pass("「⋯」常显且可点（原来 hover 才出现 —— 编辑 / 删除课程入口看不见）")
+    : fail("「⋯」又变回隐形了 —— 编辑 / 删除课程入口会看不见");
   const rowItemCss = (scssCode.match(/\.shell-side \.side-row \.side-item\s*\{([^}]*)\}/) || [, ""])[1];
   /margin-bottom\s*:\s*0/.test(rowItemCss)
     ? pass("行间距移到 .side-row（行高与「⋯」的垂直居中基准一致）")
@@ -4364,6 +4549,11 @@ function verifyGlobal() {
   /if \(n\) \{[\s\S]{0,120}flash\(/.test(lessonSrc2)
     ? pass("章里还有教案时直接说明原因（不弹无效的确认框）")
     : fail("章里有教案时的处理方式不对");
+  /* 🔴 第 55 轮：教案面板要有**显式**删除入口 —— 原先删除只能去大纲树里悬停「⋯」找。 */
+  /id="lsDelBtn"/.test(lessonSrc2) && /closest\("#lsDelBtn"\)/.test(lessonSrc2)
+    && /askDeleteLesson\(state\.lessonId\)/.test(lessonSrc2)
+    ? pass("教案面板有显式的「删除教案」按钮（不必再去树里悬停找「⋯」）")
+    : fail("教案没有显式删除入口 —— 删除藏在悬停菜单里，用户找不到");
 
 
   // 大纲树的「⋯」与侧栏课程项同一套做法：绝对定位、隐形时不接点击

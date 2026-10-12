@@ -81,9 +81,12 @@ const STORE_KEY = {
   provider: "st_provider",
   name:     "st_display_name",
   apiKey:   "st_api_key",
+  searchProvider: "st_search_provider", // 联网搜索服务商（猜想验证）
+  searchKey:      "st_search_key",      // 联网搜索 API Key
   accounts: "st_accounts",          // 本地账号库
   readMode: "st_a11y_read_mode",    // 无障碍阅读模式开关
   agentTask: "st_agent_task",       // 交给 AI 助手的任务（含原文），见 schedule.html 方式三
+  scheduleImport: "st_schedule_import",  // AI 转好的课表文本（agent 页 → 课表页导入框的一次性交接）
   currentUser: "st_current_user",   // 当前登录账号（"角色:账号"）—— 数据按它分开存，见 nav.js
 };
 
@@ -252,15 +255,149 @@ function currentRole() {
   return ck === "teacher" ? "teacher" : "student";
 }
 
-/* ---------------- 无障碍阅读模式开关 ----------------
-   ⚠️ 用户明确要求：**功能先不实现**。这里只负责：
-     · 恢复勾选状态（默认勾选，无记录时也算开）
-     · 勾选变化 → 写 localStorage
-     · 在壳内时额外通知壳（保持两处开关一致）
+/* ---------------- 无障碍阅读模式 ----------------
+   🔴 第 57 轮起**真的实现了**（此前若干轮只有开关、只落状态）：
+     · 开启后本页根元素挂 `data-read-mode` → 由 design.css 给排版增强
+       （放大字号 / 行高、正文限宽、减弱装饰、加大点击目标）
+     · 右下角出现「阅读工具条」：朗读本页 / 停止 / 字号 −＋ / 退出
+     · **完全不依赖模型** —— 朗读走浏览器自带的 Web Speech API（`speak()`）
+     · 阅读模式下**点任意正文段落即可朗读该段**（事件委托，挂在 document）
+   ⚠️ 阅读模式**不动 Theme**：它是「同一主题下的排版增强」，不是换肤 ——
+      壳与页面的主题色一个都不变（验证器有断言盯着这一点）。
    UI 上可以有多个入口（登录页左下角 / 壳顶部栏），共用同一状态。
 --------------------------------------------------------------- */
 function readModeOn() {
   return LS.get(STORE_KEY.readMode, true) !== false;
+}
+
+/** 阅读模式的效果层：只碰根元素属性 + 工具条，别处一律不动 */
+function applyReadMode(on) {
+  readMode = on !== false;
+  try {
+    const root = document.documentElement;
+    if (readMode) root.setAttribute("data-read-mode", "");
+    else root.removeAttribute("data-read-mode");
+  } catch (_) { /* 异常 DOM 下静默 */ }
+  mountReaderBar();
+}
+
+/** 朗读取文的节点：有 main 用 main，否则退回正文容器 / body */
+function readerSource() {
+  return document.querySelector("main")
+    || document.querySelector(".page-wrap")
+    || document.querySelector(".page")
+    || document.body;
+}
+
+/** 停止朗读，并把工具条上的「朗读中」状态复位 */
+function readerStopSpeak() {
+  try { window.speechSynthesis.cancel(); } catch (_) {}
+  const bar = document.getElementById("readerBar");
+  if (bar) { bar.dataset.speaking = ""; syncReaderBar(bar); }
+}
+
+/** 一次朗读：先停掉上一次，再读（Web Speech API，无需模型）；读完自动复位 */
+function readerSpeak(text) {
+  const t = String(text == null ? "" : text).replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  if (!("speechSynthesis" in window)) return false;
+  try {
+    window.speechSynthesis.cancel();
+    const u = new window.SpeechSynthesisUtterance(t);
+    u.lang = "zh-CN";
+    u.rate = 0.95;
+    u.onend = readerStopSpeak;
+    u.onerror = readerStopSpeak;
+    window.speechSynthesis.speak(u);
+  } catch (_) { return false; }
+  return true;
+}
+
+/** 当前 a11y 字号（阅读工具条的 A− / A+ 共用这份配置） */
+function readerFontSize() {
+  const c = LS.get(STORE_KEY.a11y, null) || {};
+  const n = Number(c.size);
+  return Number.isFinite(n) ? n : 15;
+}
+
+/** 调整字号 → 写回 a11y 配置并立即生效（会顺便广播给壳，两边一致） */
+function readerFontStep(delta) {
+  const c = LS.get(STORE_KEY.a11y, null) || {};
+  const size = Math.min(22, Math.max(13, readerFontSize() + delta));
+  c.size = size;
+  LS.set(STORE_KEY.a11y, c);
+  applyA11yVars(c);
+  const bar = document.getElementById("readerBar");
+  if (bar) syncReaderBar(bar);
+}
+
+/** 刷新工具条上的状态（字号数字、朗读按钮的可用性） */
+function syncReaderBar(bar) {
+  const sizeEl = bar.querySelector("[data-rb-size]");
+  if (sizeEl) sizeEl.textContent = readerFontSize() + "px";
+  const busy = !!bar.dataset.speaking;
+  bar.querySelectorAll("[data-rb]").forEach((b) => {
+    const k = b.dataset.rb;
+    if (k === "stop") b.disabled = !busy;
+    if (k === "read") b.disabled = busy;
+  });
+}
+
+/**
+ * 右下角「阅读工具条」—— 只在阅读模式开启、且不是登录页时存在。
+ * 🔴 事件委托挂在工具条自身（节点重建也不丢），别逐个 addEventListener。
+ */
+function mountReaderBar() {
+  const isLogin = document.documentElement.getAttribute("data-role") === "login";
+  const want = readMode && !isLogin;
+  let bar = document.getElementById("readerBar");
+  if (!want) { if (bar) bar.remove(); return; }
+  if (bar) { syncReaderBar(bar); return; }
+
+  bar = el(
+    '<div id="readerBar" class="reader-bar" role="toolbar" aria-label="阅读辅助">' +
+      '<button class="rb-btn rb-main" type="button" data-rb="read" title="从开头朗读本页正文">' +
+        '<span aria-hidden="true">🔊</span> 朗读本页</button>' +
+      '<button class="rb-btn" type="button" data-rb="stop" title="停止朗读" disabled>' +
+        '<span aria-hidden="true">■</span> 停止</button>' +
+      '<span class="rb-font">' +
+        '<button class="rb-btn rb-ic" type="button" data-rb="minus" title="调小字号" aria-label="调小字号">A−</button>' +
+        '<b data-rb-size>15px</b>' +
+        '<button class="rb-btn rb-ic" type="button" data-rb="plus" title="调大字号" aria-label="调大字号">A+</button>' +
+      '</span>' +
+      '<button class="rb-btn rb-off" type="button" data-rb="off" title="退出阅读模式">退出</button>' +
+    '</div>');
+
+  bar.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-rb]");
+    if (!b) return;
+    const k = b.dataset.rb;
+    if (k === "read") {
+      if (readerSpeak((readerSource().innerText || readerSource().textContent || ""))) {
+        bar.dataset.speaking = "1";
+        flash("开始朗读 —— 想停就说一声，或点「停止」", "");
+      } else {
+        flash("这个浏览器不支持语音朗读，换个浏览器再试", "bad");
+      }
+    } else if (k === "stop") {
+      readerStopSpeak();
+    } else if (k === "minus") readerFontStep(-1);
+    else if (k === "plus") readerFontStep(1);
+    else if (k === "off") setReadMode(false);
+    syncReaderBar(bar);
+  });
+
+  document.body.appendChild(bar);
+  syncReaderBar(bar);
+}
+
+/** 统一改阅读模式：落盘 + 生效 + 同步同页所有勾选框 + 通知壳 */
+function setReadMode(on) {
+  const v = on !== false;
+  LS.set(STORE_KEY.readMode, v);
+  document.querySelectorAll("#a11yReadMode, [data-a11y-mode]").forEach((b) => { b.checked = v; });
+  if (inShell()) notifyShell("st-a11y-mode", { on: v });
+  applyReadMode(v);
 }
 
 function mountReadMode(root) {
@@ -270,18 +407,13 @@ function mountReadMode(root) {
   const boxes = [$("#a11yReadMode", scope), ...scope.querySelectorAll("[data-a11y-mode]")]
     .filter(Boolean)
     .filter((b, i, arr) => arr.indexOf(b) === i);
+  // ⚠️ 即使本页没有勾选框，也要把阅读态应用上（登录页左侧栏 / 壳顶部栏可能有）
+  applyReadMode(readModeOn());
   if (!boxes.length) return;
 
   boxes.forEach((box) => {
     box.checked = readModeOn();
-    box.addEventListener("change", () => {
-      const on = !!box.checked;
-      LS.set(STORE_KEY.readMode, on);
-      readMode = on;
-      boxes.forEach((b) => { b.checked = on; });   // 同页多入口同步
-      if (inShell()) notifyShell("st-a11y-mode", { on });
-      // TODO: 具体呈现方式待定 —— 功能实现留待后续
-    });
+    box.addEventListener("change", () => setReadMode(!!box.checked));
   });
 }
 
@@ -613,6 +745,18 @@ function remountStandaloneSide() {
 /** 通知「当前页面」：课程目录变了，相关 UI 自己去重渲染 */
 function notifyCoursesChanged() {
   try { document.dispatchEvent(new CustomEvent("st:courses-changed")); }
+  catch (_) { /* 没有 CustomEvent 构造器就算了，不影响主流程 */ }
+}
+
+/**
+ * 班级目录变了（第 55 轮）。
+ * · 在壳内：把新列表交给壳 —— 侧栏归壳渲染，不广播的话「班级管理」里看不到新班
+ * · 独立模式：侧栏归自己渲染，重挂一次就够
+ */
+function notifyClassesChanged() {
+  if (inShell()) { notifyShell("st-classes-changed", { classes: CLASSES }); return; }
+  if (document.querySelector(".standalone-side")) remountStandaloneSide();
+  try { document.dispatchEvent(new CustomEvent("st:classes-changed")); }
   catch (_) { /* 没有 CustomEvent 构造器就算了，不影响主流程 */ }
 }
 
@@ -1066,19 +1210,26 @@ function openAddClass() {
 
   setTimeout(() => document.getElementById("kName")?.focus?.(), 0);
 
-  // 保存：⚠️ 仅做校验与提示，不落库
+  // 保存：**真的建班** —— 与 shell.js 那份同逻辑，共用 nav.js 的 createClass()
   document.getElementById("classSave").addEventListener("click", () => {
-    const name = (document.getElementById("kName")?.value || "").trim();
     const err = document.getElementById("classError");
-    if (!name) {
-      err.textContent = "请先填写班级名称";
+    const r = createClass({
+      label: (document.getElementById("kName")?.value || "").trim(),
+      major: document.getElementById("kMajor")?.value || "",
+      grade: document.getElementById("kGrade")?.value || "",
+      course: document.getElementById("kCourse")?.value || "",
+      count: document.getElementById("kCount")?.value || "",
+    });
+    if (!r.ok) {
+      err.textContent = r.error;
       err.hidden = false;
       document.getElementById("kName")?.focus?.();
       return;
     }
     err.hidden = true;
-    // TODO: 保存逻辑待定 —— 班级归属哪个课程、是否与「我的课程」联动尚未确定
-    alert(`「${name}」已填写完整。\n\n保存逻辑尚未接入，本弹窗暂为示例。`);
+    closeAddClass();
+    remountStandaloneSide();      // 新班级立刻出现在「班级管理」里
+    notifyClassesChanged();
   });
 }
 
@@ -1138,11 +1289,27 @@ function tearDownStandalone() {
 
 /* ---------------- 初始化 ---------------- */
 /**
- * 无障碍阅读模式开关的当前状态（由壳通过 st-a11y-mode 下发）。
- * ⚠️ 占位变量：只记录状态，**没有任何视觉/行为实现**。
- * 将来要实现时，从这里取 readMode 判断即可。
+ * 无障碍阅读模式的当前状态（由壳通过 st-a11y-mode 下发 / 本页开关切换）。
+ * 第 57 轮起**有真实实现**：为真时根元素挂 `data-read-mode`，并挂出阅读工具条。
+ * 想判断"现在是不是阅读态"，读这个变量或用 `document.documentElement.hasAttribute("data-read-mode")`。
  */
 let readMode = true;
+
+/* 阅读模式下：点正文里的段落 / 列表项 → 朗读这一段（Web Speech API，不走模型）
+   🔴 事件委托挂 document：内容随数据重渲染也不会失效；
+      链接、按钮、输入框等交互元素先排除掉，别抢它们的点击。 */
+document.addEventListener("click", (e) => {
+  if (!readMode) return;
+  if (e.target.closest("a, button, input, textarea, select, label, summary, .btn, #readerBar")) return;
+  const blk = e.target.closest("p, li, h1, h2, h3, h4, blockquote, .pre");
+  if (!blk) return;
+  const t = (blk.innerText || blk.textContent || "").trim();
+  if (!t || t.length > 600) return;
+  if (readerSpeak(t)) {
+    const bar = document.getElementById("readerBar");
+    if (bar) { bar.dataset.speaking = "1"; syncReaderBar(bar); }
+  }
+});
 
 Theme.init();
 applyA11yVars();
@@ -1167,12 +1334,11 @@ window.addEventListener("message", (e) => {
   if (d.type === "st-courses-changed") {
     applyCoursesChanged(d.courses);
   }
-  // 无障碍阅读模式：⚠️ 只接住状态，暂不做任何视觉实现（功能待定）
+  // 无障碍阅读模式：壳改了开关 → 本页立刻跟着切阅读态（视觉 + 工具条）
   if (d.type === "st-a11y-mode") {
-    readMode = d.on !== false;
-    // 页面上的勾选框也要跟着走（可能同时开着登录页/独立模式）
-    const b = document.getElementById("a11yReadMode");
-    if (b) b.checked = readMode;
+    applyReadMode(d.on);
+    document.querySelectorAll("#a11yReadMode, [data-a11y-mode]")
+      .forEach((b) => { b.checked = readMode; });
   }
   if (d.type === "st-a11y-changed") {
     if (d.vars) {

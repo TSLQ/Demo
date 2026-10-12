@@ -22,7 +22,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8123
-ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "site")
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs")
 
 
 class NoCacheHandler(SimpleHTTPRequestHandler):

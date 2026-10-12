@@ -22,7 +22,7 @@ try {
   process.exit(0);
 }
 
-const SITE = path.resolve(__dirname, "..", "site");
+const SITE = path.resolve(__dirname, "..", "docs");
 
 let fail = 0, ok = 0;
 const P = (m) => { ok++; console.log("  v " + m); };
@@ -257,7 +257,42 @@ console.log("\n=== 2. 应用壳（学生身份）===");
       box.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
       const st2 = dom.window.localStorage.getItem("st_a11y_read_mode");
       String(st2) === "true" ? P("重新勾选后状态回写为 true") : F("重新勾选未回写: " + st2);
+
+      // 第 57 轮：阅读模式不再是「只记状态」—— 根元素真的挂 / 摘 data-read-mode
+      d.documentElement.hasAttribute("data-read-mode")
+        ? P("开启时根元素挂 data-read-mode（阅读态真的生效）") : F("未挂 data-read-mode");
+      box.checked = false;
+      box.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+      !d.documentElement.hasAttribute("data-read-mode")
+        ? P("取消勾选后 data-read-mode 被移除（阅读态真的撤掉）") : F("取消后阅读态没撤掉");
+      box.checked = true;
+      box.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+      d.documentElement.hasAttribute("data-read-mode")
+        ? P("重新勾选后阅读态恢复") : F("重新勾选未恢复阅读态");
     }
+  }
+  dom.window.close();
+}
+
+console.log("\n=== 2b. 无障碍阅读模式：内容页真的生效（第 57 轮）===");
+{
+  const dom = load("chat.html", { role: "student" });
+  await settle(dom);
+  const w = dom.window, d = w.document;
+  d.documentElement.hasAttribute("data-read-mode")
+    ? P("内容页默认进入阅读态（默认开）") : F("内容页没有阅读态");
+  const bar = d.getElementById("readerBar");
+  bar ? P("阅读工具条已挂出（#readerBar）") : F("阅读工具条没挂出");
+  if (bar) {
+    bar.querySelector('[data-rb="read"]') ? P("工具条有「朗读本页」") : F("缺朗读按钮");
+    bar.querySelector('[data-rb="stop"]') ? P("工具条有「停止」") : F("缺停止按钮");
+    bar.querySelector('[data-rb="minus"]') && bar.querySelector('[data-rb="plus"]')
+      ? P("工具条有字号 −＋") : F("缺字号按钮");
+    bar.querySelector('[data-rb="off"]') ? P("工具条有「退出」") : F("缺退出按钮");
+    // 退出 → 阅读态与工具条一并撤掉
+    bar.querySelector('[data-rb="off"]').dispatchEvent(new w.Event("click", { bubbles: true }));
+    !d.documentElement.hasAttribute("data-read-mode") && !d.getElementById("readerBar")
+      ? P("点「退出」后阅读态与工具条一并撤掉") : F("退出没生效");
   }
   dom.window.close();
 }
@@ -339,9 +374,11 @@ console.log("\n=== 3a-2. 课程项的「⋯」不占行内宽度（胶囊与其�
       ? P("「⋯」贴右端（right: " + cs(more).right + "）") : F("「⋯」没有贴右端");
     /translateY/.test(cs(more).transform)
       ? P("「⋯」垂直居中（" + cs(more).transform + "）") : F("「⋯」未垂直居中");
-    cs(more).opacity === "0" && cs(more).pointerEvents === "none"
-      ? P("没悬停时「⋯」不接点击（右端不会变成「隐形陷阱」）")
-      : F("隐形的「⋯」仍会吃掉点击: opacity=" + cs(more).opacity
+    /* 🔴 第 55 轮改：原来 opacity:0（只有 hover 才浮出来）→ 用户根本找不到
+       「编辑 / 删除课程」入口。现在常显、常可点，hover 只负责加深。 */
+    cs(more).opacity !== "0" && cs(more).pointerEvents === "auto"
+      ? P("「⋯」常显且可点（原来 hover 才出现 —— 入口看不见）")
+      : F("「⋯」不可见 / 点不到: opacity=" + cs(more).opacity
           + " pointer-events=" + cs(more).pointerEvents);
   }
 
@@ -867,13 +904,23 @@ console.log("\n=== 3c-3. 「班级管理」分组：多班 + 添加班级弹窗�
   err && !err.hidden && /班级名称/.test(err.textContent)
     ? P("空班级名提交被拦下并提示") : F("空班级名未被拦下");
 
-  // 填好后提交 → 示例提示，不落库
+  // 填好后提交 → **真的建班** + 侧栏立刻出现（第 55 轮）
+  const clsItems = () => [...d.querySelectorAll("#shellSide .side-item")]
+    .filter((b) => /^class\.html\?cls=/.test(b.dataset.page || ""));
+  const clsBefore = clsItems().length;
   d.getElementById("kName").value = "计科 2303 班";
+  d.getElementById("kCount").value = "42";
   d.getElementById("classSave").dispatchEvent(new w.Event("click", { bubbles: true }));
-  alerts.length === 1 && /计科 2303 班/.test(alerts[0]) && /未接入|示例/.test(alerts[0])
-    ? P("填好后给出「保存逻辑未接入」示例提示") : F("示例提示异常: " + JSON.stringify(alerts));
-  Object.keys(w.localStorage).filter((k) => /class|banji/i.test(k)).length === 0
-    ? P("班级弹窗未写入任何班级数据") : F("班级弹窗写了班级数据");
+  alerts.length === 0
+    ? P("建班不再弹「保存逻辑未接入」示例提示") : F("还在弹示例提示: " + JSON.stringify(alerts));
+  clsItems().length === clsBefore + 1
+    ? P("新班级立刻出现在侧栏「班级管理」里（" + clsBefore + " → " + clsItems().length + "）")
+    : F("侧栏没出现新班: " + clsBefore + " → " + clsItems().length);
+  const newCls = w.CLASSES[w.CLASSES.length - 1];
+  newCls.label === "计科 2303 班" ? P("新班级名称落库正确") : F("名称不对: " + newCls.label);
+  newCls.count === 42 ? P("学生人数也存了（额定人数）") : F("人数没存: " + newCls.count);
+  /计科 2303 班/.test(String(w.localStorage.getItem(w.eval("classStoreKey()")) || ""))
+    ? P("写进了按账号分桶的存档") : F("没落库");
 
   // Esc 关闭 —— 两个弹窗共用 modalEsc，必须分发到班级那个
   d.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -931,6 +978,23 @@ console.log("\n=== 3c-4. class.html（课程成员）：真实的「谁在课里
   const w = dom.window, d = w.document;
   w.confirm = () => true;
   w.alert = () => {};
+
+  /* ---------- ⓪ 通往本课教案的入口（第 55 轮：把「人 → 课 → 教案」接上） ---------- */
+  {
+    const gl = d.getElementById("goLesson");
+    gl ? P("课程成员页有「看这门课的教案」按钮") : F("缺 #goLesson 教案入口");
+    d.getElementById("courseLinks") && !d.getElementById("courseLinks").hidden
+      ? P("「这门课的其他页面」卡片在课程视角下显示") : F("教案入口卡片被隐藏了");
+    if (gl) {
+      let navTo = "";
+      const orig = w.navigate;
+      w.navigate = (p) => { navTo = p; };
+      gl.dispatchEvent(new w.Event("click", { bubbles: true }));
+      navTo === "lesson.html?course=ds"
+        ? P("点它带着课程跳到教案页（lesson.html?course=ds）") : F("跳转目标不对: " + navTo);
+      w.navigate = orig;
+    }
+  }
 
   /* ---------- ① 名单只有真加入的人 ---------- */
   const rows = [...d.querySelectorAll("#stuRows tr")];
@@ -1294,6 +1358,12 @@ console.log("\n=== 3c-6. 行为日志是「真记」的：答疑页 / 课件页�
   d2.querySelectorAll("#paperBody .annot").length === 2
     ? P("🔴 段落由 cwSections() 渲染（2 段，与老师端同一规则）")
     : F("段落没渲染: " + d2.querySelectorAll("#paperBody .annot").length);
+  // 第 54 轮：课程选择器（只列已加入且真有课件的课）
+  const cwCourseBox = d2.getElementById("cwCourses");
+  !cwCourseBox.hidden && /数据结构与算法/.test(cwCourseBox.textContent)
+    ? P("🔴 有「选课程」栏，列出学生加入的课（数据结构与算法）") : F("课程选择器没出来");
+  /老师发布/.test(d2.getElementById("paperMeta").textContent)
+    ? P("老师真发来的课件标「老师发布」（不是「预置示例」）") : F("来源标记不对");
 
   /还没有批注/.test(d2.getElementById("noteList").textContent)
     ? P("没有批注时列表给空状态") : F("批注空状态缺失");
@@ -1356,8 +1426,9 @@ console.log("\n=== 3c-6. 行为日志是「真记」的：答疑页 / 课件页�
   d3.getElementById("cwSaveBtn").dispatchEvent(new w3.Event("click", { bubbles: true }));
   await settle(dom3);
   const cws3 = JSON.parse(String(w3.localStorage.getItem("st_courseware:teacher:teacher")) || "[]");
-  cws3.length === 2 && cws3[0].title === "图的最短路径" && cws3[0].status === "draft"
-    ? P("保存为草稿落库（status=draft，未发布）") : F("保存没落库: " + JSON.stringify(cws3.map((c) => c.title)));
+  cws3.length === 1 && cws3[0].title === "图的最短路径" && cws3[0].status === "draft"
+    ? P("保存为草稿落库（status=draft，未发布；🔴 无预置种子，初始为空）")
+    : F("保存没落库: " + JSON.stringify(cws3.map((c) => c.title)));
   /图的最短路径/.test(d3.getElementById("cwList").textContent)
     ? P("课件列表里出现刚存的这份") : F("列表没刷新");
 
@@ -1584,6 +1655,41 @@ console.log("\n=== 3d. 课表与事项 / 教案（真实 DOM 交互）===");{
   diffBox.querySelector("#diffClose").click();
   await settle(dom);
   d.getElementById("diffBox").innerHTML.trim() === "" ? P("可以收起对比面板") : F("对比面板未收起");
+
+  // ---- 任意两版对比（第 57 轮：不再只能「与上一版」比）----
+  {
+    const vs = [...d.querySelectorAll("#tabBody .ver-item")];
+    vs.length >= 2 && vs.every((x) => x.querySelector("[data-pick]"))
+      ? P("每一版都提供「选作对比」（任意两版都能比）") : F("缺「选作对比」按钮");
+
+    // ① 选最早一版作起点 → 出现提示条
+    vs[vs.length - 1].querySelector("[data-pick]").click();
+    await settle(dom);
+    d.querySelector("#tabBody .pick-bar")
+      ? P("选了起点后出现提示条（当前选了哪一版）") : F("选起点后没有提示条");
+
+    // ② 再点最新一版 → 出这两版的差异
+    const pickEnd = [...d.querySelectorAll("#tabBody .ver-item")][0].querySelector("[data-pick]");
+    pickEnd.click();
+    await settle(dom);
+    const db2 = d.getElementById("diffBox");
+    db2 && /→/.test(db2.textContent) && db2.querySelector(".diff-fld")
+      ? P("再点另一版即出两版差异（任意两版，不必相邻）") : F("任意两版对比没出结果: " + (db2 ? db2.textContent.slice(0, 40) : "无面板"));
+    const cc = d.getElementById("diffBox").querySelector("#diffClose");
+    if (cc) { cc.click(); await settle(dom); }
+
+    // ③ 再选一次起点，用「取消」清掉
+    [...d.querySelectorAll("#tabBody .ver-item")][0].querySelector("[data-pick]").click();
+    await settle(dom);
+    const cancelPick = d.querySelector("#tabBody .pick-bar [data-pick]");
+    cancelPick ? P("提示条上有「取消」") : F("提示条没有取消按钮");
+    if (cancelPick) {
+      cancelPick.click();
+      await settle(dom);
+      !d.querySelector("#tabBody .pick-bar")
+        ? P("点「取消」能清掉对比起点") : F("取消后提示条还在");
+    }
+  }
 
   // ---- 回退 ----
   const cnt0 = L.commits.length;
@@ -1974,6 +2080,29 @@ console.log("\n=== 3d-6. 教案大纲的「⋯」：章 / 课时 / 整份大纲 
   d.getElementById("sylMoreBtn") && !d.getElementById("sylMoreBtn").hidden
     ? P("卡片头有「⋯」（整份大纲的操作）") : F("缺卡片头的「⋯」");
 
+  /* ---------- 1b. 教案面板有**显式**的「删除教案」按钮（第 55 轮） ---------- */
+  {
+    // ⚠️ `.ls-row` 本身就是那个带 data-ls 的按钮（不是它的祖先）
+    const lsBtn = d.querySelector("#outlineTree .ls-row[data-ls]");
+    lsBtn ? P("树里有课时行可点") : F("树里没有课时行");
+    if (lsBtn) {
+      lsBtn.click();
+      await settle(dom);
+      const lsDel = d.getElementById("lsDelBtn");
+      lsDel ? P("选中课时后，教案面板有显式的「删除教案」按钮") : F("教案面板没有显式删除按钮");
+      if (lsDel) {
+        let asked = "";
+        w.confirm = (m) => { asked = String(m); return false; };
+        lsDel.click();
+        await settle(dom);
+        /删除课时教案/.test(asked)
+          ? P("点「删除教案」先弹二次确认") : F("删除教案没有二次确认: " + asked);
+        /删除后无法撤销/.test(asked) ? P("确认框说明不可撤销") : F("确认框没提后果");
+        w.LESSONS["cs401-c1-1"] ? P("点「取消」后教案还在") : F("取消了还是删了");
+      }
+    }
+  }
+
   /* ---------- 2. 课时行菜单 → 删除教案 ---------- */
   d.querySelector('#outlineTree .tree-more[data-more="ls"]').click();
   await settle(dom);
@@ -2289,6 +2418,24 @@ console.log("\n=== 3d-8. 教案大纲的版本链（结构变更留痕 / 对比 
   /放在第 5 章/.test(txt(line)) ? chk("写出落点「放在第 5 章」", true) : chk("没写落点", false, txt(line));
   d.getElementById("sylDiffClose") ? chk("对比面板可收起", true) : chk("缺收起按钮", false);
   d.getElementById("aiSylDiffBtn") ? chk("对比面板有「让 AI 解读」入口", true) : chk("缺 AI 入口", false);
+
+  /* ---------- 3b. 大纲任意两版对比（第 57 轮） ---------- */
+  {
+    const vsA = [...d.querySelectorAll("#planPanel .ver-item")];
+    vsA.length >= 2 && vsA.every((x) => x.querySelector("[data-spick]"))
+      ? chk("大纲每一版都有「选作对比」", true) : chk("大纲缺「选作对比」", false);
+    vsA[vsA.length - 1].querySelector("[data-spick]").click();
+    await settle(dom);
+    d.querySelector("#planPanel .pick-bar")
+      ? chk("大纲选起点后出现提示条", true) : chk("大纲选起点没有提示条", false);
+    const other = [...d.querySelectorAll("#planPanel .ver-item")][0].querySelector("[data-spick]");
+    if (other) {
+      other.click();
+      await settle(dom);
+      /→/.test(txt(d.getElementById("sylDiffBox")))
+        ? chk("任意两版大纲对比出结果（不必相邻）", true) : chk("任意两版大纲对比没出结果", false);
+    }
+  }
 
   /* ---------- 4. AI 交接 ---------- */
   d.getElementById("aiSylDiffBtn").click();
@@ -2737,6 +2884,42 @@ console.log("\n=== 3h. 导入课表「方式三：AI 解析」→ 跳转 AI 助�
     ? P("内容为空时同样能跳转（不留旧内容）") : F("空内容跳转异常");
   w.navigate = origNavigate;
 
+  /* ---- 第 57 轮：AI 转好的文本，打开导入框时自动填入（闭环真正合上） ---- */
+  w.localStorage.setItem("st_schedule_import", "周一,第1-2节,数据结构与算法,6A-301,计科2301");
+  d.getElementById("importBtn").dispatchEvent(new w.Event("click", { bubbles: true }));
+  const ta57 = d.getElementById("impText");
+  ta57 && /数据结构与算法/.test(ta57.value)
+    ? P("打开导入框时自动填入 AI 转好的课表文本（不用再粘一遍）") : F("导入框没有自动填入");
+  !w.localStorage.getItem("st_schedule_import")
+    ? P("用过即删（不残留）") : F("回填后没清掉残留");
+
+  dom.window.close();
+}
+
+console.log("\n=== 3h-2. agent 的动作执行层（第 55 轮：确认执行真的落地）===");
+{
+  const dom = load("agent.html", { role: "teacher" });
+  await settle(dom);
+  const w = dom.window, d = w.document;
+  w.navigate = () => {};          // 别让 jsdom 真去跳页
+  w.confirm = () => true;
+
+  /* ① 执行层本身：直接调它，看返回值（点击那条端到端在 3i 段验，这里只验逻辑） */
+  const r1 = w.eval("runAgentStep({ skill:'atom-gen-quiz', layer:'atomic', kind:'write',"
+    + " name:'等待确认', arg:'action=publish_exam', wait:true }, { role:'teacher' })");
+  r1 && typeof r1.ok === "boolean"
+    ? P("runAgentStep 返回 {ok, …} —— 动作执行层真的接上了")
+    : F("runAgentStep 没返回结果: " + JSON.stringify(r1));
+
+  /* ② 没有可发的卷子时必须**如实拒绝**，而不是假装成功 */
+  if (r1 && !r1.ok) {
+    /没有|还没|先/.test(String(r1.reason || ""))
+      ? P("没执行时给出可读原因：" + String(r1.reason).slice(0, 34))
+      : F("拒绝时没说清为什么: " + r1.reason);
+  }
+  /* ③ 结果自带可直接显示的文案（界面拿它渲染，不需要再翻译一遍） */
+  (r1 && (r1.detail || r1.reason))
+    ? P("结果自带可显示文案（detail / reason）") : F("结果里没有可显示文案");
   dom.window.close();
 }
 
@@ -2906,6 +3089,44 @@ console.log("\n=== 3i. agent.html：三层技能链 + 画像 + 任务交接（�
   /回到课表页导入/.test(log) ? P("给出「回课表页导入」的闭环入口") : F("缺闭环入口");
   w.localStorage.getItem("st_agent_task") === null
     ? P("处理完把交接键删掉（下次进来不会重复触发）") : F("交接键没清");
+
+  /* ---------- 第 57 轮：结果回填导入框 + 技能真的接上模型 ---------- */
+  const stash57 = w.localStorage.getItem("st_schedule_import");
+  stash57 ? P("课表解析结果写回 st_schedule_import（回去就是接着干，不用再粘一遍）")
+    : F("课表解析结果没有回填导入框");
+
+  // 未接模型：技能链是同步的、给的是骨架（绝不假装生成）
+  const syncRun57 = w.runSkillChain(["atom-lesson-draft"], { chapterTitle: "第 7 章" }, { role: "teacher" });
+  syncRun57 && typeof syncRun57.then !== "function"
+    ? P("未接模型时技能链是同步的（走规则骨架，不假装在生成）") : F("未接模型却走了异步路径");
+  /结构|待补充|六个小节/.test((syncRun57.secs[0].lines || []).join("\n"))
+    ? P("未接模型给的是**结构骨架**（如实说明，不塞假内容）")
+    : F("未接模型返回了不该有的内容: " + (syncRun57.secs[0].lines || []).join(" ").slice(0, 50));
+
+  // 配了 Key：同一个技能真的去调模型（返回 Promise，且结果是模型写的）
+  try {
+    // ⚠️ LS.get 走 JSON.parse → 这里必须写 JSON 字符串（写裸串会被当成解析失败）
+    w.localStorage.setItem("st_provider", JSON.stringify("deepseek"));
+    w.localStorage.setItem("st_api_key", JSON.stringify("sk-test-123"));
+    w.llmReady() ? P("配了服务商 + Key 后 llmReady() 为真") : F("llmReady() 没反应");
+    let aiCalled57 = 0;
+    w.fetch = function () {
+      aiCalled57++;
+      return Promise.resolve({ ok: true, json: function () {
+        return Promise.resolve({ choices: [{ message: { content: "## 教学目标\n- 模型写的目标（验证用）" } }] });
+      } });
+    };
+    const pAsync57 = w.runSkillChain(["atom-lesson-draft"], { chapterTitle: "第 7 章" }, { role: "teacher" });
+    pAsync57 && typeof pAsync57.then === "function"
+      ? P("接了模型后技能链返回 Promise（调用方 then 接住）") : F("接了模型却没走异步路径");
+    const resAsync57 = await pAsync57;
+    aiCalled57 === 1 ? P("真的向模型发了一次请求（fetch 被调用）") : F("没有真的调模型: " + aiCalled57);
+    /模型写的目标/.test((resAsync57.secs[0].lines || []).join("\n"))
+      ? P("结果里是**模型生成的内容**（不再只是骨架）") : F("结果里没有模型输出");
+  } catch (e) {
+    F("模型链路测试抛错: " + (e && e.message));
+  }
+
   dom.window.close();
 
   /* ---------- ④ 出题：写操作必须停下来问一次 ---------- */
@@ -2923,8 +3144,10 @@ console.log("\n=== 3i. agent.html：三层技能链 + 画像 + 任务交接（�
   /出题/.test(d2.querySelector("#chatLog .skill-chain").textContent)
     ? P("出题技能被挂上（按你说的活路由）") : F("没挂上出题技能");
   waits[0].querySelector(".btn-primary").dispatchEvent(new w2.Event("click", { bubbles: true }));
-  await waitFor(() => /已确认/.test(d2.getElementById("chatLog").textContent), 6000);
-  /已确认/.test(d2.getElementById("chatLog").textContent) ? P("点确认后继续执行") : F("确认后没继续");
+  // 🔴 第 55 轮：确认后给的是**真实结果**（已把… / 没有执行：…），不再是干巴巴的「已确认」
+  await waitFor(() => /已把|没有执行/.test(d2.getElementById("chatLog").textContent), 6000);
+  /已把|没有执行/.test(d2.getElementById("chatLog").textContent)
+    ? P("点确认后给出真实执行结果，并继续往下走") : F("确认后没继续");
   dom2.window.close();
 
   /* ---------- ⑤ 授权：可以选「只给建议」 ---------- */
@@ -3453,6 +3676,62 @@ console.log("\n=== 3m. 新建课程：持久化 / 独立模式 / class.html 联�
   dom8.window.close();
 }
 
+console.log("\n=== 3m-3. 教师端看学生的真实进度与推导 + 跨桶删除（第 55 轮）===");
+{
+  const ACC = JSON.stringify([
+    { role: "teacher", user: "zhangsan", name: "李老师", createdAt: 1 },
+    { role: "student", user: "lisi", name: "李四", createdAt: 2 },
+  ]);
+  const AID = "act-share-1";
+  const ACT = JSON.stringify([{
+    id: AID, title: "圆的面积", goal: "圆面积是怎么来的", status: "open", origin: "teacher",
+    courseId: "", participants: [], findings: [], messages: [],
+    skeleton: { stages: [{ id: "s1", prompt: "先问", hint: "线索", tryIt: "动手" }] },
+    createdAt: 1, updatedAt: 1,
+  }]);
+  const PROG = JSON.stringify({
+    "act-share-1": {
+      activityId: AID, currentStage: "s1", done: false,
+      notes: [{ at: 5, text: "我先量了半径" }],
+      deductions: [{ at: 6, text: "半径翻倍，面积变四倍", source: "me" }],
+      updatedAt: 7,
+    },
+  });
+
+  const dom = load("training.html", { role: "teacher", restore: { ls: {
+    st_accounts: ACC,
+    st_current_user: "teacher:zhangsan",
+    "st_activities:teacher:zhangsan": ACT,
+    "st_activities:student:lisi": ACT,
+    "st_training_progress:student:lisi": PROG,
+  } } });
+  await settle(dom);
+  const w = dom.window, d = w.document;
+  w.confirm = () => true;
+
+  const paneTxt = () => d.getElementById("actPane").textContent;
+  /学生做到哪了/.test(paneTxt())
+    ? P("教师端实训详情有「学生做到哪了」区块") : F("缺「学生做到哪了」区块");
+  /李四/.test(paneTxt())
+    ? P("跨桶读到了学生的进度记录（显示学生姓名）") : F("没读到学生进度记录");
+  /半径翻倍，面积变四倍/.test(paneTxt())
+    ? P("能看到学生推导出来的结论（不只是「参没参与」）") : F("看不到学生推导内容");
+  /1 人留下进度/.test(d.getElementById("actList").textContent)
+    ? P("「N 人」是真实留下进度的人数（不是被圈进名单的人数）") : F("名单人数口径没换");
+
+  /* 跨桶删除：教师桶删掉 → 学生桶里的同一副本也要没 */
+  /act-share-1/.test(String(w.localStorage.getItem("st_activities:student:lisi") || ""))
+    ? P("（前置）学生桶里确实有一份副本") : F("学生桶里没有副本，这条测不到");
+  d.getElementById("actDel").dispatchEvent(new w.Event("click", { bubbles: true }));
+  await settle(dom);
+  !/act-share-1/.test(String(w.localStorage.getItem("st_activities:teacher:zhangsan") || ""))
+    ? P("删除后教师桶里没有了") : F("教师桶没删掉");
+  !/act-share-1/.test(String(w.localStorage.getItem("st_activities:student:lisi") || ""))
+    ? P("学生桶里的同一副本也一并清掉（跨桶，不留孤儿）") : F("学生桶里还留着已删的活动");
+
+  dom.window.close();
+}
+
 console.log("\n=== 3n. 实训管理：发布 → 引导骨架 → 发布状态 → 删除（真实 DOM）===");
 {
   /* 独立模式打开（内容页自己渲染），数据走 nav.js 的预置演示实训。
@@ -3510,6 +3789,23 @@ console.log("\n=== 3n. 实训管理：发布 → 引导骨架 → 发布状态 �
   await settle(dom);
   w.eval("ACTIVITIES.filter((a) => /想搞清公式/.test(a.goal)).length") === 1
     ? P("目标（学生看到的那句话）可改并保存") : F("目标没保存");
+
+  /* ---------- ③b 讨论区（群聊）：老师能发信息 → 落盘 + 回显 ---------- */
+  const paneC = d.getElementById("actPane");
+  /讨论区/.test(paneC.textContent)
+    ? P("右栏有「讨论区」群聊块") : F("讨论区块没渲染");
+  /李老师|王同学/.test(paneC.textContent)
+    ? P("讨论区里看得到预置消息（师生都有）") : F("讨论区没有预置消息");
+  const chatInput = d.getElementById("chatInput");
+  const chatSend = d.getElementById("chatSend");
+  chatInput && chatSend ? P("讨论区有输入框与「发送」按钮") : F("讨论区控件缺失");
+  chatInput.value = "今天先到这一步，明天各自说说自己的猜想。";
+  chatSend.dispatchEvent(new w.Event("click", { bubbles: true }));
+  await settle(dom);
+  /明天各自说说/.test(d.getElementById("actPane").textContent)
+    ? P("老师发的消息立刻回显") : F("老师消息没回显");
+  /明天各自说说/.test(String(w.localStorage.getItem("st_activities")))
+    ? P("🔴 老师消息写回了活动记录（落盘）") : F("老师消息没落盘");
 
   /* ---------- ④ 骨架步骤：加 / 删 / 调序（改完就落盘） ---------- */
   const before = stageEls().length;
@@ -3663,7 +3959,11 @@ console.log("\n=== 3o-b. 学生端实训：跨桶读 → 推进 → 记路线 �
       { id: "s1", title: "先问：凭什么知道它", prompt: "往哪想", clue: "内接正多边形", tryIt: "画个内接正六边形" },
       { id: "s2", title: "让误差看得见", prompt: "边数加倍会怎样", clue: "割圆术", tryIt: "算正十二边形比值" },
     ] },
-    participants: ["李同学"], findings: [], createdAt: 1, updatedAt: 2,
+    participants: ["李同学"], findings: [],
+    messages: [
+      { id: "m-cross-1", who: "李老师", role: "teacher", at: 1000, text: "先想一想：现在会算哪些图形的面积？" },
+    ],
+    createdAt: 1, updatedAt: 2,
   };
   const dom = load("training-student.html", { role: "student", restore: { ls: {
     st_current_user: "student:student",
@@ -3690,51 +3990,66 @@ console.log("\n=== 3o-b. 学生端实训：跨桶读 → 推进 → 记路线 �
     ? P("自己发起的也列出来了")
     : F("看不到自己发起的活动");
 
-  /* ---------- ② 点开 → 参与视图：骨架 / 目标 / 进度 ---------- */
+  /* ---------- ② 点开 → 参与视图：三栏（列表 / 聊天 / 进度）/ 不显示骨架 ---------- */
   d.querySelector('#stList [data-act-id="act-cross"]').dispatchEvent(new w.Event("click", { bubbles: true }));
   await settle(dom);
-  const pane = d.getElementById("stPane");
+  const pane = d.getElementById("stChat");     // 中栏：标题 + 目标 + 讨论区
+  const side = d.getElementById("stSide");     // 右栏：进度 / 灵感 / 推导
+  pane && side ? P("学生端是左中右三栏（#stList / #stChat / #stSide）") : F("三栏容器缺失");
   /圆面积公式是怎么来的/.test(pane.textContent)
     ? P("点开实训看到标题与参与视图") : F("详情没渲染");
   /圆的面积公式怎么被创造出来的/.test(pane.textContent)
-    ? P("能看到「我们要探究什么」（目标）") : F("看不到目标");
-  pane.querySelectorAll("#stStages .stage").length === 2
-    ? P("骨架渲染出 2 步") : F("骨架步数异常");
-  /引导问题|往哪想/.test(pane.textContent) && /动手做/.test(pane.textContent)
-    ? P("每一步都能看到「引导问题 + 线索 + 动手做」") : F("步骤抓手不完整");
-  !/πr²|S\s*=/.test(pane.textContent)
-    ? P("学生看到的骨架里**没有终点结论**（不给答案，给路径）")
-    : F("骨架里出现了结论");
-  /已走 0 \/ 2 步/.test(pane.textContent)
-    ? P("进度从 0/2 开始") : F("进度初始值不对");
+    ? P("中栏能看到「我们要探究什么」（目标）") : F("看不到目标");
+  !/引导路径|引导问题|往哪想|动手做|内接正多边形|割圆术/.test(pane.textContent + side.textContent)
+    ? P("学生端不显示引导骨架（不透露答案）") : F("学生端仍显示了骨架内容");
+  /探究进度/.test(side.textContent) && /已积累 0 条成果/.test(side.textContent)
+    ? P("右栏有「探究进度」且从 0 条成果开始") : F("进度初始不对");
+  /保存的猜想灵感/.test(side.textContent)
+    ? P("右栏有「保存的猜想灵感」区") : F("猜想灵感区没渲染");
+  /目前推导出来有帮助的信息/.test(side.textContent)
+    ? P("右栏有「目前推导出来有帮助的信息」区") : F("推导信息区没渲染");
+  !/探究进度|保存的猜想灵感/.test(pane.textContent)
+    ? P("中栏只放聊天（进度类块没堆在中栏）") : F("进度块仍堆在中栏");
 
-  /* ---------- ③ 推进：点「走到这一步」→ 进度落学生桶 ---------- */
-  const markBtn = pane.querySelector('#stStages [data-mark]');
-  markBtn.dispatchEvent(new w.Event("click", { bubbles: true }));
+  /* ---------- ③ 存为灵感 → 落学生桶进度层 ---------- */
+  const ii = d.getElementById("ideaInput");
+  const ia = d.getElementById("ideaAdd");
+  ii && ia ? P("有「存为灵感」输入框与按钮") : F("灵感控件缺失");
+  ii.value = "我把它切成 8 个扇形，拼起来像长方形";
+  ia.dispatchEvent(new w.Event("click", { bubbles: true }));
   await settle(dom);
-  /已走 1 \/ 2 步/.test(d.getElementById("stPane").textContent)
-    ? P("点「我走到这一步了」后进度推进到 1/2") : F("进度没推进");
+  /拼起来像长方形/.test(d.getElementById("stSide").textContent)
+    ? P("存的灵感立刻回显") : F("灵感没回显");
   w.localStorage.getItem("st_training_progress:student:student") !== null
-    ? P("🔴 进度真的落盘到学生桶（st_training_progress:student:student）")
-    : F("进度没落学生桶");
+    ? P("🔴 灵感落盘到学生桶进度层（st_training_progress:student:student）")
+    : F("灵感没落盘");
 
-  /* ---------- ④ 记路线笔记 ---------- */
-  const ni = d.getElementById("noteInput");
-  ni.value = "我把它切成 8 个扇形，拼起来像长方形";
-  d.getElementById("noteAdd").dispatchEvent(new w.Event("click", { bubbles: true }));
-  await settle(dom);
-  /拼起来像长方形/.test(d.getElementById("stPane").textContent)
-    ? P("记下路线笔记，且立刻回显") : F("笔记没记上");
-
-  /* ---------- ⑤ 标记新发现 → 写回老师桶 ---------- */
-  const fi = d.getElementById("findInput");
-  fi.value = "我试了割补法，和割圆术是两条路";
+  /* ---------- ④ 标记新发现 → 写回老师桶 ---------- */
+  const fi2 = d.getElementById("ideaInput");
+  fi2.value = "我试了割补法，和割圆术是两条路";
   d.getElementById("findAdd").dispatchEvent(new w.Event("click", { bubbles: true }));
   await settle(dom);
-  /割补法/.test(d.getElementById("stPane").textContent)
+  /割补法/.test(d.getElementById("stSide").textContent)
     ? P("标记新发现后立刻回显") : F("新发现没回显");
   /割补法/.test(String(w.localStorage.getItem("st_activities:teacher:teacher")))
     ? P("🔴 新发现写回了老师桶（老师看得到）") : F("新发现没落到老师桶");
+
+  /* ---------- ⑤b 讨论区（群聊）：中栏 + 老师消息跨桶可读 + 学生发消息写回老师桶 ---------- */
+  const paneC = d.getElementById("stChat");
+  /讨论区/.test(paneC.textContent)
+    ? P("中栏有「讨论区」群聊块") : F("讨论区块没渲染");
+  /李老师/.test(paneC.textContent)
+    ? P("讨论区里看得到老师发的消息（跨桶读）") : F("讨论区看不到老师消息");
+  const chatInput = d.getElementById("chatInput");
+  const chatSend = d.getElementById("chatSend");
+  chatInput && chatSend ? P("讨论区有输入框与「发送」按钮") : F("讨论区控件缺失");
+  chatInput.value = "老师，我卡在第二步了，能再给个线索吗？";
+  chatSend.dispatchEvent(new w.Event("click", { bubbles: true }));
+  await settle(dom);
+  /卡在第二步/.test(d.getElementById("stChat").textContent)
+    ? P("学生发的消息立刻回显") : F("学生消息没回显");
+  /卡在第二步/.test(String(w.localStorage.getItem("st_activities:teacher:teacher")))
+    ? P("🔴 学生消息写回了老师桶（老师看得到）") : F("学生消息没写回老师桶");
 
   /* ---------- ⑥ 发起实训：预览 → 创建 → 落学生桶 + 同步教师桶 ---------- */
   d.getElementById("btnNewAct").dispatchEvent(new w.Event("click", { bubbles: true }));
@@ -3756,6 +4071,20 @@ console.log("\n=== 3o-b. 学生端实训：跨桶读 → 推进 → 记路线 �
     : F("学生发起的没同步给老师");
   /进行中/.test(d.getElementById("stList").textContent)
     ? P("发起后列表里出现「进行中」（学生发起直接开启，不等老师确认）") : F("发起后状态不对");
+
+  /* ---------- ⑦ 让 AI 验证 → 结论记入「推导信息」（第 50/52 轮） ---------- */
+  const gi2 = d.getElementById("guessInput");
+  const gg = d.getElementById("guessGo");
+  gi2 && gg ? P("「推导信息」区有「让 AI 验证」输入框与按钮") : F("AI 验证控件缺失");
+  gi2.value = "我猜：先分两半各自排序再合并，是不是归并排序？";
+  gg.dispatchEvent(new w.Event("click", { bubbles: true }));
+  await settle(dom);
+  /预置示例/.test(d.getElementById("stSide").textContent)
+    ? P("未接模型/未配搜索时，结论标「预置示例」记入推导信息")
+    : F("AI 验证没给出预置示例结论");
+  /先分两半各自排序再合并/.test(d.getElementById("stSide").textContent)
+    ? P("猜想本身也存成了灵感（保存的猜想灵感区能看到）")
+    : F("猜想没存成灵感");
 
   dom.window.close();
 }

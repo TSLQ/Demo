@@ -313,8 +313,10 @@ const state = {
   lessonId: "",
   tab: "plan",
   diff: null,          // 课时版本的对比：{ from, to }（下标）
+  pick: null,          // 「任意两版对比」选中的起点（课时版本下标）
   outlineHistory: false,   // 右栏是否切到「大纲版本历史」视图
   sylDiff: null,           // 大纲版本的对比：{ from, to }（下标）
+  sylPick: null,           // 「任意两版对比」选中的起点（大纲版本下标）
 };
 
 /* ---------------- 轻提示 ---------------- */
@@ -558,6 +560,7 @@ function renderLessonPanel(panel) {
             `<option value="${k}"${k === L.status ? " selected" : ""}>${esc(LESSON_STATUS[k].label)}</option>`).join("")}
         </select>
         <button class="btn btn-sm" type="button" id="editBtn">编辑教案</button>
+        <button class="btn btn-sm btn-ghost" type="button" id="lsDelBtn">删除教案</button>
       </div>
     </div>
 
@@ -622,7 +625,8 @@ function renderVersionTab(box, L) {
   const hist = lessonHistory(L);
   box.innerHTML = `
     <p class="ver-hint">每次修改都会追加一版，<b>历史只增不减</b> —— 「回到某版」也是新增一版，
-      不会覆盖掉中间的任何一次修改。</p>
+      不会覆盖掉中间的任何一次修改。要比任意两版：先点一版的「选作对比」，再点另一版即可。</p>
+    ${state.pick != null ? `<div class="pick-bar">已选 <b class="mono">${esc(L.commits[state.pick].id)}</b> 作对比起点 —— 再点另一版的「选作对比」即出两版差异<button class="btn btn-sm btn-ghost" type="button" data-pick="${state.pick}">取消</button></div>` : ""}
     <div class="ver-list">
       ${hist.map(({ commit: c, index: i }) => `
         <div class="ver-item">
@@ -641,6 +645,7 @@ function renderVersionTab(box, L) {
             </div>
             <div class="ver-acts">
               ${i > 0 ? `<button class="btn btn-sm btn-ghost" type="button" data-diff="${i}">与上一版对比</button>` : ""}
+              <button class="btn btn-sm btn-ghost${state.pick === i ? " is-pick" : ""}" type="button" data-pick="${i}">${state.pick === i ? "✓ 对比起点" : "选作对比"}</button>
               ${i !== L.head ? `<button class="btn btn-sm btn-ghost" type="button" data-revert="${i}">回到这版</button>` : ""}
             </div>
           </div>
@@ -723,8 +728,10 @@ function renderOutlineHistory(panel) {
     <p class="ver-hint">
       大纲的每次结构改动都会追加一版，<b>历史只增不减</b> —— 「回到某版」也是新增一版，
       不会覆盖中间的任何一次调整。课时教案的内容有它自己的版本链，这里只管结构。
+      要比任意两版：先点一版的「选作对比」，再点另一版即可。
     </p>
 
+    ${state.sylPick != null ? `<div class="pick-bar">已选 <b class="mono">${esc(syl.commits[state.sylPick].id)}</b> 作对比起点 —— 再点另一版的「选作对比」即出两版差异<button class="btn btn-sm btn-ghost" type="button" data-spick="${state.sylPick}">取消</button></div>` : ""}
     <div class="ver-list">
       ${hist.map(({ commit: c, index: i }) => `
         <div class="ver-item">
@@ -744,6 +751,7 @@ function renderOutlineHistory(panel) {
             </div>
             <div class="ver-acts">
               ${i > 0 ? `<button class="btn btn-sm btn-ghost" type="button" data-sdiff="${i}">与上一版对比</button>` : ""}
+              <button class="btn btn-sm btn-ghost${state.sylPick === i ? " is-pick" : ""}" type="button" data-spick="${i}">${state.sylPick === i ? "✓ 对比起点" : "选作对比"}</button>
               ${i !== syl.head ? `<button class="btn btn-sm btn-ghost" type="button" data-srevert="${i}">回到这版</button>` : ""}
             </div>
           </div>
@@ -1197,7 +1205,8 @@ function openChapterEditor(chapterId) {
 /* ============================================================
    AI 交接 —— 与课表导入的「方式三」用同一套契约
    写 STORE_KEY.agentTask 后跳到 agent.html?task=xxx
-   （agent.html 还没消费它，本轮只做交接）
+   ✅ 第 57 轮起 agent 页真的消费它：拿 task.prompt 当系统提示词，
+      接了模型就现场生成（起草教案 / 改进建议 / 差异解读）。
    ============================================================ */
 
 const AI_PROMPTS = {
@@ -1353,7 +1362,19 @@ $("#planPanel").addEventListener("click", (e) => {
   if (diffBtn) {
     const to = Number(diffBtn.dataset.diff);
     state.diff = { from: to - 1, to: to };      // 与该版的前一版对比
+    state.pick = null;
     renderDiff();
+    return;
+  }
+
+  /* 「选作对比」：先记起点，再点另一版 → 出这两版的差异（任意两版，不必相邻） */
+  const pickBtn = e.target.closest("[data-pick]");
+  if (pickBtn) {
+    const i = Number(pickBtn.dataset.pick);
+    if (state.pick == null) { state.pick = i; flash("已选作对比起点 —— 再点另一版的「选作对比」即出差异", ""); }
+    else if (state.pick === i) { state.pick = null; }
+    else { state.diff = { from: Math.min(state.pick, i), to: Math.max(state.pick, i) }; state.pick = null; }
+    renderPlan();
     return;
   }
 
@@ -1375,6 +1396,7 @@ $("#planPanel").addEventListener("click", (e) => {
   const L = lessonById(state.lessonId);
 
   if (e.target.closest("#editBtn")) { openLessonEditor(); return; }
+  if (e.target.closest("#lsDelBtn")) { askDeleteLesson(state.lessonId); return; }
   if (e.target.closest("#addReflectBtn")) { openReflect(); return; }
   if (e.target.closest("#diffClose")) { state.diff = null; renderDiff(); return; }
 
@@ -1437,7 +1459,19 @@ $("#planPanel").addEventListener("click", (e) => {
   if (sdiffBtn) {
     const to = Number(sdiffBtn.dataset.sdiff);
     state.sylDiff = { from: to - 1, to: to };      // 与该版的前一版对比
+    state.sylPick = null;
     renderSylDiff();
+    return;
+  }
+
+  /* 大纲「选作对比」：任意两版结构对比 */
+  const spickBtn = e.target.closest("[data-spick]");
+  if (spickBtn) {
+    const i = Number(spickBtn.dataset.spick);
+    if (state.sylPick == null) { state.sylPick = i; flash("已选作对比起点 —— 再点另一版的「选作对比」即出差异", ""); }
+    else if (state.sylPick === i) { state.sylPick = null; }
+    else { state.sylDiff = { from: Math.min(state.sylPick, i), to: Math.max(state.sylPick, i) }; state.sylPick = null; }
+    renderPlan();
     return;
   }
   const srevBtn = e.target.closest("[data-srevert]");

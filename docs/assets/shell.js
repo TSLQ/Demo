@@ -686,19 +686,27 @@ function openAddClass() {
   // 焦点进第一个输入框（无障碍：弹窗打开要转移焦点）
   setTimeout(() => document.getElementById("kName")?.focus?.(), 0);
 
-  // 保存：⚠️ 仅做校验与提示，不落库
+  // 保存：**真的建班** —— 走 nav.js 的 createClass()（唯一实现），
+  //   这里只负责收集表单、提示错误、重渲染侧栏、把新目录广播给内容页。
   document.getElementById("classSave").addEventListener("click", () => {
-    const name = (document.getElementById("kName")?.value || "").trim();
     const err = document.getElementById("classError");
-    if (!name) {
-      err.textContent = "请先填写班级名称";
+    const r = createClass({
+      label: (document.getElementById("kName")?.value || "").trim(),
+      major: document.getElementById("kMajor")?.value || "",
+      grade: document.getElementById("kGrade")?.value || "",
+      course: document.getElementById("kCourse")?.value || "",
+      count: document.getElementById("kCount")?.value || "",
+    });
+    if (!r.ok) {
+      err.textContent = r.error;
       err.hidden = false;
       document.getElementById("kName")?.focus?.();
       return;
     }
     err.hidden = true;
-    // TODO: 保存逻辑待定 —— 班级归属哪个课程、是否与「我的课程」联动尚未确定
-    alert(`「${name}」已填写完整。\n\n保存逻辑尚未接入，本弹窗暂为示例。`);
+    closeAddClass();
+    mountSide();                  // 新班级立刻出现在「班级管理」里
+    broadcast("st-classes-changed", { classes: CLASSES });
   });
 }
 
@@ -774,21 +782,30 @@ function iframeFailed() {
   if (bar) bar.hidden = false;
 }
 
-/* ---------------- 无障碍阅读模式开关 ----------------
-   ⚠️ 本轮只做「开关 + 状态持久化 + 广播」，**不做任何视觉/行为实现**。
-   用户明确要求功能先不做，这里只留好接口：
-     · 默认勾选（HTML 上写死 checked，JS 未跑时也是勾上的）
-     · 状态存 localStorage（st_a11y_read_mode），跨页面保持
-     · 变化时广播 st-a11y-mode 给 iframe，将来内容页接上即可生效
-   真要实现时，只需在 core.js 的 message 监听里处理 st-a11y-mode。
+/* ---------------- 无障碍阅读模式 ----------------
+   🔴 第 57 轮起**真的生效**：给壳的根元素挂 `data-read-mode`，由 design.css 提供
+      排版增强（放大字号 / 行高、减弱装饰、加大点击目标）。
+   ⚠️ 只管**壳自己的文档**（顶部栏 / 侧栏）——中间 iframe 是独立文档，
+      内容页自己按 `st-a11y-mode` 挂属性，两边各自生效。
+   ⚠️ 不动 Theme：阅读模式是「同一主题下的排版增强」，不是换肤。
 --------------------------------------------------------------- */
 function readModeOn() {
   return LS.get(STORE_KEY.readMode, true) !== false;
 }
 
+/** 壳自己的阅读态（中间 iframe 由内容页自己处理） */
+function applyShellReadMode(on) {
+  try {
+    const root = document.documentElement;
+    if (on !== false) root.setAttribute("data-read-mode", "");
+    else root.removeAttribute("data-read-mode");
+  } catch (_) { /* 异常 DOM 下静默 */ }
+}
+
 function mountReadMode() {
   // ⚠️ 用 id 收集，不要用 [data-a11y-mode] 属性选择器（桩验证器查不到）
   const boxes = [document.getElementById("a11yReadMode")].filter(Boolean);
+  applyShellReadMode(readModeOn());         // 启动即按存档恢复阅读态
   if (!boxes.length) return;
 
   boxes.forEach((box) => {
@@ -797,8 +814,8 @@ function mountReadMode() {
       const on = !!box.checked;
       LS.set(STORE_KEY.readMode, on);
       boxes.forEach((b) => { b.checked = on; });   // 同页多入口同步
+      applyShellReadMode(on);
       broadcast("st-a11y-mode", { on });
-      // TODO: 功能实现留待后续 —— 阅读模式的具体呈现方式尚未确定
     });
   });
 }
@@ -896,12 +913,13 @@ function boot() {
       refreshActivityNav();
       mountSide();
     }
-    // 内容页里改了阅读模式 → 壳里的勾选框跟着走
+    // 内容页里改了阅读模式 → 壳里的勾选框与壳自身的阅读态都跟着走
     if (d.type === "st-a11y-mode") {
       const on = d.on !== false;
       LS.set(STORE_KEY.readMode, on);
       const b = document.getElementById("a11yReadMode");
       if (b) b.checked = on;
+      applyShellReadMode(on);
     }
     if (d.type === "st-a11y-changed") {
       // a11y 变量写在壳的根元素上（子页面通过 frameElement.ownerDocument 修改）

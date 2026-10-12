@@ -67,7 +67,7 @@ body.shell-body { overflow: hidden; }
   color: var(--primary); white-space: nowrap;
 }
 
-/* 无障碍阅读模式勾选（⚠️ 目前仅记录开关状态，功能尚未实现） */
+/* 无障碍阅读模式勾选（第 57 轮起已实现：排版增强 + 朗读工具条） */
 .shell-a11y-toggle {
   display: flex; align-items: center; gap: 7px;
   padding: 5px 11px 5px 9px;
@@ -288,9 +288,10 @@ body.shell-body { overflow: hidden; }
   border: 1px solid transparent; border-radius: 6px;
   background: transparent; color: var(--muted-foreground);
   font: inherit; font-size: 14px; line-height: 1; cursor: pointer;
-  opacity: 0;
-  pointer-events: none;            /* 隐形时也别接点击 —— 否则右端 22px 是个「陷阱」：
-                                      点课程名边缘会莫名其妙弹出菜单 */
+  opacity: .45;                    /* 🔴 常显（第 55 轮）：原本 opacity:0 —— 只有鼠标悬在课程项上
+                                      才浮出来，用户因此**根本找不到**「编辑 / 删除课程」入口。
+                                      改为一向淡显、悬停加深（可发现性优先）。 */
+  pointer-events: auto;            /* 常显就必须能点 —— 不再依赖 hover 才可点 */
   transition: opacity .14s, background .14s, color .14s, border-color .14s;
 }
 .shell-side .side-row:hover .side-more,

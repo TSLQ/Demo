@@ -698,11 +698,11 @@ const IMPORT_SAMPLE = [
  * 用户粘贴的课表千奇百怪（教务系统各家不同），本地解析认不出来时，
  * 把原文 + 这段提示词交给 AI 助手，让模型转成方式一 / 方式二的标准格式再导回来。
  *
- * TODO(agent)：agent.html 目前**还没消费它**。目前的行为只是：
- *   把 { task, text, prompt } 写进 STORE_KEY.agentTask 然后跳转过去。
- *   将来 agent.html 要做的是：读这个键 → 用 prompt 起一个对话 →
- *   把 AI 输出的结果填进会话，并在结尾附一个「回到课表页导入」的入口。
- *   具体规格见 agent.html 顶部的 TODO 注释。
+ * ✅ 第 57 轮起 agent.html **真的消费它**了：
+ *   · 交接把 { task, text, prompt } 写进 STORE_KEY.agentTask 再跳过去；
+ *   · agent 页把 `prompt` 当系统提示词交给模型（未接模型时回落本地规则解析）；
+ *   · 结果自动写进 STORE_KEY.scheduleImport —— 点「回到课表页导入」回来时，
+ *     下面这个弹窗的输入框里已经填好了，核对一下直接导入即可。
  */
 const AI_PARSE_PROMPT = `你是课表格式转换助手。请把我给你的课表内容转成下面两种格式之一，只输出结果，不要解释。
 
@@ -883,9 +883,8 @@ function openImport() {
   });
 
   /* 方式三：把原文 + 提示词交给 AI 助手，然后跳转过去。
-     ⚠️ agent.html 目前**还没实现**「AI 解析课表」——本轮只做跳转。
-        现在写进 STORE_KEY.agentTask 是为了将来 agent 页能直接接上，
-        用户粘过的内容不会在跳转时丢掉。 */
+     ✅ 第 57 轮起 agent 页会读它、用 prompt 起一次模型调用；结果写进
+        STORE_KEY.scheduleImport，回来时导入框自动填好。 */
   document.getElementById("impAi").addEventListener("click", () => {
     LS.set(STORE_KEY.agentTask, {
       task: "parse-schedule",
@@ -897,6 +896,17 @@ function openImport() {
     closePageModal();
     navigate("agent.html?task=parse-schedule");
   });
+
+  /* AI 助手转好的课表文本（agent 页放回来的）—— 打开就自动填进输入框，
+     省得再粘一遍。用过即删，不占地方。 */
+  try {
+    const pre = window.localStorage.getItem(STORE_KEY.scheduleImport);
+    if (pre) {
+      const ta = document.getElementById("impText");
+      if (ta && !ta.value) ta.value = pre;
+      window.localStorage.removeItem(STORE_KEY.scheduleImport);
+    }
+  } catch (_) { }
 
   preview();
 }

@@ -137,6 +137,16 @@
       <div id="missingBox"></div>
     </section>
 
+    <section class="card card-raised" id="courseLinks" hidden style="padding:20px;margin-bottom:20px">
+      <h3 style="margin:0 0 4px;font-size:14px;font-weight:500">这门课的其他页面</h3>
+      <p class="muted-note" style="margin-bottom:10px">
+        从「人」看到「课」之后，接着去看这门课怎么教 —— 教案大纲与课时教案都挂在课程上。
+      </p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-sm" type="button" id="goLesson">看这门课的教案 →</button>
+      </div>
+    </section>
+
     <section class="card card-raised" id="classCard" hidden style="padding:20px">
       <h3 style="margin:0 0 10px;font-size:14px;font-weight:500">班级信息</h3>
       <div class="class-facts" id="classFacts"></div>
@@ -328,6 +338,9 @@ function renderClassCard() {
   const card = $("#classCard");
   if (!CLASS_ASKED || !PICK_CLASS) { card.hidden = true; return; }
   card.hidden = false;
+  // 🔴 这里**不显示 `count`**（第 33 轮的守护）：预置的那几个数（48/45/52）本来就是
+  //    编造的，摆出来等于宣称"这个班真有这么多人"。建班时填的人数只做留存（见
+  //    nav.js 的 createClass），页面上仍以「谁真的加入了这门课」为准。
   $("#classFacts").innerHTML =
     "<div><b>" + escHtml(PICK_CLASS.label) + "</b><span>班级</span></div>" +
     "<div><b>" + escHtml(PICK_CLASS.major) + "</b><span>专业</span></div>" +
@@ -338,6 +351,19 @@ function renderClassCard() {
     "上方「在课学生」是真实的：本机学生账号里，谁加入了这门课谁就会出现。";
 }
 
+/**
+ * 「这门课的其他页面」（第 55 轮）—— 把「人 → 课」接回教学闭环。
+ * 🔴 课程页只讲"谁在课里"，课程本身的教学内容（教案）在 lesson.html；
+ *    没有这一条，老师看完名单就得自己回想教案在哪一页。
+ */
+function renderCourseLinks() {
+  const card = $("#courseLinks");
+  if (!card) return;
+  card.hidden = !COURSE;
+  const btn = $("#goLesson");
+  if (btn) btn.textContent = "看「" + (COURSE ? COURSE.name : "这门课") + "」的教案 →";
+}
+
 function render() {
   const students = COURSE ? enrolledStudentsOf(COURSE.id) : [];
   const all = localStudentAccounts();
@@ -346,8 +372,15 @@ function render() {
   renderStats(students, all, missing);
   renderRoster(students);
   renderInvite(all, missing);
+  renderCourseLinks();
   renderClassCard();
 }
+
+/* 去看教案：走 core.js 的 navigate（壳内换 iframe、独立模式整页跳），
+   🔴 别直接写 location.href —— 那样在壳内会把整个壳换掉 */
+$("#goLesson").addEventListener("click", () => {
+  if (COURSE) navigate("lesson.html?course=" + encodeURIComponent(COURSE.id));
+});
 
 /* ============================================================
    学生详情 = 他在「我的学情」里看到的东西（第 34 轮）

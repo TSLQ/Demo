@@ -27,7 +27,7 @@ try { ({ JSDOM } = require(JSDOM_PATH)); } catch (e) {
   process.exit(2);
 }
 
-const SITE = path.join(__dirname, "..", "site");
+const SITE = path.join(__dirname, "..", "docs");
 const ok = [], bad = [];
 const ck = (c, t) => (c ? ok : bad).push(t);
 
@@ -440,15 +440,18 @@ async function main() {
   });
   await settle(domR, 300);
   const wR = domR.window, dR = wR.document;
-  ck(dR.querySelectorAll("#cwSwitch button").length === 2,
-    "学生端列表有 2 份（种子 + 老师跨桶发来的）");
-  ck(/跨桶课件/.test(dR.getElementById("cwSwitch").textContent),
-    "🔴 学生端跨桶读到了老师发的课件（记录在老师的桶里）");
-  dR.querySelectorAll('#cwSwitch button[data-i="1"]')[0].click();
-  await settle(domR);
-  ck(/跨桶课件/.test(dR.getElementById("paperTitle").textContent), "切到跨桶课件，标题对上");
+  ck(dR.querySelectorAll("#cwSwitch button").length === 0,
+    "🔴 只有 1 份课件时不显示课件切换条（#cwSwitch 隐藏）");
+  ck(/跨桶课件/.test(dR.getElementById("paperTitle").textContent),
+    "🔴 学生端跨桶读到了老师发的课件（记录在老师的桶里，且是老师发的不是预置示例）");
+  ck(/老师发布/.test(dR.getElementById("paperMeta").textContent),
+    "🔴 标出「老师发布」（预置示例已按用户要求彻底移除）");
+  ck(!/预置示例/.test(dR.getElementById("paperMeta").textContent),
+    "🔴 不再出现「预置示例」标记");
   ck(dR.querySelectorAll("#paperBody .annot").length === 2, "段落按 cwSections 渲染（2 段）");
-  ck(wR.eval('cwsForStudent("student:student").length') === 2, "数据层同一条路径也读得到 2 份");
+  ck(wR.eval('cwsForStudent("student:student").length') === 1, "数据层同一条路径读得到 1 份（无预置种子）");
+  ck(wR.eval('cwsForStudent("student:student","ds").length') === 1, "🔴 按课程过滤读得到（courseId=ds）");
+  ck(wR.eval('cwsForStudent("student:student","xx").length') === 0, "🔴 按别的课程过滤读不到");
   domR.window.close();
 
   /* ============================================================

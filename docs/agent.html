@@ -613,9 +613,20 @@ function runSteps(steps, ctx, done) {
       ask.appendChild(okBtn); ask.appendChild(noBtn);
       node.querySelector(".tc-body").appendChild(ask);
       okBtn.addEventListener("click", () => {
-        ask.remove(); node.classList.remove("wait"); node.classList.add("ok");
-        node.querySelector(".tc-ico").textContent = "✓";
-        node.querySelector(".tc-body").insertAdjacentHTML("beforeend", '<div class="tc-arg" style="color:var(--success)">→ 已确认</div>');
+        // 🔴 第 55 轮：**真的执行**（走 nav.js 的 runAgentStep），不再是只把节点标成 ✓。
+        //    缺具体对象时它返回 ok:false —— 那就如实说"没执行"，不装成功。
+        const r = (typeof runAgentStep === "function")
+          ? runAgentStep(s, ctx)
+          : { ok: false, reason: "执行层没加载" };
+        ask.remove(); node.classList.remove("wait");
+        node.querySelector(".tc-body").insertAdjacentHTML("beforeend",
+          r.ok
+            ? '<div class="tc-arg" style="color:var(--success)">→ ' + escHtml(r.detail || "已执行") + "</div>"
+            : '<div class="tc-arg">→ 没有执行：' + escHtml(r.reason || "缺具体对象") + "</div>");
+        node.classList.add(r.ok ? "ok" : "skip");
+        node.querySelector(".tc-ico").textContent = r.ok ? "✓" : "—";
+        // 真执行完 → 带他去结果页；没执行则留在原地（别把人拽走）
+        if (r.ok && r.goto) navigate(r.goto);
         next();
       });
       noBtn.addEventListener("click", () => {
@@ -685,6 +696,34 @@ function resultCard(runs, back, meta) {
   return box;
 }
 
+/* 本次对话是不是「课表页 → 让 AI 转格式」交过来的（决定要不要把结果放回导入框） */
+let pendingScheduleTask = false;
+
+/** 从结果里挑出「可直接导入」的文本：优先取代码块，没有就整段拿 */
+function extractImportText(lines) {
+  const fenced = [];
+  let inFence = false;
+  (lines || []).forEach(function (l) {
+    const t = String(l);
+    if (/^```/.test(t.trim())) { inFence = !inFence; return; }
+    if (inFence) fenced.push(t);
+  });
+  if (fenced.length) return fenced.join("\n").trim();
+  return (lines || []).join("\n").trim();
+}
+
+/**
+ * 把课表解析结果放进「课表页的导入框」——
+ * 让结果卡上的「回到课表页导入」真是接着干，而不是跳过去再粘一遍。
+ */
+function stashScheduleImport(runs) {
+  const sec = (runs && runs.secs && runs.secs[0]) || null;
+  if (!sec) return;
+  const text = extractImportText(sec.lines);
+  if (!text) return;
+  try { window.localStorage.setItem(STORE_KEY.scheduleImport, text); } catch (_) { }
+}
+
 function addResult(runs, back, meta) {
   const node = el('<div class="msg ai"><div class="msg-avatar">智</div><div class="bubble"></div></div>');
   const inner = resultCard(runs, back, meta);
@@ -692,6 +731,8 @@ function addResult(runs, back, meta) {
   node.querySelector(".bubble").appendChild(inner);
   logEl.appendChild(node);
   logEl.scrollTop = logEl.scrollHeight;
+  // 课表任务跑完 → 结果放回导入框（闭环）
+  if (pendingScheduleTask) { pendingScheduleTask = false; stashScheduleImport(runs); }
 }
 
 /* ---------- 主流程 ---------- */
@@ -735,14 +776,17 @@ function handle(text, forced) {
   const payload = Object.assign({}, (forced && forced.payload) || {});
   const steps = planFromChain(runChain, Object.assign({}, ctx, { chain: runChain }));
   runSteps(steps, ctx, function () {
-    const runs = runSkills(ids, payload, ctx);
-    addResult(runs, forced ? forced.back : null,
-      { input: t, fromId: primarySkillId(route, ids), courseId: ctx.courseId, role: "teacher" });
-    if (forced && forced.clearTask) clearHandoff();
-    busy = false;
-    $("#sendBtn").disabled = false;
-    renderPersona();
-    $("#input").focus();
+    // 🔴 第 57 轮：技能链可能返回 Promise（起草教案 / 改进 / 差异解读 / 课表解析接了模型后会真去生成）
+    //    → 统一 then 一次，两种形状都能接住。慢的时候动作链动画还在转，不会看着像卡死。
+    Promise.resolve(runSkills(ids, payload, ctx)).then(function (runs) {
+      addResult(runs, forced ? forced.back : null,
+        { input: t, fromId: primarySkillId(route, ids), courseId: ctx.courseId, role: "teacher" });
+      if (forced && forced.clearTask) clearHandoff();
+      busy = false;
+      $("#sendBtn").disabled = false;
+      renderPersona();
+      $("#input").focus();
+    });
   });
 }
 
@@ -1165,7 +1209,11 @@ $("#taskRun").addEventListener("click", function () {
   const task = readHandoff();
   if (!task) { $("#taskBar").hidden = true; return; }
   const meta = TASK_META[task.task];
-  const payload = Object.assign({}, task.payload || {}, { text: task.text || "" });
+  // 🔴 把交接带来的 `prompt` 一起传下去 —— 来源页写好的提示词（如课表解析）要真的用上，
+  //    否则「让 AI 帮你转」就只是跳过来、什么都没发生。
+  const payload = Object.assign({}, task.payload || {},
+    { text: task.text || "", prompt: task.prompt || "" });
+  pendingScheduleTask = (task.task === "parse-schedule");   // 跑完把结果放回课表页
   if (task.task === "gen-lesson" && !payload.chapterTitle) payload.chapterTitle = "本章";
   handle(meta.name + "（" + task.task + "）", { skills: meta.skills, payload: payload, back: meta.back, clearTask: true });
 });

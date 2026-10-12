@@ -29,9 +29,14 @@
   .tb-spacer { flex: 1 1 auto; }
   .tb-meta { font-size: 12.5px; color: var(--muted-foreground); }
 
-  /* ---------- 两栏 ---------- */
-  .train-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; }
+  /* ---------- 三栏：列表 / 聊天 / 进度 ---------- */
+  /* 这一页是「工作台」而非阅读型文档 → 打破 1160px 版面限制，让三栏有呼吸空间 */
+  .page-wrap, .page { max-width: 1680px; }
+  .train-grid { display: grid; grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(260px, 320px); gap: 16px; align-items: start; }
   .train-list { padding: 14px; }
+  .train-mid { padding: 16px 18px; min-height: 360px; }
+  .train-side { padding: 16px 14px; min-height: 360px; }
+  .train-side .blk:last-child { margin-bottom: 0; }
   .tl-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
   .tl-head h3 { margin: 0; font-size: 13px; font-weight: 500; }
   .tl-head span { font-size: 12px; color: var(--muted-foreground); }
@@ -118,6 +123,45 @@
   .find-form { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; }
   .find-form .textarea { flex: 1 1 auto; min-height: 42px; font-size: 12.5px; }
 
+  /* ---------- 猜想验证 ---------- */
+  .guess-list { display: flex; flex-direction: column; gap: 10px; }
+  .guess-item { border: 1px solid var(--border); border-radius: 10px; padding: 10px 11px; }
+  .guess-q { font-size: 13px; line-height: 1.7; margin: 0 0 8px; }
+  .guess-q b { color: var(--primary); font-weight: 500; }
+  .guess-a { font-size: 12.5px; line-height: 1.75; margin: 0; }
+  .guess-a p { margin: 0 0 6px; }
+  .guess-a h4 { margin: 9px 0 4px; font-size: 12.5px; font-weight: 500; }
+  .guess-a ul { margin: 0 0 6px; padding-left: 18px; }
+  .guess-a code { background: var(--secondary); padding: 0 4px; border-radius: 4px; font-size: 12px; }
+  .guess-a pre { background: var(--secondary); padding: 8px 10px; border-radius: 8px; overflow-x: auto; }
+  .guess-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted-foreground); margin-top: 8px; }
+  .guess-meta a { color: var(--primary); text-decoration: none; }
+  .guess-meta a:hover { text-decoration: underline; }
+  .guess-form { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; }
+  .guess-form .textarea { flex: 1 1 auto; min-height: 56px; font-size: 12.5px; }
+  .guess-busy { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted-foreground); }
+  .guess-busy .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); animation: guess-blink 1s infinite; }
+  @keyframes guess-blink { 0%,100% { opacity: .2; } 50% { opacity: 1; } }
+
+  /* ---------- 讨论区（群聊） ---------- */
+  .chat-log { display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto; padding-right: 2px; }
+  .msg { display: flex; flex-direction: column; gap: 3px; }
+  .msg.me { align-items: flex-end; }
+  .msg .m-meta { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted-foreground); }
+  .msg .m-meta b { color: var(--foreground); font-weight: 500; }
+  .msg .m-bubble {
+    display: inline-block; max-width: 84%; padding: 7px 11px; border-radius: 12px;
+    font-size: 13px; line-height: 1.65; background: var(--secondary); color: var(--foreground);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .msg.teacher .m-bubble {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--primary) 26%, transparent);
+  }
+  .msg.me .m-bubble { background: color-mix(in srgb, var(--primary) 20%, transparent); }
+  .chat-form { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; }
+  .chat-form .textarea { flex: 1 1 auto; min-height: 40px; font-size: 12.5px; }
+
   .collab { display: flex; gap: 6px; flex-wrap: wrap; }
   .collab .tag { font-size: 11.5px; }
 
@@ -133,9 +177,29 @@
   .pick-list label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; cursor: pointer; }
   .pick-list input { margin: 0; }
 
-  @media (max-width: 900px) {
-    .train-grid { grid-template-columns: minmax(0, 1fr); }
+  /* 中屏：稍微收窄侧栏，保住中间聊天区 */
+  @media (max-width: 1280px) {
+    .train-grid { grid-template-columns: 210px minmax(0, 1fr) 280px; gap: 14px; }
   }
+  /* 平板：进度栏落到聊天下方（跨整行），列表仍留左边 */
+  @media (max-width: 1024px) {
+    .train-grid { grid-template-columns: 220px minmax(0, 1fr); }
+    .train-side { grid-column: 1 / -1; }
+  }
+  /* 手机：单栏 */
+  @media (max-width: 760px) {
+    .page-wrap, .page { max-width: 100%; }
+    .train-grid { grid-template-columns: minmax(0, 1fr); }
+    .train-side { grid-column: auto; }
+  }
+
+  /* 中栏聊天区：占满高度，消息区滚动、输入框贴底 */
+  .chat-pane { display: flex; flex-direction: column; min-height: 520px; }
+  .chat-pane .chat-log { flex: 1 1 auto; max-height: none; min-height: 200px; }
+  .chat-pane .chat-empty { flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 24px 10px; }
+  /* 右栏最宽也顶到顶对齐，避免比中栏矮太多留大片空白 */
+  .train-side { align-self: start; }
 </style>
 </head>
 <body>
@@ -164,7 +228,9 @@
         <div class="act-list" id="stList"></div>
       </section>
 
-      <section class="card train-pane" id="stPane"></section>
+      <section class="card train-pane train-mid chat-pane" id="stChat"></section>
+
+      <section class="card train-side" id="stSide"></section>
     </div>
 
     <div class="notice notice-info">
@@ -338,96 +404,100 @@
 
   /* ---------------- 渲染：右栏（参与视图） ---------------- */
   function progressInfo(a) {
-    var steps = (a.skeleton && a.skeleton.stages) || [];
-    var p = myProgressOf(a.id);
-    var cur = p ? p.currentStage : "";
-    var idx = cur ? steps.map(function (s) { return s.id; }).indexOf(cur) : -1;
-    var doneCount = (p && p.done) ? steps.length : (idx >= 0 ? idx + 1 : 0);
-    return { p: p, steps: steps, doneCount: doneCount, now: steps[doneCount] || null };
-  }
-
-  function stageHtml(a, s, i, info) {
-    var done = i < info.doneCount;
-    var now = !(info.p && info.p.done) && i === info.doneCount && !done;
-    var isDone = !!(info.p && info.p.done);
-    var locked = a.status === "done";   // 已归档只回顾，不再推进
-    var cls = done ? "done" : (now ? "now" : "");
-    var flag = done ? '<span class="stage-flag done">✓ 已走到</span>'
-      : (now ? '<span class="stage-flag now">● 当前这一步</span>'
-        : (isDone ? '<span class="stage-flag done">✓ 已走到</span>' : ""));
-
-    var actBtns = "";
-    if (!locked) {
-      if (!done) {
-        actBtns = '<div class="stage-act"><button class="btn btn-sm' + (now ? " btn-primary" : "") +
-          '" type="button" data-mark="' + esc(s.id) + '">' + (now ? "我走到这一步了" : "标记：走到这一步") + "</button></div>";
-      }
-    }
-
-    return (
-      '<div class="stage ' + cls + '" data-stage="' + esc(s.id) + '">' +
-        '<div class="stage-head">' +
-          '<span class="stage-no">' + (i + 1) + "</span>" +
-          '<span class="stage-title">' + esc(s.title) + "</span>" + flag +
-        "</div>" +
-        (s.prompt ? '<label class="stage-f"><span>引导问题 · 往哪想</span><div class="txt">' + esc(s.prompt) + "</div></label>" : "") +
-        (s.clue ? '<label class="stage-f"><span>线索 · 去哪儿找</span><div class="txt">' + esc(s.clue) + "</div></label>" : "") +
-        (s.tryIt ? '<label class="stage-f"><span>动手做 · 一件事</span><div class="txt">' + esc(s.tryIt) + "</div></label>" : "") +
-        actBtns +
-      "</div>"
-    );
-  }
-
-  function notesHtml(a) {
     var p = myProgressOf(a.id);
     var notes = (p && p.notes) || [];
-    var list = notes.length
-      ? '<ul class="notes">' + notes.slice().reverse().map(function (n) {
-          return '<li class="note"><div class="n-top">' + esc(agoText(n.at, Date.now())) + "</div>" +
-            '<p class="n-text">' + esc(n.text) + "</p></li>";
+    var ded = (p && p.deductions) || [];
+    var findings = a.findings || [];
+    var total = notes.length + ded.length + findings.length;
+    var pct = Math.min(100, total * 20);          // 5 条成果就满
+    var direction = "";
+    var latestAt = -1;
+    [notes, ded, findings].forEach(function (arr) {
+      arr.forEach(function (x) {
+        if ((x.at || 0) >= latestAt) { latestAt = x.at || 0; direction = x.text || ""; }
+      });
+    });
+    return { pct: pct, total: total, notes: notes, deductions: ded, findings: findings, direction: direction };
+  }
+
+  function ideasHtml(a) {
+    var p = myProgressOf(a.id);
+    var notes = (p && p.notes) || [];
+    var findings = a.findings || [];
+    var items = [];
+    notes.slice().reverse().forEach(function (n) {
+      items.push({ at: n.at, text: n.text, kind: "idea", who: "", pinned: false });
+    });
+    findings.slice().reverse().forEach(function (f) {
+      items.push({ at: f.at, text: f.text, kind: "finding", who: f.who, pinned: f.pinned });
+    });
+    items.sort(function (x, y) { return (y.at || 0) - (x.at || 0); });
+
+    var list = items.length
+      ? '<ul class="notes">' + items.map(function (it) {
+          var badge = it.kind === "finding"
+            ? '<span class="tag' + (it.pinned ? " tag-success" : "") + '">新发现' + (it.pinned ? " · 老师推荐" : "") + "</span>"
+            : '<span class="tag">灵感</span>';
+          return '<li class="note">' +
+            '<div class="n-top">' + badge + (it.who ? " <b>" + esc(it.who) + "</b>" : "") +
+              " · " + esc(agoText(it.at, Date.now())) + "</div>" +
+            '<p class="n-text">' + esc(it.text) + "</p></li>";
         }).join("") + "</ul>"
-      : '<p class="muted">还没记过路线。每走一步，随手记下你的想法 —— 这是「你的路线」，不是标准答案。</p>';
+      : '<p class="muted">还没有灵感。想到什么就记下来 —— 你的猜想、火花、走通或没走通的路，都在这里。</p>';
+
+    if (a.status === "done") return list;
     return list +
       '<div class="note-form">' +
-        '<textarea class="textarea" id="noteInput" rows="2" placeholder="例：我先把圆切成 8 个扇形，拼起来有点像长方形…"></textarea>' +
-        '<button class="btn btn-sm" type="button" id="noteAdd">记下</button>' +
+        '<textarea class="textarea" id="ideaInput" rows="2" placeholder="例：我猜把圆切成很多小扇形，能拼成一个长方形…"></textarea>' +
+        '<div style="display:flex;flex-direction:column;gap:6px;flex:0 0 auto">' +
+          '<button class="btn btn-sm" type="button" id="ideaAdd">存为灵感</button>' +
+          (a.openEnded !== false ? '<button class="btn btn-sm btn-ghost" type="button" id="findAdd">标记新发现</button>' : "") +
+        "</div>" +
       "</div>";
   }
 
-  function findingsHtml(a) {
-    var fs = a.findings || [];
-    var list = fs.length
-      ? '<ul class="findings">' + fs.slice().reverse().map(function (f) {
-          return '<li class="finding' + (f.pinned ? " pinned" : "") + '">' +
-            '<div class="f-top"><b>' + esc(f.who) + "</b>" +
-            '<span class="muted">' + esc(agoText(f.at, Date.now())) + "</span>" +
-            (f.pinned ? '<span class="tag tag-success">老师推荐方向</span>' : "") + "</div>" +
-            '<p class="f-text">' + esc(f.text) + "</p></li>";
+  function deductionsHtml(a) {
+    var p = myProgressOf(a.id);
+    var ded = (p && p.deductions) || [];
+    var list = ded.length
+      ? '<ul class="notes">' + ded.slice().reverse().map(function (d) {
+          var badge = d.source === "ai"
+            ? '<span class="tag tag-primary">AI 验证</span>'
+            : (d.source === "sample" ? '<span class="tag tag-warning">预置示例</span>' : '<span class="tag">我的推导</span>');
+          return '<li class="note">' +
+            '<div class="n-top">' + badge + " · " + esc(agoText(d.at, Date.now())) + "</div>" +
+            '<div class="n-text">' + (typeof mdToHtml === "function" ? mdToHtml(d.text) : esc(d.text)) + "</div></li>";
         }).join("") + "</ul>"
-      : '<p class="muted">还没有人标记「新发现」。如果你走出了一条和骨架不一样、但走得通的路，把它标出来。</p>';
-    return list;
+      : '<p class="muted">还没有推导出有用的信息。把你的结论记下来，或让 AI 帮你验证一个猜想。</p>';
+
+    if (a.status === "done") return list;
+    return list +
+      '<div class="note-form" style="margin-top:8px">' +
+        '<textarea class="textarea" id="dedInput" rows="2" placeholder="我推导出：…"></textarea>' +
+        '<button class="btn btn-sm" type="button" id="dedAdd">记录推导</button>' +
+      "</div>" +
+      '<div class="note-form" style="margin-top:8px">' +
+        '<textarea class="textarea" id="guessInput" rows="2" placeholder="让 AI 验证我的猜想：…"></textarea>' +
+        '<button class="btn btn-sm btn-primary" type="button" id="guessGo">让 AI 验证</button>' +
+      "</div>";
   }
 
-  function renderPane() {
-    var pane = $("stPane");
-    if (!pane) return;
+  /* ---------------- 渲染：三栏（中栏聊天 / 右栏进度） ---------------- */
+  function renderChat() {
+    var chat = $("stChat");
+    if (!chat) return;
     var a = currentActivity();
-
     if (!a) {
-      pane.innerHTML =
-        '<div class="pane-empty">' +
-          '<h3 style="margin:0 0 8px;font-size:14px;font-weight:500;color:var(--foreground)">还没有选中实训</h3>' +
+      chat.innerHTML =
+        '<div class="pane-empty chat-empty">' +
+          '<div><h3 style="margin:0 0 8px;font-size:14px;font-weight:500;color:var(--foreground)">还没有选中实训</h3>' +
           "<p>左边列表里还没有可参与的实训。</p>" +
-          "<p>点右上角「＋ 发起实训」，写一句你想探究的目标 —— 系统会先给出一条「引导路径」，你沿着它走，也可以试自己的方向。</p>" +
+          "<p>点右上角「＋ 发起实训」，写一句你想探究的目标 —— 系统会先给出一条「引导路径」，你沿着它走，也可以试自己的方向。</p></div>" +
         "</div>";
       return;
     }
-
     var st = stLabel(a);
     var pill = st.tone === "ok" ? "st-ok" : st.tone === "warn" ? "st-warn" : "";
-    var info = progressInfo(a);
-    var locked = a.status === "done";
-    var pct = info.steps.length ? Math.round(info.doneCount / info.steps.length * 100) : 0;
     var isMine = a.origin === "student" && String(a.createdBy || "").toLowerCase() === (me() || "").toLowerCase();
 
     var head =
@@ -449,20 +519,36 @@
         '<p style="margin:0;font-size:13px;line-height:1.7">' + esc(a.goal) + "</p></div>"
       : "";
 
-    // 骨架 + 进度
-    var skel =
+    chat.innerHTML = head + goal + chatHtml(a);
+  }
+
+  function renderSide() {
+    var side = $("stSide");
+    if (!side) return;
+    var a = currentActivity();
+    if (!a) { side.innerHTML = ""; return; }
+
+    var info = progressInfo(a);
+
+    // 探究进度（按保存的灵感与推导累计）
+    var prog =
       '<div class="blk">' +
-        '<div class="blk-head"><h3>引导路径 · 共 ' + info.steps.length + " 步</h3>" +
-          '<span class="hint">只给路径 —— 结论留给你自己走到</span></div>' +
-        '<div class="src-line">来源：<b>' + esc(skeletonSourceText(a.skeleton)) + "</b></div>" +
-        '<div class="prog-row"><div class="prog-track"><div class="prog-fill" style="width:' + pct + '%"></div></div>' +
-          '<span class="prog-label">已走 ' + info.doneCount + " / " + info.steps.length + " 步" +
-          (info.p && info.p.done ? " · 已走完" : "") + "</span></div>" +
-        '<div id="stStages">' + info.steps.map(function (s, i) { return stageHtml(a, s, i, info); }).join("") + "</div>" +
-        (info.p && info.p.done && !locked
-          ? '<div style="margin-top:10px"><button class="btn btn-ghost btn-sm" type="button" id="reopen">重新再走一遍</button></div>'
-          : "") +
+        '<div class="blk-head"><h3>探究进度</h3>' +
+          '<span class="hint">按你保存的灵感与推导累计</span></div>' +
+        '<div class="prog-row"><div class="prog-track"><div class="prog-fill" style="width:' + info.pct + '%"></div></div>' +
+          '<span class="prog-label">已积累 ' + info.total + ' 条成果</span></div>' +
+        '<p class="muted" style="margin:0">' + info.notes.length + ' 个猜想灵感 · ' + info.deductions.length + ' 条推导' +
+          (info.findings.length ? ' · ' + info.findings.length + ' 条新发现' : '') + "</p>" +
+        (info.direction ? '<p class="muted" style="margin:6px 0 0">当前方向：' + esc(info.direction) + "</p>" : "") +
       "</div>";
+
+    // 保存的猜想灵感
+    var ideas = '<div class="blk"><div class="blk-head"><h3>保存的猜想灵感</h3>' +
+      '<span class="hint">你的猜想、火花，随手记在这里</span></div>' + ideasHtml(a) + "</div>";
+
+    // 目前推导出来有帮助的信息
+    var dedBlk = '<div class="blk"><div class="blk-head"><h3>目前推导出来有帮助的信息</h3>' +
+      '<span class="hint">你的结论，或让 AI 验证后的结论</span></div>' + deductionsHtml(a) + "</div>";
 
     // 协作对象
     var collab = "";
@@ -474,31 +560,15 @@
         }).join("") + "</div></div>";
     }
 
-    // 我的路线
-    var notes = '<div class="blk"><div class="blk-head"><h3>我的路线</h3>' +
-      '<span class="hint">每一步的想法，都是你自己的探究记录</span></div>' + notesHtml(a) + "</div>";
-
-    // 新发现
-    var finds = '<div class="blk"><div class="blk-head"><h3>新发现 · ' + (a.findings || []).length + " 条</h3>" +
-      '<span class="hint">走通了和别人不一样的路？标出来，老师会看到</span></div>' + findingsHtml(a);
-    if (!locked) {
-      finds += (a.openEnded === false
-        ? '<p class="muted">这个实训要求沿着骨架走完，暂时不开放「试自己的方向」。</p>'
-        : '<div class="find-form">' +
-            '<textarea class="textarea" id="findInput" rows="2" placeholder="我试了一条不一样的路：…"></textarea>' +
-            '<button class="btn btn-sm" type="button" id="findAdd">标记为新发现</button>' +
-          "</div>");
-    }
-    finds += "</div>";
-
-    pane.innerHTML = head + goal + skel + collab + notes + finds;
+    side.innerHTML = prog + ideas + dedBlk + collab;
   }
 
   function renderAll() {
     renderFilters();
     renderMeta();
     renderList();
-    renderPane();
+    renderChat();
+    renderSide();
   }
 
   /* ---------------- 交互：筛选 / 选活动 ---------------- */
@@ -517,47 +587,66 @@
     renderAll();
   });
 
-  /* ---------------- 交互：右栏（推进 / 笔记 / 新发现） ---------------- */
-  $("stPane").addEventListener("click", function (e) {
+  /* ---------------- 交互：中栏聊天 + 右栏（灵感 / 推导 / 群聊 / AI 验证） ---------------- */
+  document.addEventListener("click", function (e) {
+    if (!e.target.closest("#stChat") && !e.target.closest("#stSide")) return;
     var a = currentActivity();
     if (!a) return;
 
-    // 走到某一步
-    var mark = e.target.closest("[data-mark]");
-    if (mark) {
-      markStageDone(a.id, mark.getAttribute("data-mark"), false);
-      flash("已记录进度", "ok");
-      renderAll();
-      return;
-    }
-
-    // 重新走一遍
-    if (e.target.closest("#reopen")) {
-      markStageDone(a.id, "", false);
-      flash("已重置，从头再走一遍", "ok");
-      renderAll();
-      return;
-    }
-
-    // 记笔记
-    if (e.target.closest("#noteAdd")) {
-      var ni = $("noteInput");
-      var r = addRouteNote(a.id, ni ? ni.value : "");
+    // 存为灵感
+    if (e.target.closest("#ideaAdd")) {
+      var ii = $("ideaInput");
+      var r = addRouteNote(a.id, ii ? ii.value : "");
       if (!r.ok) { flash(r.error, "bad"); return; }
-      if (ni) ni.value = "";
-      flash("已记下", "ok");
+      if (ii) ii.value = "";
+      flash("已存为灵感", "ok");
       renderAll();
       return;
     }
 
-    // 标记新发现
+    // 标记新发现（写回老师桶，老师看得到）
     if (e.target.closest("#findAdd")) {
-      var fi = $("findInput");
+      var fi = $("ideaInput");
       var r2 = addMyFinding(a.id, fi ? fi.value : "", myName());
       if (!r2.ok) { flash(r2.error, "bad"); return; }
       if (fi) fi.value = "";
       flash("已标记为新发现 —— 老师会看到", "ok");
       renderAll();
+      return;
+    }
+
+    // 记录推导
+    if (e.target.closest("#dedAdd")) {
+      var di = $("dedInput");
+      var r3 = addDeduction(a.id, di ? di.value : "", "me");
+      if (!r3.ok) { flash(r3.error, "bad"); return; }
+      if (di) di.value = "";
+      flash("已记录推导", "ok");
+      renderAll();
+      return;
+    }
+
+    // 让 AI 验证猜想
+    if (e.target.closest("#guessGo")) {
+      var gi = $("guessInput");
+      var q = gi ? gi.value : "";
+      if (!String(q || "").trim()) { flash("先写一句想验证的猜想", "bad"); return; }
+      validateConjecture(a, q);
+      if (gi) gi.value = "";
+      return;
+    }
+
+    // 群聊发消息
+    if (e.target.closest("#chatSend")) {
+      sendChat();
+    }
+  });
+
+  // 群聊输入框：Enter 发送，Shift+Enter 换行
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey && e.target && e.target.id === "chatInput") {
+      e.preventDefault();
+      sendChat();
     }
   });
 
@@ -695,6 +784,155 @@
   }
 
   $("btnNewAct").addEventListener("click", openNewAct);
+
+  /* ---------------- 讨论区（群聊） ---------------- */
+  function chatHtml(a) {
+    var msgs = (a.messages || []).slice().sort(function (x, y) { return (x.at || 0) - (y.at || 0); });
+    var uname = myName();
+    var list = msgs.length
+      ? '<div class="chat-log">' + msgs.map(function (m) {
+          var mine = m.who === uname;
+          var teacher = m.role === "teacher";
+          return '<div class="msg' + (mine ? " me" : "") + (teacher ? " teacher" : "") + '">' +
+            '<div class="m-meta"><b>' + esc(m.who) + "</b>" +
+              (teacher ? '<span class="tag tag-primary">老师</span>' : "") +
+              "<span>" + esc(agoText(m.at, Date.now())) + "</span></div>" +
+            '<div class="m-bubble">' + esc(m.text) + "</div>" +
+          "</div>";
+        }).join("") + "</div>"
+      : '<p class="muted">还没有人发言。说句话，把大家拉到同一条探究路上。</p>';
+    return '<div class="blk"><div class="blk-head"><h3>讨论区 · ' + msgs.length + ' 条消息</h3>' +
+      '<span class="hint">像群聊一样，老师也在这里</span></div>' +
+      list +
+      '<div class="chat-form">' +
+        '<textarea class="textarea" id="chatInput" rows="2" placeholder="说点什么…"></textarea>' +
+        '<button class="btn btn-sm btn-primary" type="button" id="chatSend">发送</button>' +
+      "</div>" +
+      '<p class="muted" style="margin:6px 0 0">消息写回活动记录（本机浏览器内模拟协作，换台机器查不到）。</p>' +
+    "</div>";
+  }
+
+  function sendChat() {
+    var a = currentActivity();
+    if (!a) return;
+    var ci = $("chatInput");
+    var text = ci ? ci.value : "";
+    if (!String(text || "").trim()) { flash("先说点什么", "bad"); return; }
+    var r = addChatMessage(a.id, text, myName(), "student");
+    if (!r.ok) { flash(r.error, "bad"); return; }
+    if (ci) ci.value = "";
+    flash("已发送", "ok");
+    renderChat();
+  }
+
+  /* ============================================================
+     让 AI 验证猜想（第 50/52 轮）—— 学生写猜想 → AI 查证 → 结论记入「推导信息」
+     ------------------------------------------------------------
+     🔴 未接模型且未配搜索 → 给「预置示例」结论（source=sample，明确标注）。
+     🔴 结论持久化到进度层的 deductions（source=ai/sample），刷新不丢。
+     ============================================================ */
+
+  var SAMPLE_ANSWER = [
+    "**验证结论** —— 你的前半句是对的：把数组一分为二、各自递归排序、再合并，正是「归并排序（Merge Sort）」的核心思想（分治 + 合并）。但后半句「永远比快排快」不成立。",
+    "",
+    "#### 可行性 / 关键差异",
+    "- 归并排序：稳定、最坏 O(n log n)，但要 O(n) 额外空间",
+    "- 快速排序：平均 O(n log n)、原地省空间、缓存友好，但最坏退化到 O(n²)（可用随机化缓解）",
+    "- 所以没有「谁永远更快」：取决于数据是否有序、要不要稳定性、内存是否紧张",
+    "",
+    "#### 依据",
+    "这是经典算法教材与标准库实现的共识，例如 C++ 的 std::stable_sort 常基于归并、Java 的 Arrays.sort 对基本类型用双轴快排。",
+    "",
+    "#### 下一步建议",
+    "自己写两组数据实测：① 已排序数组 ② 随机数组，分别计时看谁更快 —— 这比记住结论更有价值。",
+  ].join("\n");
+
+  function guessSystemPrompt(withSearch) {
+    var lines = [
+      "你是一位计算机课程的探究式学习助教。学生在一次「实训」里提出了一个偏离既定引导路径的、自己的猜想或想法。",
+      "你的任务是：先验证，再判断可行性，最后回答。",
+      "",
+      "三步走：",
+      "1. 验证：判断这个猜想是否成立、是否已有前人提出过、与已知知识的吻合点与冲突点。",
+      "2. 可行性：这个想法能不能走得通？关键难点在哪？值不值得继续？",
+      "3. 回答：给出「验证结论 + 可行性判断 + 依据 + 下一步建议」。",
+    ];
+    if (withSearch) {
+      lines.push(
+        "",
+        "## 硬性要求",
+        "1. 只依据「联网检索结果」和你的知识回答，不要编造来源；引用时用 [1][2] 标注，对应结果里的编号。",
+        "2. 检索结果不足以定论时，如实说「现有检索结果不足以定论」，并建议学生怎么补充验证。",
+        "3. 这是探究式学习，重在过程：可以指出猜想对错方向、解释原理，但不填鸭式下结论。",
+        "4. 用中文、Markdown 排版，控制在 350 字以内。"
+      );
+    } else {
+      lines.push(
+        "",
+        "## 硬性要求",
+        "1. 你此刻没有联网，请基于你的知识回答，不要假装检索过，也不要编造具体网址。",
+        "2. 可以指出猜想对错方向、解释原理，但不直接下结论，重在引导。",
+        "3. 用中文、Markdown 排版，控制在 350 字以内。"
+      );
+    }
+    return lines.join("\n");
+  }
+
+  function guessUserPrompt(a, q, results, withSearch) {
+    var lines = [
+      "学生提出的猜想 / 想法：",
+      q,
+      "",
+      "当前实训主题：",
+      (a.title || "") + (a.goal ? " —— " + a.goal : ""),
+    ];
+    if (withSearch && results && results.length) {
+      lines.push("", "联网检索结果（共 " + results.length + " 条）：");
+      results.forEach(function (s, i) {
+        lines.push("[" + (i + 1) + "] " + s.title + "（" + s.url + "）");
+        if (s.snippet) lines.push("    " + s.snippet);
+      });
+    }
+    return lines.join("\n");
+  }
+
+  function validateConjecture(a, q) {
+    // 猜想本身先存成灵感（「保存的猜想灵感」区能看到）
+    if (typeof addRouteNote === "function") addRouteNote(a.id, q);
+
+    var canSearch = (typeof searchReady === "function") && searchReady();
+    var canModel = (typeof llmReady === "function") && llmReady();
+
+    if (!canSearch && !canModel) {
+      if (typeof addDeduction === "function") addDeduction(a.id, SAMPLE_ANSWER, "sample");
+      flash("未接模型 / 未配搜索，先给了预置示例结论", "ok");
+      renderSide();
+      return;
+    }
+
+    var searchP = canSearch
+      ? (typeof webSearch === "function" ? webSearch(q) : Promise.resolve({ ok: false, error: "搜索功能未加载" }))
+      : Promise.resolve({ ok: false, demo: true, hint: "未配置联网搜索" });
+
+    searchP.then(function (sr) {
+      var withSearch = !!(sr && sr.ok && sr.results && sr.results.length);
+      var sources = withSearch ? sr.results : [];
+
+      var call = (typeof llmChat === "function"
+        ? llmChat(guessSystemPrompt(withSearch), guessUserPrompt(a, q, sources, withSearch), { maxTokens: 1600, temperature: 0.3 })
+        : Promise.resolve({ ok: false, error: "模型功能未加载" }));
+
+      return call.then(function (r) {
+        if (r && r.ok) {
+          if (typeof addDeduction === "function") addDeduction(a.id, r.raw, "ai");
+          flash("已验证，结论记入了「推导信息」", "ok");
+        } else {
+          flash((r && r.error) || "验证失败", "bad");
+        }
+        renderSide();
+      });
+    });
+  }
 
   /* ---------------- 起手 ---------------- */
   renderAll();

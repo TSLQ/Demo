@@ -499,12 +499,16 @@ function handle(text) {
   }
   const steps = planFromChain(runChain, { role: "student", chain: runChain });
   runSteps(steps, function () {
-    addResult(runSkills(ids, {}, ctx), null,
-      { input: t, fromId: primarySkillId(route, ids), courseId: ctx.courseId });
-    busy = false;
-    $("#sendBtn").disabled = false;
-    renderPersona();
-    $("#input").focus();
+    // 学生端技能全是只读、执行器也是同步的；这里统一 then 一次，
+    // 与教师端共用同一条管线（万一以后有异步技能也不用再改这里）。
+    Promise.resolve(runSkills(ids, {}, ctx)).then(function (runs) {
+      addResult(runs, null,
+        { input: t, fromId: primarySkillId(route, ids), courseId: ctx.courseId });
+      busy = false;
+      $("#sendBtn").disabled = false;
+      renderPersona();
+      $("#input").focus();
+    });
   });
 }
 

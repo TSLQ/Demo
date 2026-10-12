@@ -118,6 +118,8 @@
   }
   .key-state i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-foreground); }
   .key-state.ok i { background: var(--success); }
+  /* 失败态（第 55 轮）：连接 / 搜索测试失败时把原因留在行内 —— alert 一关就什么都看不到了 */
+  .key-state.bad i { background: var(--destructive); }
 
   @media (max-width: 900px) {
     .settings-grid { grid-template-columns: minmax(0, 1fr); }
@@ -143,6 +145,7 @@
           <a href="#appearance" class="active">外观主题</a>
           <a href="#a11y">无障碍</a>
           <a href="#model">模型接入</a>
+          <a href="#search">联网搜索</a>
           <a href="#account">账号</a>
           <a href="#data">数据与隐私</a>
         </nav>
@@ -351,6 +354,61 @@
             </div>
           </section>
 
+          <!-- 联网搜索 -->
+          <section class="set-section" id="search">
+            <div class="card card-raised">
+              <h2><span class="set-ico">搜</span>联网搜索</h2>
+              <p>学生实训里的「猜想验证」要用：先上网查证，再交给模型综合判断</p>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>搜索服务商</b>
+                  <span>需为支持浏览器直调（CORS）的搜索 API，Tavily / Brave 均可</span>
+                </div>
+                <div class="row-ctl" style="min-width:180px">
+                  <select class="select" id="searchProvider">
+                    <option value="none" selected>未配置（用预置示例）</option>
+                    <option value="tavily">Tavily</option>
+                    <option value="brave">Brave Search</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body" style="flex:1;max-width:none">
+                  <b>搜索 API Key</b>
+                  <span>仅保存在本机浏览器（localStorage），不会上传到任何服务器</span>
+                  <div class="key-box" style="margin-top:11px">
+                    <label class="sr-only" for="searchKey">搜索 API Key</label>
+                    <input class="input" id="searchKey" type="password"
+                           placeholder="tvly-···················· 或 BSA············"
+                           autocomplete="off" spellcheck="false">
+                    <button class="btn btn-sm" id="toggleSearchKey" style="white-space:nowrap">显示</button>
+                  </div>
+                  <div class="key-state" id="searchKeyState"><i></i><span>未配置 —— 猜想验证用预置示例</span></div>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
+                  <b>搜索测试</b>
+                  <span>发一次真实搜索，验证 Key 与 CORS 是否可用</span>
+                </div>
+                <div class="row-ctl">
+                  <button class="btn btn-sm btn-primary" id="testSearchBtn">测试搜索</button>
+                </div>
+              </div>
+
+              <div class="notice notice-info" style="margin-top:18px">
+                <span aria-hidden="true">ℹ</span>
+                <div>
+                  <b>为什么搜索与模型分开配</b> —— 模型负责「读懂并判断」，搜索负责「上网拿证据」。
+                  两步都配好，学生实训里的「猜想验证」才是真的联网查证；只配了模型时，会退回到「基于模型知识」验证（不联网）。
+                </div>
+              </div>
+            </div>
+          </section>
+
           <!-- 账号 -->
           <section class="set-section" id="account">
             <div class="card card-raised">
@@ -427,6 +485,24 @@
 <script src="assets/nav.js"></script>
 <script src="assets/core.js"></script>
 <script>
+/* ---------- 轻提示（#flash 的样式在 design.css，与其它页共用一套） ----------
+   🔴 第 55 轮：本页原先用 window.alert 弹结果（全站唯一没走统一反馈的一页）。
+      改成一句话浮层，详细信息留在行内状态（#keyState / #searchKeyState）——
+      关掉提示也还看得到，比 alert 弹一下就没了强。 */
+let flashTimer = 0;
+function flash(msg, tone) {
+  let box = document.getElementById("flash");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "flash";
+    document.body.appendChild(box);
+  }
+  box.className = tone || "";
+  box.textContent = msg;
+  box.hidden = false;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { box.hidden = true; }, 2800);
+}
 /* ============================================================
    设置页：所有改动写入 Cookie / localStorage，刷新后保留
    ============================================================ */
@@ -504,7 +580,7 @@ $("#resetA11y").addEventListener("click", () => {
 
 /* ---------- 朗读 ---------- */
 $("#speakBtn").addEventListener("click", () => {
-  if (!("speechSynthesis" in window)) { alert("当前浏览器不支持语音朗读。"); return; }
+  if (!("speechSynthesis" in window)) { flash("当前浏览器不支持语音朗读", "bad"); return; }
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance($("#prevText").textContent.trim());
   u.lang = "zh-CN";
@@ -611,9 +687,9 @@ $("#testBtn").addEventListener("click", () => {
   const provider = $("#provider").value;
 
   if (provider === "demo" || !key) {
-    alert(provider === "demo"
-      ? "还没接入模型，没有可测的连接。\n\n选一个服务商（DeepSeek / 通义千问 / 智谱 GLM）并填入 API Key 后，这里会真的发一次请求。"
-      : "还没填 API Key —— 填上就能测。");
+    flash(provider === "demo"
+      ? "还没接入模型 —— 先在下面选服务商、填上 API Key"
+      : "还没填 API Key —— 填上就能测", "bad");
     return;
   }
 
@@ -622,17 +698,87 @@ $("#testBtn").addEventListener("click", () => {
   testConnection(provider, key).then(function (r) {
     btn.disabled = false;
     btn.textContent = "测试连接";
+    const state = $("#keyState");
     if (r.ok) {
-      alert("连接正常 ✓\n\n服务商：" + provider + "\n模型：" + r.model +
-        "\n往返：" + r.ms + " ms\n\n回工作台点「生成模拟」，现在会真的写代码了。");
-      const state = $("#keyState");
       state.className = "key-state ok";
       state.querySelector("span").textContent = `已配置 · ${maskedKey(key)} —— 连接已验证（${r.ms} ms）`;
+      flash("连接正常 ✓ " + provider + " / " + r.model + " · 往返 " + r.ms + " ms", "ok");
     } else {
-      alert("连接失败 ✗\n\n" + r.error + (r.detail ? "\n\n" + r.detail : "") +
-        "\n\nKey 仍在本地存着，改好之后可以再测。");
+      // 失败详情写进行内状态：关掉提示也还看得到原因
+      state.className = "key-state bad";
+      state.querySelector("span").textContent =
+        "连接失败：" + r.error + (r.detail ? " · " + r.detail : "");
+      flash("连接失败 ✗ " + r.error, "bad");
     }
   });
+});
+
+/* ---------- 联网搜索 ---------- */
+const SEARCH_KEY = "st_search_key";
+
+function syncSearchKeyUI() {
+  const k = localStorage.getItem(SEARCH_KEY) || "";
+  const state = $("#searchKeyState");
+  if (k) {
+    state.className = "key-state ok";
+    state.querySelector("span").textContent = `已配置 · ${maskedKey(k)}`;
+  } else {
+    state.className = "key-state";
+    state.querySelector("span").textContent = "未配置 —— 猜想验证用预置示例";
+  }
+}
+
+$("#searchKey").addEventListener("change", (e) => {
+  const v = e.target.value.trim();
+  if (v) localStorage.setItem(SEARCH_KEY, v);
+  else localStorage.removeItem(SEARCH_KEY);
+  syncSearchKeyUI();
+});
+
+$("#toggleSearchKey").addEventListener("click", () => {
+  const inp = $("#searchKey");
+  const show = inp.type === "password";
+  inp.type = show ? "text" : "password";
+  $("#toggleSearchKey").textContent = show ? "隐藏" : "显示";
+});
+
+$("#searchProvider").addEventListener("change", (e) => {
+  store.set("searchProvider", e.target.value);
+});
+
+/**
+ * 搜索测试 —— 真发一次搜索请求（第 50 轮）。
+ * 与模型连接测试同理：真的验证 Key 与 CORS，不做假弹窗。
+ */
+$("#testSearchBtn").addEventListener("click", () => {
+  const btn = $("#testSearchBtn");
+  const key = localStorage.getItem(SEARCH_KEY) || "";
+  const provider = $("#searchProvider").value;
+
+  if (provider === "none" || !key) {
+    flash(provider === "none"
+      ? "还没配置联网搜索 —— 先在下面选服务商、填上 Key"
+      : "还没填搜索 Key —— 填上就能测", "bad");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "测试中…";
+  (typeof webSearch === "function" ? webSearch("归并排序") : Promise.resolve({ ok: false, error: "搜索函数未加载" }))
+    .then(function (r) {
+      btn.disabled = false;
+      btn.textContent = "测试搜索";
+      if (r.ok) {
+        syncSearchKeyUI();
+        flash("搜索正常 ✓ " + provider + " · 返回 " + r.n + " 条结果", "ok");
+      } else {
+        const sstate = $("#searchKeyState");
+        sstate.className = "key-state bad";
+        sstate.querySelector("span").textContent =
+          "搜索失败：" + r.error + (r.hint ? " · " + r.hint : "");
+        flash("搜索失败 ✗ " + r.error, "bad");
+      }
+    });
 });
 
 /* ---------- 账号 ---------- */
@@ -682,9 +828,9 @@ $("#exportBtn").addEventListener("click", () => {
     a.href = URL.createObjectURL(blob);
     a.download = "smarttutor-data.json";
     a.click();
-    alert("已导出 learning data。\n\n注：导出内容不含 API Key。");
+    flash("已导出学习数据（不含 API Key）", "ok");
   } catch {
-    alert("当前环境不支持导出。");
+    flash("当前环境不支持导出", "bad");
   }
 });
 
@@ -702,7 +848,8 @@ $("#clearBtn").addEventListener("click", () => {
   ["st_theme", "st_role"].forEach((c) => Cookie.del(c));
   refreshStorage();
   syncKeyUI();
-  alert("已清空。刷新页面后生效。");
+  syncSearchKeyUI();
+  flash("已清空，刷新页面后生效", "ok");
 });
 
 /* ---------- 目录高亮 ---------- */
@@ -730,11 +877,14 @@ $$(".set-toc a").forEach((a) => {
   }
   const provider = store.get("provider");
   if (provider) $("#provider").value = provider;
+  const searchProvider = store.get("searchProvider");
+  if (searchProvider) $("#searchProvider").value = searchProvider;
 })();
 
 renderThemeSeg();
 applyA11y();
 syncKeyUI();
+syncSearchKeyUI();
 syncAccount();
 refreshStorage();
 </script>

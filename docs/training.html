@@ -116,6 +116,25 @@
   .f-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 5px; font-size: 12.5px; }
   .f-text { margin: 0 0 8px; font-size: 12.5px; line-height: 1.7; }
 
+  /* ---------- 讨论区（群聊） ---------- */
+  .chat-log { display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto; padding-right: 2px; }
+  .msg { display: flex; flex-direction: column; gap: 3px; }
+  .msg.me { align-items: flex-end; }
+  .msg .m-meta { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted-foreground); }
+  .msg .m-meta b { color: var(--foreground); font-weight: 500; }
+  .msg .m-bubble {
+    display: inline-block; max-width: 84%; padding: 7px 11px; border-radius: 12px;
+    font-size: 13px; line-height: 1.65; background: var(--secondary); color: var(--foreground);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .msg.teacher .m-bubble {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--primary) 26%, transparent);
+  }
+  .msg.me .m-bubble { background: color-mix(in srgb, var(--primary) 20%, transparent); }
+  .chat-form { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; }
+  .chat-form .textarea { flex: 1 1 auto; min-height: 40px; font-size: 12.5px; }
+
   /* ---------- 发布弹窗里的骨架预览 ---------- */
   .mk-preview { border: 1px solid var(--border); border-radius: 10px; padding: 11px; margin-top: 4px; }
   .mk-src { font-size: 12.5px; line-height: 1.7; color: var(--muted-foreground); margin-bottom: 8px; }
@@ -290,7 +309,7 @@ function actItemHtml(a) {
       <span class="ai-meta">
         <span class="tag${a.origin === "student" ? " tag-warning" : ""}">${activityOrigin(a.origin)}</span>
         <span>${(skel.stages || []).length} 步</span>
-        <span>${a.participants.length} 人</span>
+        <span>${progressOfActivity(a.id).length} 人留下进度</span>
         ${a.findings.length ? `<span>${a.findings.length} 条新发现</span>` : ""}
       </span>
       <span class="ai-time">${agoText(a.updatedAt, Date.now())}${courseName(a.courseId) ? " · " + escHtml(courseName(a.courseId)) : ""}</span>
@@ -351,6 +370,36 @@ function stageHtml(st, i, last) {
     </div>`;
 }
 
+/**
+ * 学生在这次实训里的真实进度（第 55 轮）。
+ * 🔴 数据来自**学生自己的桶**（`st_training_progress`），老师端跨桶读 ——
+ *    所以这里能看到"他推导出了什么"，而不只是"他参没参与"。
+ * ⚠️ `source:"sample"` 的预置示例推导不算学生的成果，过滤掉（别把种子当学生写的）。
+ */
+function studentsProgressHtml(a) {
+  const list = progressOfActivity(a.id);
+  if (!list.length) {
+    return `<p class="muted">本机还没有学生在这条实训里留下记录 —— 学生一进实训页点开步骤、
+      写下推导，这里就会出现。空白就是空白，不拿示例数据填。</p>`;
+  }
+  return `<ul class="findings">` + list.map((p) => {
+    const ded = (p.deductions || []).filter((d) => d.source !== "sample");
+    const notes = p.notes || [];
+    return `<li>
+      <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
+        <b>${escHtml(p.name)}</b>
+        <span class="muted">${p.done ? "已走完骨架" : "进行中"} ·
+          更新于 ${escHtml(agoText(p.updatedAt, Date.now()))}</span>
+      </div>
+      ${ded.length
+        ? ded.map((d) => `<p style="margin:6px 0 0">· <span class="muted">${
+            d.source === "ai" ? "AI 验证" : "自己推导"}：</span>${escHtml(d.text)}</p>`).join("")
+        : ""}
+      ${notes.length ? `<p class="muted" style="margin:6px 0 0">另外记了 ${notes.length} 条路线笔记</p>` : ""}
+    </li>`;
+  }).join("") + `</ul>`;
+}
+
 function findingsHtml(a) {
   if (!a.findings.length) {
     return `<p class="muted">还没有学生提交「新发现」。学生在自己的实训页标记「这是我的新发现」后会出现在这里。</p>`;
@@ -367,6 +416,48 @@ function findingsHtml(a) {
         ${f.pinned ? "取消推荐" : "标记为推荐方向"}
       </button>
     </li>`).join("") + `</ul>`;
+}
+
+/* ---------------- 讨论区（群聊） ---------------- */
+function myName() {
+  return (typeof accountDisplayName === "function" && typeof currentUserKey === "function")
+    ? accountDisplayName(currentUserKey()) : "老师";
+}
+
+function chatHtml(a) {
+  const msgs = (a.messages || []).slice().sort((x, y) => (x.at || 0) - (y.at || 0));
+  const uname = myName();
+  const list = msgs.length
+    ? `<div class="chat-log">` + msgs.map((m) => {
+        const mine = m.who === uname;
+        const teacher = m.role === "teacher";
+        return `<div class="msg${mine ? " me" : ""}${teacher ? " teacher" : ""}">
+          <div class="m-meta"><b>${escHtml(m.who)}</b>
+            ${teacher ? `<span class="tag tag-primary">老师</span>` : ""}
+            <span>${agoText(m.at, Date.now())}</span></div>
+          <div class="m-bubble">${escHtml(m.text)}</div>
+        </div>`;
+      }).join("") + `</div>`
+    : `<p class="muted">还没有人发言。说句话，把大家拉到同一条探究路上。</p>`;
+  return list +
+    `<div class="chat-form">
+      <textarea class="textarea" id="chatInput" rows="2" placeholder="说点什么…"></textarea>
+      <button class="btn btn-sm btn-primary" type="button" id="chatSend">发送</button>
+    </div>
+    <p class="muted" style="margin:6px 0 0">消息写回活动记录（本机浏览器内模拟协作，换台机器查不到）。</p>`;
+}
+
+function sendChat() {
+  const a = currentActivity();
+  if (!a) return;
+  const ci = $("#chatInput");
+  const text = ci ? ci.value : "";
+  if (!String(text || "").trim()) { flash("先说点什么", "bad"); return; }
+  const r = addChatMessage(a.id, text, myName(), "teacher");
+  if (!r.ok) { flash(r.error, "bad"); return; }
+  if (ci) ci.value = "";
+  flash("已发送", "ok");
+  renderPane();
 }
 
 function renderPane() {
@@ -399,7 +490,7 @@ function renderPane() {
         <div class="pane-meta">
           <span class="status-pill ${pill}">${st.label}</span>
           <span class="tag${a.origin === "student" ? " tag-warning" : ""}">${activityOrigin(a.origin)}</span>
-          <span class="muted">${a.participants.length} 人参与</span>
+          <span class="muted">${progressOfActivity(a.id).length} 人留下进度</span>
           <span class="muted">更新于 ${agoText(a.updatedAt, Date.now())}</span>
         </div>
       </div>
@@ -456,6 +547,22 @@ function renderPane() {
         <span class="hint">预置示例数据 · 系统不自动判定"创新"，靠学生主动标记 + 你推荐</span>
       </div>
       ${findingsHtml(a)}
+    </div>
+
+    <div class="blk">
+      <div class="blk-head">
+        <h3>学生做到哪了 · ${progressOfActivity(a.id).length} 人</h3>
+        <span class="hint">跨「学生自己的进度记录」读出来的真实情况 —— 谁走到哪一步、推导出了什么</span>
+      </div>
+      ${studentsProgressHtml(a)}
+    </div>
+
+    <div class="blk">
+      <div class="blk-head">
+        <h3>讨论区 · ${(a.messages || []).length} 条消息</h3>
+        <span class="hint">像群聊一样，你和学生都在这里发信息</span>
+      </div>
+      ${chatHtml(a)}
     </div>`;
 }
 
@@ -603,9 +710,9 @@ $("#actPane").addEventListener("click", (e) => {
   if (e.target.closest("#actDel")) {
     const n = activityAssetCount(a.id);
     let msg = `确定删除实训「${a.title}」吗？`;
-    if (n.stages || n.participants || n.findings) {
+    if (n.stages || n.progress || n.findings || n.messages) {
       msg += `\n\n这条实训下的内容会一起删除：${n.stages} 步引导骨架、` +
-             `${n.participants} 名参与者记录、${n.findings} 条学生发现。`;
+             `${n.progress} 名学生的进度与推导、${n.findings} 条学生发现、${n.messages} 条讨论消息。`;
     }
     msg += "\n\n删除后无法撤销。";
     if (!window.confirm(msg)) return;
@@ -614,6 +721,19 @@ $("#actPane").addEventListener("click", (e) => {
     VIEW.currentId = "";
     afterStructureChange();
     flash(`已删除「${r.activity.title}」`, "ok");
+  }
+
+  /* 群聊发消息 */
+  if (e.target.closest("#chatSend")) {
+    sendChat();
+  }
+});
+
+/* 群聊输入框：Enter 发送，Shift+Enter 换行 */
+$("#actPane").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && e.target && e.target.id === "chatInput") {
+    e.preventDefault();
+    sendChat();
   }
 });
 

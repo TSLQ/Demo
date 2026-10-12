@@ -78,35 +78,17 @@ var GROUP_ACTIONS = {
 /* ============================================================
    班级目录 —— 唯一来源
    ------------------------------------------------------------
-   · 左侧栏「班级管理」的菜单项由它**派生**，保证侧栏与班级信息不会对不上
+   · 左侧栏「班级管理」的菜单项由它**派生**（refreshClassNav()）
    · class.html 也读它渲染「当前是哪个班」
-   · 将来接入「保存班级」时，只需往这里 push 一条再重渲染侧栏即可
+   · 🔴 第 55 轮起**真的可以新建**：数据层在下方「班级目录 —— 数据层」
+     （loadClasses() / saveClasses() / createClass()），与课程同一套
+     「按账号分桶 + 预置账号才播种」的约定。
 
    ⚠️ 多个班共用同一个 class.html，靠 URL 查询串区分（class.html?cls=cs2301）。
       若不加区分，点任一个班都会让**所有**班级项同时高亮，看起来像坏了。
    ============================================================ */
-var CLASSES = [
-  { id: "cs2301", label: "计科 2301 班", course: "数据结构与算法",
-    major: "计算机科学与技术", grade: "2023 级", count: 48 },
-  { id: "cs2302", label: "计科 2302 班", course: "数据结构与算法",
-    major: "计算机科学与技术", grade: "2023 级", count: 45 },
-  { id: "se2301", label: "软工 2301 班", course: "数据结构与算法",
-    major: "软件工程",         grade: "2023 级", count: 52 },
-];
-
-/** 由 CLASSES 派生的侧栏菜单项（保持单一数据源，改 CLASSES 即可） */
-var CLASS_NAV_ITEMS = CLASSES.map(function (c) {
-  return {
-    key: c.id,
-    label: c.label,
-    page: "class.html",
-    arg: "cls=" + c.id,        // 附在页名后的查询串，见 navTarget()
-    dot: true,
-    // 🔴 这里**不挂「48 人」那种徽标**（第 33 轮）：`CLASSES[].count` 是班级的**额定人数**，
-    //    本机根本没这么多学生，挂在侧栏等于宣称它是真的。
-    //    真实的"谁在课里"由 enrolledStudentsOf(courseId) 算（见文件末尾），页面自己显示。
-  };
-});
+var CLASSES = [];            /* ← 由下方班级数据层的 loadClasses() 回填 */
+var CLASS_NAV_ITEMS = [];    /* ← 由 refreshClassNav() 从 CLASSES 派生 */
 
 /* ============================================================
    课程目录 —— 唯一来源
@@ -288,6 +270,148 @@ function saveCourses() {
 }
 
 var COURSES = loadCourses();
+
+/* ============================================================
+   班级目录 —— 数据层（第 55 轮：从写死的 3 个班改成**可新建**）
+   ------------------------------------------------------------
+   🔴 与课程同一套约定（形态照抄 courseStoreKey / loadCourses）：
+     · **按账号分桶**（`st_classes:teacher:zhangsan`）—— 班级是"这位老师带的班"，
+       换个账号登录必须看到自己的班，而不是上一个人的
+     · **只有预置账号才播种** `SEED_CLASSES`；自己注册的账号从**空**开始
+     · 老版全局存档**一次性迁到当前账号**（迁完删旧键，防止重复复制）
+     · 存不下（file:// / 隐私模式）就退化为内存态，不炸页面
+
+   ⚠️ 班级**没有**真实的在册名单（那要教务系统，见 class.html 的说明）——
+      这里的 `count` 只是用户填的"额定人数"，页面上必须标注清楚，
+      别把它当成"这门课真有这么多学生"。
+   ============================================================ */
+
+var CLASS_KEY = "st_classes";        // 键基名；实际键见 classStoreKey()
+
+/** 当前账号的班级存档键（与 courseStoreKey 同一形状） */
+function classStoreKey() {
+  const u = currentUserKey();
+  return u ? CLASS_KEY + ":" + u : CLASS_KEY;
+}
+
+/** 预置班级（预置账号首次进入时用它）—— 就是原先写死的那 3 个 */
+var SEED_CLASSES = [
+  { id: "cs2301", label: "计科 2301 班", course: "数据结构与算法",
+    major: "计算机科学与技术", grade: "2023 级", count: 48 },
+  { id: "cs2302", label: "计科 2302 班", course: "数据结构与算法",
+    major: "计算机科学与技术", grade: "2023 级", count: 45 },
+  { id: "se2301", label: "软工 2301 班", course: "数据结构与算法",
+    major: "软件工程",         grade: "2023 级", count: 52 },
+];
+
+/** 规整班级数据：坏条目丢掉，字段补齐（存档坏了也不能白屏） */
+function normalizeClasses(list) {
+  if (!Array.isArray(list)) return null;
+  return list
+    .filter(function (c) { return c && typeof c === "object" && String(c.label || "").trim(); })
+    .map(function (c, i) {
+      const n = Number(c.count);
+      return {
+        id: String(c.id || ("cls-" + (i + 1))).trim(),
+        label: String(c.label).trim(),
+        course: String(c.course || "").trim(),
+        major: String(c.major || "").trim(),
+        grade: String(c.grade || "").trim(),
+        // 额定人数：非数字 / 非正数一律记 0（表示"未填"），别把 NaN 传下去
+        count: (isFinite(n) && n > 0) ? Math.round(n) : 0,
+      };
+    });
+}
+
+function loadClasses() {
+  const key = classStoreKey();
+  const user = currentUserKey();
+
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw) {
+      const ok = normalizeClasses(JSON.parse(raw));
+      // ⚠️ 空数组也算有效（用户把班级删光了，不该复活预置）
+      if (ok) return ok;
+    }
+  } catch (_) { /* 隐私模式 / file:// —— 退化为内存态 */ }
+
+  // 老版本的全局存档：迁给当前账号（只迁一次）
+  if (key !== CLASS_KEY) {
+    const migrated = migrateLegacyStore(CLASS_KEY, key, normalizeClasses, null);
+    if (migrated) return migrated;
+  }
+
+  // 预置账号 / 没有账号标识（直接打开页面）→ 给预置班级；自注册账号 → 从空开始
+  return (!user || isSeedAccount(user)) ? SEED_CLASSES.slice() : [];
+}
+
+function saveClasses() {
+  try { window.localStorage.setItem(classStoreKey(), JSON.stringify(CLASSES)); }
+  catch (_) { /* 存不下就算了，界面照常能用 */ }
+}
+
+CLASSES = loadClasses();
+
+/**
+ * 重建「班级管理」菜单项并写回 NAV。
+ * ⚠️ 必须**先重算 CLASS_NAV_ITEMS、再把同一个数组挂到 NAV 那组上** ——
+ *    重新赋值 CLASS_NAV_ITEMS 之后，NAV 里若还指着旧数组，侧栏就不会更新。
+ */
+function refreshClassNav() {
+  CLASS_NAV_ITEMS = CLASSES.map(function (c) {
+    return {
+      key: c.id, label: c.label, page: "class.html",
+      arg: "cls=" + c.id,        // 附在页名后的查询串，见 navTarget()
+      dot: true,
+      // 🔴 这里**不挂「48 人」那种徽标**（第 33 轮）：`count` 是用户填的**额定人数**，
+      //    本机根本没这么多学生，挂在侧栏等于宣称它是真的。
+      //    真实的"谁在课里"由 enrolledStudentsOf(courseId) 算，页面自己显示。
+    };
+  });
+  const groups = (typeof NAV !== "undefined" && NAV.teacher) || [];
+  groups.forEach(function (g) { if (g.action === "addClass") g.items = CLASS_NAV_ITEMS; });
+  return CLASS_NAV_ITEMS;
+}
+
+// ⚠️ 此刻 NAV 还没定义（它在下面）—— 这次只把 CLASS_NAV_ITEMS 算出来；
+//    NAV 里那一组由文件下方（NAV 定义之后）的 refreshClassNav() 再补一次。
+refreshClassNav();
+
+/**
+ * 新建班级：校验 → 生成 id → 落库 → 刷新菜单。
+ * 返回 { ok, error?, klass? }，调用方只负责提示与重渲染。
+ * 🔴 壳（shell.js）与独立模式（core.js）共用这一个实现，不要在两边各写一套。
+ */
+function createClass(data) {
+  const label = String((data && data.label) || "").trim();
+  if (!label) return { ok: false, error: "请先填写班级名称" };
+  if (CLASSES.some(function (c) { return c.label === label; })) {
+    return { ok: false, error: "已有同名班级「" + label + "」" };
+  }
+
+  // id：cls / cls-2 / cls-3 …（班级名多为中文，不做 slug，避免生成空 id）
+  let id = "cls", n = 2;
+  while (CLASSES.some(function (c) { return c.id === id; })) id = "cls-" + (n++);
+
+  // 「暂不关联」是关联课程下拉里的占位项 —— 存进去等于"没关联"，归一成空串
+  let course = String((data && data.course) || "").trim();
+  if (course === "暂不关联") course = "";
+
+  const num = Number(data && data.count);
+  const klass = {
+    id: id,
+    label: label,
+    course: course,
+    major: String((data && data.major) || "").trim(),
+    grade: String((data && data.grade) || "").trim(),
+    count: (isFinite(num) && num > 0) ? Math.round(num) : 0,
+  };
+  CLASSES.push(klass);
+  saveClasses();
+  refreshClassNav();
+  return { ok: true, klass: klass };
+}
 
 /**
  * 重建「我的课程」菜单项并写回 NAV。
@@ -534,8 +658,10 @@ var NAV = {
   ],
 };
 
-/* 菜单项要等 NAV 定义完才能回填 —— 「我的课程」的 items 由 COURSES 派生 */
+/* 菜单项要等 NAV 定义完才能回填 —— 「我的课程」/「班级管理」的 items
+   分别由 COURSES / CLASSES 派生 */
 refreshCourseNav();
+refreshClassNav();
 
 /* ============================================================
    教案：大纲 / 课时教案 / 版本链 —— 唯一来源（第 20 轮）
@@ -2030,6 +2156,19 @@ function normFinding(f, i) {
   };
 }
 
+function normMessage(m, i) {
+  const o = (m && typeof m === "object") ? m : {};
+  const text = String(o.text || "").trim();
+  if (!text) return null;
+  return {
+    id: String(o.id || "m" + (i + 1)).trim() || "m" + (i + 1),
+    who: String(o.who || "").trim(),
+    role: o.role === "teacher" ? "teacher" : "student",
+    at: Number(o.at) || 0,
+    text: text,
+  };
+}
+
 function normSkeleton(sk) {
   const o = (sk && typeof sk === "object") ? sk : {};
   return {
@@ -2064,6 +2203,7 @@ function normalizeActivities(list) {
         participants: (Array.isArray(a.participants) ? a.participants : [])
           .map(function (x) { return String(x || "").trim(); }).filter(Boolean),
         findings: (Array.isArray(a.findings) ? a.findings : []).map(normFinding).filter(Boolean),
+        messages: (Array.isArray(a.messages) ? a.messages : []).map(normMessage).filter(Boolean),
         createdAt: Number(a.createdAt) || 0,
         updatedAt: Number(a.updatedAt) || Number(a.createdAt) || 0,
       };
@@ -2098,6 +2238,16 @@ var SEED_ACTIVITIES = [
       { id: "f2", who: "李同学", at: 1759480000000, pinned: false,
         text: "边数加倍时比值每次只多一点点，我怀疑它一定有个上界，但我还说不清为什么。" },
     ],
+    messages: [
+      { id: "m1", who: "李老师", role: "teacher", at: 1759401000000,
+        text: "开始前先想一想：我们现在会算哪些图形的面积？圆和它们最大的差别在哪？" },
+      { id: "m2", who: "王同学", role: "student", at: 1759410000000,
+        text: "我会算长方形、三角形。圆是弯的，没法直接套公式。" },
+      { id: "m3", who: "李老师", role: "teacher", at: 1759415000000,
+        text: "对，关键就是「弯」。古人想的办法是把它变成已经会算的东西 —— 试着沿这个方向走。" },
+      { id: "m4", who: "赵同学", role: "student", at: 1759420000000,
+        text: "是不是可以像切披萨那样，切成很多小三角形再拼起来？" },
+    ],
     createdAt: 1759300000000,
     updatedAt: 1759480000000,
   },
@@ -2113,6 +2263,12 @@ var SEED_ACTIVITIES = [
     skeleton: genericSkeleton(),
     participants: ["陈同学"],
     findings: [],
+    messages: [
+      { id: "m5", who: "陈同学", role: "student", at: 1759502000000,
+        text: "我发起这个是因为：既然有快排了，为什么还要学那么多别的排序？" },
+      { id: "m6", who: "李老师", role: "teacher", at: 1759510000000,
+        text: "好问题。先别急着要结论 —— 试试找出每种排序「最擅长」和「最怕」的场景。" },
+    ],
     createdAt: 1759500000000,
     updatedAt: 1759500000000,
   },
@@ -2183,6 +2339,7 @@ function createActivity(data) {
     skeleton: skel,
     participants: [],
     findings: [],
+    messages: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -2239,15 +2396,24 @@ function setActivityStatus(id, status, skipSave) {
 /** 删除前先数清楚挂了什么 —— 别让用户蒙着删（与 courseAssetCount 同一用意） */
 function activityAssetCount(id) {
   const a = activityOf(id);
-  if (!a) return { stages: 0, participants: 0, findings: 0 };
+  if (!a) return { stages: 0, participants: 0, findings: 0, messages: 0, progress: 0 };
   return {
     stages: (a.skeleton.stages || []).length,
     participants: a.participants.length,
     findings: a.findings.length,
+    messages: (a.messages || []).length,
+    // 🔴 第 55 轮：真正"做过"的人数（跨桶读学生自己的进度），不是被圈进名单的人数
+    progress: progressOfActivity(id).length,
   };
 }
 
-/** 删除一条实训活动（连带它的骨架与参与者记录一起没） */
+/**
+ * 删除一条实训活动（连带它的骨架与参与者记录一起没）。
+ * 🔴 第 55 轮修：同一条活动**可能在多个账号桶里各有一份副本** ——
+ *    学生发起的会同时落「学生桶」与「教师桶」（见 createStudentActivity）。
+ *    只删当前桶 = 学生那边还留着，他刷新后又看到这条已被删掉的实训。
+ *    → 遍历所有桶，把同 id 的副本一并清掉（与 addMyFinding / addChatMessage 同一套广播思路）。
+ */
 function deleteActivity(id) {
   const i = (ACTIVITIES || []).findIndex(function (a) { return a.id === id; });
   if (i < 0) return { ok: false, error: "找不到该实训活动" };
@@ -2255,8 +2421,22 @@ function deleteActivity(id) {
   const count = activityAssetCount(id);
   ACTIVITIES.splice(i, 1);
   saveActivities();
+
+  // 其余账号桶里的同 id 副本（当前桶刚保存过，那边已经没有了 → 会自然跳过）
+  const also = [];
+  activityBucketKeys().forEach(function (k) {
+    const list = readActivityBucket(k);
+    if (!list || !list.length) return;
+    const left = list.filter(function (a) { return !a || a.id !== id; });
+    if (left.length === list.length) return;          // 这个桶里本来就没有它
+    try {
+      window.localStorage.setItem(k, JSON.stringify(left));
+      also.push(k);
+    } catch (_) { /* 这个桶写不进就算了 */ }
+  });
+
   refreshActivityNav();
-  return { ok: true, activity: act, removed: count };
+  return { ok: true, activity: act, removed: count, alsoRemovedFrom: also };
 }
 
 /* ---------------- 骨架步骤的增 / 删 / 调序 ----------------
@@ -2426,6 +2606,13 @@ function normalizeTrainingProgress(obj) {
       notes: (Array.isArray(p.notes) ? p.notes : []).map(function (n) {
         return { at: Number(n && n.at) || 0, text: String(n && n.text || "").trim() };
       }).filter(function (n) { return n.text; }),
+      deductions: (Array.isArray(p.deductions) ? p.deductions : []).map(function (n) {
+        return {
+          at: Number(n && n.at) || 0,
+          text: String(n && n.text || "").trim(),
+          source: (n && (n.source === "ai" || n.source === "sample")) ? n.source : "me",
+        };
+      }).filter(function (n) { return n.text; }),
       updatedAt: Number(p.updatedAt) || 0,
     };
   });
@@ -2461,11 +2648,12 @@ function myProgressOf(activityId) {
 function saveMyProgress(activityId, patch) {
   const id = String(activityId);
   const p = TRAINING_PROGRESS[id] || (TRAINING_PROGRESS[id] = {
-    activityId: id, currentStage: "", done: false, notes: [], updatedAt: 0,
+    activityId: id, currentStage: "", done: false, notes: [], deductions: [], updatedAt: 0,
   });
   if ("currentStage" in patch) p.currentStage = String(patch.currentStage || "");
   if ("done" in patch) p.done = !!patch.done;
   if ("notes" in patch) p.notes = patch.notes;
+  if ("deductions" in patch) p.deductions = patch.deductions;
   p.updatedAt = Date.now();
   saveTrainingProgress();
   return { ok: true, progress: p };
@@ -2482,12 +2670,109 @@ function addRouteNote(activityId, text) {
   if (!t) return { ok: false, error: "笔记不能为空" };
   const id = String(activityId);
   const p = TRAINING_PROGRESS[id] || (TRAINING_PROGRESS[id] = {
-    activityId: id, currentStage: "", done: false, notes: [], updatedAt: 0,
+    activityId: id, currentStage: "", done: false, notes: [], deductions: [], updatedAt: 0,
   });
   p.notes.push({ at: Date.now(), text: t });
   p.updatedAt = Date.now();
   saveTrainingProgress();
   return { ok: true, progress: p };
+}
+
+/** 记一条「推导出来的有帮助的信息」（source："me" 学生自己推导 / "ai" 猜想的 AI 验证结论） */
+function addDeduction(activityId, text, source) {
+  const t = String(text || "").trim();
+  if (!t) return { ok: false, error: "推导不能为空" };
+  const id = String(activityId);
+  const p = TRAINING_PROGRESS[id] || (TRAINING_PROGRESS[id] = {
+    activityId: id, currentStage: "", done: false, notes: [], deductions: [], updatedAt: 0,
+  });
+  p.deductions = p.deductions || [];
+  p.deductions.push({ at: Date.now(), text: t, source: (source === "ai" || source === "sample") ? source : "me" });
+  p.updatedAt = Date.now();
+  saveTrainingProgress();
+  return { ok: true, progress: p };
+}
+
+/* ============================================================
+   跨桶读「谁真的在做」（第 55 轮）
+   ------------------------------------------------------------
+   进度存在**学生自己的桶**（`st_training_progress:<角色>:<账号>`）——
+   老师在教师端要看"学生做到哪了、推导出了什么"就必须跨桶读。
+   🔴 与 activitiesForStudent / simOfAnywhere 同一套：桶键**由 `st_accounts` 推**，
+      不枚举 `localStorage.key(i)`；读桶一律走 readBucket（兼容老档双重编码）。
+   ============================================================ */
+
+/** 本机各账号的进度桶键（含全局桶与当前账号桶），去重 */
+function trainingProgressBucketKeys() {
+  return bucketKeys(TRAINING_PROGRESS_KEY, trainingProgressKey());
+}
+
+/** 读一个进度桶（兼容老档双重编码） */
+function readProgressBucket(key) {
+  return readBucket(TRAINING_PROGRESS_KEY, key, normalizeTrainingProgress);
+}
+
+/** 账号 key（`student:zhangsan`）→ 显示名；查不到就退回账号本身 */
+function accountNameOf(accKey) {
+  const want = String(accKey || "").trim().toLowerCase();
+  if (!want) return "";
+  let list = [];
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(ACCOUNT_KEY) || "[]");
+    list = Array.isArray(raw) ? raw : [];
+  } catch (_) { return want; }
+  const hit = list.filter(function (a) {
+    return a && (String(a.role || "") + ":" + String(a.user || "")).toLowerCase() === want;
+  })[0];
+  return hit ? String(hit.name || hit.user).trim() : want;
+}
+
+/** 桶键 → 账号 key（`st_training_progress:student:zhangsan` → `student:zhangsan`） */
+function accountKeyFromBucket(bucketKey, baseKey) {
+  const k = String(bucketKey || "");
+  if (!k || k === baseKey) return "";
+  const want = baseKey + ":";
+  return k.indexOf(want) === 0 ? k.slice(want.length) : "";
+}
+
+/**
+ * 这条实训**真实的参与情况** —— 跨所有账号桶，取每人对该活动的进度。
+ * 返回 `[{ key, name, done, currentStage, updatedAt, notes, deductions }]`，按更新时间倒序。
+ *
+ * 🔴 「参与」= **留下过进度记录**（哪怕只点开看了一步），**不是**"被圈进参与者名单"——
+ *    `participants` 只是发布时圈定的人，不等于他们真的做了。
+ */
+function progressOfActivity(activityId) {
+  const id = String(activityId || "");
+  if (!id) return [];
+  const seen = {};
+  const out = [];
+  const push = function (accKey, prog) {
+    const key = String(accKey || "").toLowerCase();
+    if (!key || seen[key]) return;
+    const p = prog && prog[id];
+    if (!p) return;                       // 这个人在这条实训上还没有任何记录
+    seen[key] = 1;
+    out.push({
+      key: key,
+      name: accountNameOf(key),
+      done: !!p.done,
+      currentStage: p.currentStage || "",
+      updatedAt: p.updatedAt || 0,
+      notes: p.notes || [],
+      deductions: p.deductions || [],
+    });
+  };
+
+  // 当前账号：内存里那份最新（可能刚改完还没被别的键读到）
+  const mine = currentUserKey();
+  if (mine) push(mine, TRAINING_PROGRESS);
+  // 其余账号桶
+  trainingProgressBucketKeys().forEach(function (k) {
+    push(accountKeyFromBucket(k, TRAINING_PROGRESS_KEY), readProgressBucket(k));
+  });
+
+  return out.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
 }
 
 /** 本机账号库里 role=teacher 的账号（学生发起实训时同步给老师用） */
@@ -2612,6 +2897,53 @@ function addMyFinding(activityId, text, who) {
 
   if (!touched) return { ok: false, error: "找不到这条实训" };
   return { ok: true, finding: finding, touched: touched };
+}
+
+let MESSAGE_SEQ = 0;
+/** 群聊消息 id（同一会话内不重复） */
+function newMessageId() { MESSAGE_SEQ += 1; return "m" + Date.now().toString(36) + "-" + MESSAGE_SEQ; }
+
+/**
+ * 实训群聊里发一条消息 —— 写回活动记录本身（与 addMyFinding 同一套广播）。
+ * 老师与学生都从各自页面发，广播到所有含该 id 的桶，跨账号看得到。
+ */
+function addChatMessage(activityId, text, who, role) {
+  const t = String(text || "").trim();
+  if (!t) return { ok: false, error: "消息不能为空" };
+  const whoName = String(who || "").trim();
+  const msg = {
+    id: newMessageId(),
+    who: whoName || localName(),
+    role: role === "teacher" ? "teacher" : "student",
+    at: Date.now(),
+    text: t,
+  };
+
+  let touched = 0;
+  activityBucketKeys().forEach(function (k) {
+    const list = readActivityBucket(k);
+    if (!list) return;
+    const hit = (list || []).filter(function (x) { return x.id === activityId; })[0];
+    if (!hit) return;
+    hit.messages = hit.messages || [];
+    hit.messages.push(msg);
+    // 🔴 第 55 轮：发消息也是"活动有更新" —— 不刷新 updatedAt 的话，
+    //    「最近更新」列表的排序永远不动，刚讨论完的活动还沉在下面。
+    hit.updatedAt = Date.now();
+    try { window.localStorage.setItem(k, JSON.stringify(list)); } catch (_) { /* 这个桶写不进就算了 */ }
+    touched++;
+  });
+
+  // 内存里的本桶记录也同步（当前会话重新渲染要立刻看到）
+  const local = activityOf(activityId);
+  if (local) {
+    local.messages = local.messages || [];
+    if (!local.messages.some(function (m) { return m.id === msg.id; })) local.messages.push(msg);
+    local.updatedAt = Date.now();
+  }
+
+  if (!touched) return { ok: false, error: "找不到这条实训" };
+  return { ok: true, message: msg, touched: touched };
 }
 
 /**
@@ -4279,10 +4611,9 @@ function parseDiffText(md) {
 
 /** 本机有没有配 API Key（纯静态站的 AI 能力全靠它） */
 function hasApiKey() {
-  try {
-    const k = (typeof STORE_KEY !== "undefined" && STORE_KEY.apiKey) ? STORE_KEY.apiKey : "st_api_key";
-    return !!String(window.localStorage.getItem(k) || "").trim();
-  } catch (_) { return false; }
+  // 🔴 走 readKeyValue 兼容两种落库方式（见它的说明）—— 别再裸读
+  const k = (typeof STORE_KEY !== "undefined" && STORE_KEY.apiKey) ? STORE_KEY.apiKey : "st_api_key";
+  return !!String(readKeyValue(k)).trim();
 }
 
 /** 没有 Key 时统一的那句话（每处都要说，别让用户以为"AI 已经做完了"） */
@@ -4290,6 +4621,58 @@ function noKeyNote() {
   return "这部分需要模型成文：到「设置 → 模型与 API Key」填上自己的 Key，我会直接把成稿给你；" +
     "现在先给你一份**结构完整的骨架**，可以照着填。";
 }
+
+/* ------------------------------------------------------------
+   🔴 第 57 轮：把「需要模型成文」的技能真的接到模型上
+   ------------------------------------------------------------
+   此前这几个技能只给规则骨架，note 里写「配了 Key 我可以…」—— 但**没有任何一处真的调用模型**。
+   现在补齐这条链路：接了模型就**当场生成**；没接模型照旧给骨架并如实说明。
+   铁律不变：未接模型**绝不返回假内容** —— `aiRunner()` 直接返回 null，调用方回落骨架。
+   ============================================================ */
+
+/** 把模型返回的 Markdown 拆成行数组 —— 与 `renderLines()` 的输入形状一致 */
+function mdLines(raw) {
+  return String(raw == null ? "" : raw).replace(/\r\n?/g, "\n").split("\n");
+}
+
+/**
+ * 调一次模型并映射成技能结果形状 `{ok, title, lines, note}`。
+ * 🔴 未接模型（没选服务商 / 没填 Key）→ 返回 **null**，调用方回落规则骨架并说明原因。
+ * @param {string} system 系统提示词（交接任务带的 `prompt` 优先于内置）
+ * @param {string} user   用户内容（为空则不浪费调用）
+ * @param {(raw:string, r:object) => object} mapFn 把模型输出映射成技能结果
+ */
+function aiRunner(system, user, mapFn, opt) {
+  if (typeof llmReady !== "function" || !llmReady()) return null;
+  if (!String(user || "").trim()) return null;
+  return llmChat(system, user, opt || {}).then(function (r) {
+    if (!r.ok) return { ok: false, error: r.error + (r.hint ? "　" + r.hint : "") };
+    try { return mapFn(String(r.raw || ""), r); }
+    catch (e) { return { ok: false, error: "模型返回的内容没法用：" + e.message }; }
+  });
+}
+
+/** 四个「要成文」的技能共用的系统提示词（交接任务带了 `prompt` 就用它） */
+var AI_SYS = {
+  "lesson-draft":
+    "你是高校教师的备课助手。据我给的章节信息起草**一份课时教案**，用 Markdown 输出，" +
+    "含六个小节：教学目标 / 教学重点（列表）/ 教学难点 / 课堂流程（每步写成「标题（分钟）：说明」）/ 作业布置 / 学情提示。" +
+    "要求：紧扣本章知识点，课时长度按我给的信息；不要编造教材里没有的内容；信息不足处写「（待补充）」而不是臆测。",
+  "lesson-improve":
+    "你是高校教学改进顾问。据我给的教案与课后反思，给出 **2–3 条具体可执行的改进建议**，" +
+    "每条说清「改哪个小节 → 改成什么 → 为什么」，用 Markdown 列表输出。" +
+    "建议要落到能直接替换的文字上；反思信息不足就直说，不要编造。",
+  "diff-explain":
+    "下面是我给的两个版本的内容差异（+ 为新增、- 为删除）。" +
+    "请用 2–4 句话**客观**解读：这一版主要改了什么、可能的教学意图是什么。不要评价好坏。",
+  "schedule-parse":
+    "你是课表格式转换助手。把我给你的课表内容转成标准格式，**只输出结果，不要解释**。\n" +
+    "格式一（逐行，每行一节课）：星期,节次,课程,教室,班级\n" +
+    "例：周一,第1-2节,数据结构与算法,6A-301,计科2301\n" +
+    "格式二（二维表，制表符分隔）：首行是星期表头；之后每行第一格是节次名；" +
+    "单元格内写「课程/教室/班级」，用斜杠分隔，缺失可省略。\n" +
+    "认不出来的行原样保留，不要猜。",
+};
 
 var SKILL_RUNNERS = {
   /* ---------- 课表：文本转标准格式 ---------- */
@@ -4330,11 +4713,26 @@ var SKILL_RUNNERS = {
       parsed.bad.slice(0, 8).forEach(function (l) { lines.push(l); });
       lines.push("```");
     }
-    return {
+    const ruleResult = {
       ok: true, title: "文本转表格", lines: lines,
-      note: hasApiKey() ? "" : "认不出来的那几行，配了 API Key 之后我可以交给模型猜 —— 但课表猜错的代价高，建议还是自己确认。" +
-        "现在的规则解析只做**有把握的**转换。",
+      note: "规则解析只做**有把握的**转换：认不出来的行我没有猜。",
     };
+    // 🔴 有搞不定的行（或整段没认出来）且接了模型 → 交给模型转格式（「让 AI 帮你转」的正解）
+    if (parsed.bad.length || (!parsed.rows.length && !parsed.grid.length)) {
+      const ai = aiRunner(
+        (p.prompt && String(p.prompt).trim()) || AI_SYS["schedule-parse"],
+        String(p.text || "") + (parsed.bad.length
+          ? "\n\n（以下几行规则没认出来，请重点处理）\n" + parsed.bad.join("\n") : ""),
+        function (raw) {
+          return {
+            ok: true, title: "课表解析（模型）", lines: mdLines(raw),
+            note: "上面是模型转出来的标准格式。⚠️ 课表猜错的代价高 —— 点「回到课表页导入」之后、" +
+              "确认导入之前，请自己核一遍。",
+          };
+        });
+      if (ai) return ai;
+    }
+    return ruleResult;
   },
 
   /* ---------- 校对 ---------- */
@@ -4402,12 +4800,25 @@ var SKILL_RUNNERS = {
       "",
       "⚠️ 上面**只有结构是我的**：导入/讲解/练习/小结的分段是通用骨架，具体内容一个字都没替你编。",
     ];
-    return {
-      ok: true, title: "起草教案", lines: lines,
-      note: hasApiKey()
-        ? "你配了 Key —— 我可以按这个骨架把六节内容写成完整教案，你过一遍再存进课时教案。"
-        : noKeyNote(),
+    const skeleton = {
+      ok: true, title: "起草教案", lines: lines, note: noKeyNote(),
     };
+    const ai = aiRunner(
+      (p.prompt && String(p.prompt).trim()) || AI_SYS["lesson-draft"],
+      [
+        "课程章节：" + chTitle,
+        hours ? "计划课时：" + hours : "",
+        points ? "本章核心知识点：" + points : "",
+        "",
+        "请按六个小节的结构写一份完整的课时教案。",
+      ].filter(Boolean).join("\n"),
+      function (raw) {
+        return {
+          ok: true, title: "起草教案（模型生成）", lines: mdLines(raw),
+          note: "上面是模型按标准结构写出来的完整教案。⚠️ 请核对知识点与课时安排后再存进课时教案。",
+        };
+      });
+    return ai || skeleton;
   },
 
   /* ---------- 教案改进：先给硬问题，成文建议需要 Key ---------- */
@@ -4436,12 +4847,21 @@ var SKILL_RUNNERS = {
     if (!(les.steps || []).length || les.steps.length < 3) spots.push("课堂流程 —— 步骤太粗，建议拆到 4–6 步");
     if (!spots.length) spots.push("教学目标 —— 可写成更可检验的行为动词（说明/推导/实现…）");
     spots.forEach(function (s, i) { lines.push((i + 1) + ". " + s); });
-    return {
-      ok: true, title: "教案改进", lines: lines,
-      note: hasApiKey()
-        ? "配了 Key 我可以把上面每一条写成**能直接替换的文字**（「把导入环节改为…」），并按你的反思调整方向。"
-        : noKeyNote(),
-    };
+    const ruleResult = { ok: true, title: "教案改进", lines: lines, note: noKeyNote() };
+    const reflBlock = (refl && (refl.saw || refl.todo))
+      ? "\n\n## 我上完这节课后的反思\n课堂观察：" + (refl.saw || "（无）") +
+        "\n下次改进：" + (refl.todo || "（无）")
+      : "";
+    const ai = aiRunner(
+      (p.prompt && String(p.prompt).trim()) || AI_SYS["lesson-improve"],
+      String(p.text || "") + reflBlock,
+      function (raw) {
+        return {
+          ok: true, title: "教案改进（模型建议）", lines: mdLines(raw),
+          note: "上面是模型按你的反思给出的改进建议。采纳后作为新版本提交，原版本仍留在版本历史里。",
+        };
+      });
+    return ai || ruleResult;
   },
 
   /* ---------- 版本差异解读 ---------- */
@@ -4465,10 +4885,20 @@ var SKILL_RUNNERS = {
       lines.push("- **" + g.field + "**：" + bits.join(" · "));
       g.samples.forEach(function (s) { lines.push("  - " + s); });
     });
-    return {
+    const ruleResult = {
       ok: true, title: "版本差异解读", lines: lines,
-      note: "这里只做**客观归纳**（哪一节动了、动了几行）。要解读「为什么这么改、教学意图是什么」，那是模型的活。",
+      note: "这里只做**客观归纳**（哪一节动了、动了几行）。",
     };
+    const ai = aiRunner(
+      (p.prompt && String(p.prompt).trim()) || AI_SYS["diff-explain"],
+      String(p.text || ""),
+      function (raw) {
+        return {
+          ok: true, title: "版本差异解读（模型）", lines: mdLines(raw),
+          note: "上面是模型对这次改动的解读 —— 仅供参考，教学意图以你自己为准。",
+        };
+      });
+    return ai || ruleResult;
   },
 
   /* ---------- 大纲编排 ---------- */
@@ -4729,6 +5159,80 @@ function planFromChain(chain, ctx) {
   }
   if (o.allowWrite === false) steps.forEach(function (s) { if (s.kind === "write") s.downgraded = true; });
   return steps;
+}
+
+/* ============================================================
+   动作执行层（第 55 轮）
+   ------------------------------------------------------------
+   背景：技能链原来只是"把流程说一遍" —— 点「确认执行」只把节点标成 ✓，
+   **不动任何数据**（`runSteps` 里那两行 `classList.add("ok")`）。
+   这一层把那一下接到真实数据层上。
+
+   🔴 三条硬规矩：
+    1. **能真执行的真执行**（调数据层函数，把真实结果返回给界面）；
+    2. 🔴 **缺具体对象 / 缺授权 → 如实拒绝**（`{ok:false, reason}`）—— 绝不假装成功；
+    3. 写技能只有教师端那两条（`kind:"write"` 全表可数），学生端走不到这里。
+   ============================================================ */
+
+/** 从等待步的 `arg`（形如 `action=publish_exam`）里取出动作名 */
+function agentStepAction(step) {
+  const m = String((step && step.arg) || "").match(/action=([A-Za-z_]+)/);
+  return m ? m[1] : "";
+}
+
+/**
+ * 执行一个等待中的写动作。
+ * @returns {ok:true, detail, goto?} —— `detail` 是**真实结果**（做了什么、影响了几个人）
+ *          {ok:false, reason, goto?} —— `reason` 是**为什么现在做不了**
+ */
+function runAgentStep(step, ctx) {
+  const o = ctx || {};
+  const action = agentStepAction(step);
+  const exams = (typeof EXAMS !== "undefined" && Array.isArray(EXAMS)) ? EXAMS : [];
+
+  if (action === "publish_exam") {
+    // 只认「有一道以上已采纳、且还没发布过」的卷子 —— 空卷发出去是事故
+    const ready = exams.filter(function (e) {
+      return e && examStats(e).accepted && e.status !== "published";
+    });
+    if (!ready.length) {
+      const hasPublished = exams.some(function (e) { return e && examStats(e).accepted; });
+      return {
+        ok: false,
+        reason: hasPublished
+          ? "本机组好的卷子都已经发过了 —— 要再发一次，去「出题与组卷」页重新选班级"
+          : "还没有组好的卷子（至少要有一道「已采纳」的题）—— 先去出题页组卷",
+        goto: "exam.html",
+      };
+    }
+
+    const exam = ready[0];
+    // 发给谁：这门课**在课学生**（🔴 用 enrolledStudentsOf 的 key，不能用裸账号名）
+    const who = (typeof enrolledStudentsOf === "function")
+      ? enrolledStudentsOf(exam.courseId).map(function (s) { return s.key; })
+      : [];
+    if (!who.length) {
+      return {
+        ok: false,
+        reason: "这门课还没有学生加入 —— 先把邀请码发出去，或在「课程成员」里看看",
+        goto: "class.html?course=" + encodeURIComponent(exam.courseId || ""),
+      };
+    }
+
+    const r = publishExam(exam.id, who);
+    if (!r.ok) return { ok: false, reason: r.error, goto: "exam.html" };
+    return {
+      ok: true,
+      detail: "已把「" + exam.title + "」发给本课 " + who.length + " 位学生（这次新发 " + r.added + " 人）",
+      goto: "exam.html",
+    };
+  }
+
+  // 其它写动作：现在没有能安全落地的具体对象 —— 如实说，不装
+  return {
+    ok: false,
+    reason: "这一步没有可自动执行的具体对象 —— 到对应页面里点一下才算数（这里只给建议）",
+  };
 }
 
 /* ============================================================
@@ -5716,25 +6220,46 @@ function primarySkillId(route, ids) {
 function runSkillChain(ids, payload, ctx) {
   const o = ctx || {};
   const secs = [], notes = [], executed = [];
-  (ids || []).forEach(function (id) {
-    const sk = skillOf(id, o.role);
-    if (!sk) return;
-    const canRun = typeof sk.run === "function" || !!SKILL_RUNNERS[id];
-    if (!canRun) {
-      // ⚠️ 语气按角色分：学生端原来那句更贴（"这件事我会这么走…"），别一律用教师端口吻
-      const flow = (sk.steps || []).map(function (x) { return x.name; }).join(" → ");
-      secs.push({ title: sk.name, lines: [o.role === "student"
-        ? "这件事我会这么走：" + flow + "。想让我具体做，说清楚要哪一块。"
-        : "「" + sk.name + "」这条技能的流程我记着：" + flow + "。要我具体做，把材料或目标说清楚一点。"] });
+  const items = (ids || []).map(function (id) { return { id: id, sk: skillOf(id, o.role) }; })
+    .filter(function (x) { return !!x.sk; });
+
+  function apply(sk, r) {
+    if (!r || !r.ok) {
+      notes.push("「" + sk.name + "」没跑起来：" + ((r && r.error) || "未知原因"));
       return;
     }
-    const r = runSkill(id, payload, o);
-    if (!r.ok) { notes.push("「" + sk.name + "」没跑起来：" + (r.error || "未知原因")); return; }
     executed.push(sk.name);
     secs.push({ title: r.title || sk.name, lines: r.lines || [] });
     if (r.note) notes.push(r.note);
-  });
-  return { secs: secs, notes: notes, executed: executed };
+  }
+
+  // ⚠️ 语气按角色分：学生端原来那句更贴（"这件事我会这么走…"），别一律用教师端口吻
+  function stubFlow(sk) {
+    const flow = (sk.steps || []).map(function (x) { return x.name; }).join(" → ");
+    return { title: sk.name, lines: [o.role === "student"
+      ? "这件事我会这么走：" + flow + "。想让我具体做，说清楚要哪一块。"
+      : "「" + sk.name + "」这条技能的流程我记着：" + flow + "。要我具体做，把材料或目标说清楚一点。"] };
+  }
+
+  // 🔴 第 57 轮：技能可能返回 Promise（接了模型、要真去生成的那几个）→ 顺序串行执行。
+  //    只要链里出现一个异步的，整体就返回 Promise；全是同步技能时照旧返回同步对象，
+  //    老的同步调用方（以及桩化验证器）无需改动。
+  function step(i) {
+    if (i >= items.length) return null;
+    const sk = items[i].sk, id = items[i].id;
+    const canRun = typeof sk.run === "function" || !!SKILL_RUNNERS[id];
+    if (!canRun) { secs.push(stubFlow(sk)); return step(i + 1); }
+    const r = runSkill(id, payload, o);
+    if (r && typeof r.then === "function") {
+      return r.then(function (res) { apply(sk, res); }).then(function () { return step(i + 1); });
+    }
+    apply(sk, r);
+    return step(i + 1);
+  }
+
+  const tail = step(0);
+  const out = { secs: secs, notes: notes, executed: executed };
+  return (tail && tail.then) ? tail.then(function () { return out; }) : out;
 }
 
 /**
@@ -5847,6 +6372,27 @@ var LLM_PROVIDERS = {
 };
 var LLM_PROVIDER_FALLBACK = "demo";
 
+/**
+ * 读一个**字符串型**凭据（API Key 这类）。
+ * ------------------------------------------------------------
+ * 🔴 必须兼容两种落库方式 —— 这是端到端走查抓出来的真坑：
+ *   · `LS.set()` / `store.set()` 会 `JSON.stringify` → 存的是 `"sk-xxx"`（带引号）；
+ *   · 而设置页的 `#apiKey` / `#searchKey` 直接 `localStorage.setItem(k, v)` → 存的是裸 `sk-xxx`；
+ *   · `LS.get()` 内部 `JSON.parse("sk-xxx")` 抛错 → 被 catch 吞掉 → 返回**空串**。
+ *   症状：用户填了 Key、「测试连接」也通过（那处是裸读），可回到出题 / 课件重讲 / 工作台，
+ *        仍然一律说「还没接模型」—— 因为 `llmReady()` 一直读成空。
+ *   所以这里统一：能 JSON.parse 成字符串就用解析结果，否则按裸串用。
+ */
+function readKeyValue(k) {
+  var raw = "";
+  try { raw = window.localStorage.getItem(k) || ""; } catch (_) { return ""; }
+  if (!raw) return "";
+  try {
+    var v = JSON.parse(raw);
+    return (typeof v === "string") ? v : raw;
+  } catch (_) { return raw; }
+}
+
 /** 当前配置（页面与设置页共用同一份键） */
 function llmConfig() {
   var provider = LLM_PROVIDER_FALLBACK;
@@ -5854,8 +6400,11 @@ function llmConfig() {
     var p = LS.get(STORE_KEY.provider, "");
     if (p && LLM_PROVIDERS[p]) provider = p;
   } catch (_) {}
+  // 🔴 用 readKeyValue 而不是 LS.get：设置页是**裸串**写的，JSON.parse 会失败。
+  //    ⚠️ 外面这层 try/catch 不能省：nav.js 可能被单独加载（没有 core.js 就没有 STORE_KEY），
+  //       求值 `STORE_KEY.apiKey` 会抛错 —— 那样 llmReady() 会**炸**而不是安静地返回 false。
   var key = "";
-  try { key = LS.get(STORE_KEY.apiKey, "") || ""; } catch (_) {}
+  try { key = readKeyValue(STORE_KEY.apiKey); } catch (_) {}
   return { provider: provider, key: key, cfg: LLM_PROVIDERS[provider] || LLM_PROVIDERS.demo };
 }
 
@@ -5870,6 +6419,121 @@ function llmStatusText() {
   if (c.provider === "demo") return "还没有接入模型 —— 去「设置 → 模型接入」选服务商并填 Key，就能真的生成";
   if (!c.key) return "选了 " + c.cfg.label + " 但还没填 API Key —— 去「设置 → 模型接入」填上";
   return "已接入 " + c.cfg.label + "（" + c.cfg.model + "），可以现场生成";
+}
+
+
+/* ---------------- 联网搜索（猜想验证用） ---------------- */
+
+/**
+ * 搜索 API 配置 —— 与 LLM 分开：LLM 负责「综合判断」，搜索 API 负责「上网找证据」。
+ * 纯静态站没有后端转发，只能选支持浏览器直调（CORS）的搜索服务。
+ * Tavily / Brave 都允许从浏览器 fetch，且有不绑卡的免费额度。
+ */
+var WEB_SEARCH_PROVIDERS = {
+  none:  { key: "none",  label: "未配置", endpoint: "", method: "POST", note: "不联网，用预置示例" },
+  tavily: {
+    key: "tavily", label: "Tavily",
+    endpoint: "https://api.tavily.com/search", method: "POST",
+    auth: "bearer", keyHint: "tvly-…", docs: "tavily.com",
+    note: "面向 AI 的检索，直接返回可喂给模型的摘要",
+  },
+  brave: {
+    key: "brave", label: "Brave Search",
+    endpoint: "https://api.search.brave.com/res/v1/web/search", method: "GET",
+    auth: "subscription", keyHint: "BSA…", docs: "brave.com/search/api",
+    note: "独立搜索索引，返回标题 / 链接 / 摘要",
+  },
+};
+
+/** 当前搜索配置（设置页与调用层共用同一份键） */
+function searchConfig() {
+  var provider = "none";
+  try {
+    var p = LS.get(STORE_KEY.searchProvider, "");
+    if (p && WEB_SEARCH_PROVIDERS[p]) provider = p;
+  } catch (_) {}
+  // 🔴 同上：设置页的搜索 Key 也是裸串写的；同样保留 try/catch（nav.js 可能单独加载）
+  var key = "";
+  try { key = readKeyValue(STORE_KEY.searchKey); } catch (_) {}
+  return { provider: provider, key: key, cfg: WEB_SEARCH_PROVIDERS[provider] || WEB_SEARCH_PROVIDERS.none };
+}
+
+/** 能不能真上网搜 —— 界面据此决定是「联网验证」还是「预置示例」 */
+function searchReady() {
+  var c = searchConfig();
+  return !!(c.provider !== "none" && c.key && c.cfg && c.cfg.endpoint);
+}
+
+/**
+ * 上网搜一次，返回规整后的结果：`Promise<{ok, results?:[{title,url,snippet}], n?, error?, hint?, demo?}>`。
+ * 🔴 未配置如实拒绝（`demo:true`），**绝不返回假结果**。
+ */
+function webSearch(query) {
+  var q = String(query || "").trim();
+  var c = searchConfig();
+  if (!q) return Promise.resolve({ ok: false, error: "先写一句想验证的猜想" });
+  if (c.provider === "none" || !c.key) {
+    return Promise.resolve({
+      ok: false, demo: true,
+      error: "还没配置联网搜索 —— 去「设置 → 联网搜索」选一个服务商并填 Key。",
+      hint: "没配搜索也可以：如果接入了模型，会退回到「基于模型知识」验证（不联网）。",
+    });
+  }
+
+  var cfg = c.cfg;
+  var req;
+  if (cfg.method === "GET") {
+    var url = cfg.endpoint + "?q=" + encodeURIComponent(q) + "&count=5";
+    req = fetch(url, { headers: { "Accept": "application/json", "X-Subscription-Token": c.key } });
+  } else {
+    req = fetch(cfg.endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + c.key },
+      body: JSON.stringify({ query: q, max_results: 5, search_depth: "basic" }),
+    });
+  }
+
+  return req.then(function (res) {
+    if (!res.ok) {
+      return res.text().then(function (t) {
+        var msg = "搜索请求被拒（HTTP " + res.status + "）";
+        if (res.status === 401 || res.status === 403) msg += " —— Key 可能不对，或没开通搜索";
+        else if (res.status === 429) msg += " —— 免费额度用完了";
+        return { ok: false, error: msg + "。" + String(t || "").slice(0, 160) };
+      });
+    }
+    return res.json().then(function (j) {
+      var results = normalizeSearchResults(j, cfg.key);
+      if (!results.length) return { ok: false, error: "搜索没返回任何结果，换个说法再试" };
+      return { ok: true, results: results, n: results.length };
+    });
+  }).catch(function (err) {
+    var m = String((err && err.message) || err);
+    var hint = /Failed to fetch|NetworkError|load failed/i.test(m)
+      ? "这次搜索没能发出去。若是浏览器拦了 CORS，换另一个搜索服务商（Tavily ↔ Brave）再试。"
+      : "";
+    return { ok: false, error: "搜索失败：" + m, hint: hint };
+  });
+}
+
+/** 把两家返回的异构结构归一成 {title,url,snippet}，最多 5 条 */
+function normalizeSearchResults(j, provider) {
+  var out = [];
+  try {
+    var raw;
+    if (provider === "tavily") raw = (j && j.results) || [];
+    else if (provider === "brave") raw = (j && j.web && j.web.results) || [];
+    else raw = (j && (j.results || j.data)) || [];
+    raw.forEach(function (r) {
+      if (!r) return;
+      var title = String(r.title || "").trim();
+      var url = String(r.url || "").trim();
+      var snippet = String(r.content || r.description || r.snippet || "").trim();
+      if (!url) return;
+      out.push({ title: title || url, url: url, snippet: snippet });
+    });
+  } catch (_) {}
+  return out.slice(0, 5);
 }
 
 
@@ -7019,20 +7683,34 @@ function examsForStudent(who) {
   return out;
 }
 
-/** 学生端「我的作业」的份数（菜单徽标 / 页面都读它） */
+/** 学生端「我的作业」的份数（老师发来的总数，页面统计读它） */
 function examCountOf(who) { return examsForStudent(who).length; }
+
+/**
+ * 还没交的卷子数 —— 「我的作业」徽标读它（第 55 轮改的口径）。
+ * 🔴 原来徽标显示的是"老师发来的总份数"：全交完了徽标还挂在那儿，
+ *    看起来像"还有 3 份没做"。改成**未交份数**才对得上这一栏的含义。
+ */
+function unsubmittedExamCount(who) {
+  const w = String(who || "").trim();
+  if (!w) return 0;
+  const done = {};
+  examAnsOfStudent(w).forEach(function (a) { if (a && a.examId) done[a.examId] = 1; });
+  return examsForStudent(w).filter(function (e) { return e && !done[e.id]; }).length;
+}
 
 /**
  * 学生端「我的作业」的菜单徽标 —— **现算**，不写死。
  * 与 `refreshActivityNav()` 同一套路；两个都必须等数据层加载完再调（见文件末尾）。
+ * 口径：**未交的份数**；全都交齐了就不挂徽标（干净，也说明"没有待办"）。
  */
 function refreshExamNav() {
   const item = findStudentNavItem("hw");
   if (!item) return 0;
   const u = (typeof currentUserKey === "function") ? currentUserKey() : "";
-  const n = u ? examCountOf(u) : 0;
-  if (n) item.badge = n + " 份"; else delete item.badge;
-  return n;
+  const todo = u ? unsubmittedExamCount(u) : 0;
+  if (todo) item.badge = todo + " 份未交"; else delete item.badge;
+  return todo;
 }
 
 /* ============================================================
@@ -7523,36 +8201,11 @@ function normalizeCws(raw) {
 }
 
 /**
- * 预置种子：一份**已发布的**课件（把原 `reader.html` 里写死的那 6 段迁过来）。
- * 🔴 它是**预置示例**（`source:"sample"`）—— 不是老师真传上来的，界面上必须标出来。
- * 🔴 种子里就带 `publishedTo`：预置账号切到学生端就能读到，
- *    整条「发布 → 学生阅读批注」的闭环一个人就走得完（纯静态没有真服务端，这是最近的近似）。
+ * 🔴 第 54 轮：**删掉了预置种子课件**（原 `SEED_CW_QS` / `seedCws()`）。
+ *    用户明确要求「彻底不要预置示例」—— 学生端只显示**老师真发来的**课件，
+ *    没有就显示空态，不拿内置的「7.2 快排复杂度」冒充老师发的内容。
+ *    （旧存档里若有 `cw-seed-1`，`normalizeCws` 照常读出来 —— 那是真存档，不主动删。）
  */
-var SEED_CW_QS = {
-  id: "cw-seed-1",
-  title: "7.2 快速排序的复杂度分析",
-  courseId: "ds",
-  courseName: "数据结构与算法",
-  chapters: [{ id: "ds-c7", title: "第 7 章 · 排序" }],
-  body: [
-    "快速排序的平均时间复杂度为 O(n log n)，最坏情况下会退化为 O(n²)。退化的根本原因是**划分不平衡**，而不是数据规模本身。",
-    "当 pivot 每次都是当前区间的最值时，划分结果会退化为「0 个元素 + 其余全部」，递归深度从 log n 变成 n，而每层仍需扫描 O(n)。",
-    "一个直接的后果是：**已排序或完全逆序的数组**，如果实现取首元素作 pivot，就会触发最坏情况。这也是快排被算法攻击的典型场景。",
-    "改进方案有三种。**随机化 pivot** 从区间内随机取一个元素再交换到首位置，让最坏情况的出现概率降到可忽略；**三数取中**取首、中、尾三个元素的中位数；**三路划分**则把区间分成小于、等于、大于 pivot 三段，在大量重复元素时优势明显。",
-    "需要注意的是，随机化的代价是一次额外的交换，但它把「最坏情况」从确定性变成了概率性 —— 这是工程上更愿意接受的取舍。",
-    "综合来看，快排的时间复杂度不取决于数据量，而取决于**划分是否平衡**；随机化是让它「期望」保持平衡的最廉价手段。",
-  ].join("\n\n"),
-  source: "sample",
-  status: "published",
-  createdBy: "teacher:teacher",
-  createdAt: Date.now() - 5400e3,
-  updatedAt: Date.now() - 5400e3,
-  publishedAt: Date.now() - 5400e3,
-  publishedTo: [{ who: "student:student", at: Date.now() - 5400e3 }],
-};
-
-/** 两端都给同一份：老师看到"我发布的"，学生跨桶读到"老师发来的"（同 id 去重） */
-function seedCws() { return [SEED_CW_QS]; }
 
 /**
  * 🔴 `loadCws` / `saveCws` **不许用 `LS`** —— 它定义在 `core.js`（后加载），
@@ -7561,10 +8214,9 @@ function seedCws() { return [SEED_CW_QS]; }
  */
 function loadCws() {
   const key = cwStoreKey();
-  const user = (typeof currentUserKey === "function") ? currentUserKey() : "";
   const saved = readBucket(CW_KEY, key, normalizeCws);
-  if (saved) return saved;              // ⚠️ 空数组也算有效（删光不复活预置数据）
-  return (!user || isSeedAccount(user)) ? normalizeCws(seedCws()) : [];
+  if (saved) return saved;              // ⚠️ 空数组也算有效（删光不复活）
+  return [];                            // 没有存档 → 空（不再给预置种子）
 }
 
 function saveCws() {
@@ -7716,15 +8368,22 @@ function recallCwFrom(id, who) {
 /**
  * 学生收到的课件 —— 🔴 **跨账号桶**读（记录在**老师**的桶里，学生自己的桶里没有），
  * 按 `id` 去重。🔴 **只认 `published`**：草稿一律不给学生看。
+ *
+ * 第二个参数 `courseId`（可选）：只取**这门课**的课件 —— 学生端「课件阅读」按课程筛选时用。
+ *
+ * 🔴 第 54 轮：**不再给种子课件**（用户明确要求「彻底不要预置示例」）。
+ *    学生桶里没有老师发的 → 老老实实返回空，页面显示空态，不拿预置内容冒充老师发的。
  */
-function cwsForStudent(who) {
+function cwsForStudent(who, courseId) {
   var w = String(who || "").trim().toLowerCase();
   if (!w) return [];
+  var wantCourse = String(courseId || "").trim();
   var seen = {}, out = [];
   var take = function (arr) {
     (arr || []).forEach(function (c) {
       if (!c || !c.id || seen[c.id]) return;
       if (c.status !== "published") return;
+      if (wantCourse && String(c.courseId || "") !== wantCourse) return;
       var hit = (c.publishedTo || []).some(function (x) {
         return String((x && x.who) || "").toLowerCase() === w;
       });
@@ -7736,8 +8395,35 @@ function cwsForStudent(who) {
   return out;
 }
 
-/** 学生端「课件阅读」的份数（页面读它） */
-function cwCountOf(who) { return cwsForStudent(who).length; }
+/** 学生端「课件阅读」的份数（页面读它）；可选按课程过滤 */
+function cwCountOf(who, courseId) { return cwsForStudent(who, courseId).length; }
+
+/**
+ * 学生能读到的课件**涉及哪些课程** —— 学生端「课件阅读」的课程选择器用它。
+ * 🔴 只列**学生已加入**的课程（`ENROLLED`）里、**真有发来课件**的那些 ——
+ *    没加入的课不该出现；加入了但老师还没发课件的课，用空态提示，而不是列出空课程。
+ * 返回 `[{ courseId, name, count }]`，按课件数降序。
+ */
+function cwCoursesForStudent(who) {
+  var list = cwsForStudent(who);
+  var seen = {};
+  var rows = [];
+  list.forEach(function (c) {
+    var id = String(c.courseId || "");
+    if (!id || seen[id]) return;
+    seen[id] = 1;
+    rows.push({
+      courseId: id,
+      name: (typeof studentCourseName === "function" ? studentCourseName(id) : "") || c.courseName || id,
+      count: 0,
+    });
+  });
+  rows.forEach(function (r) {
+    r.count = list.filter(function (c) { return String(c.courseId || "") === r.courseId; }).length;
+  });
+  rows.sort(function (a, b) { return b.count - a.count; });
+  return rows;
+}
 
 /* 🔴 学生端「我的作业」的徽标要**现算**，而且必须在 `EXAMS` 加载完之后才调 ——
    `var EXAMS = loadExams()` 在上面，此刻已经就位（侧栏渲染在 nav.js 之后）。 */

@@ -9,26 +9,53 @@
 <!--
   ============================================================
   课件阅读（第 47 轮：正文不再写死，改成读老师发来的课件）
+  （第 54 轮：加「选课程」+ 去掉预置示例）
   ------------------------------------------------------------
   老版这一页正文是**写死在 HTML 里**的那 6 段「快排复杂度」——
   老师那边根本没有"发布课件"，学生看到的也跟老师无关。
 
   🔴 现在：
-     · 课件来自 `cwsForStudent(currentUserKey())`（**跨账号桶**读老师发的那份）
+     · 先选**课程**（`cwCoursesForStudent()` —— 只列学生加入的课里真有课件的），
+       再选这门课下的某一份课件
+     · 课件来自 `cwsForStudent(currentUserKey(), courseId)`（**跨账号桶**读老师发的那份）
      · 段落由 `cwSections(cw)` 渲染 —— 与教师端**同一份切段规则**
        （两边各写一份迟早对不上：段号错位 = 批注张冠李戴）
      · 批注按 `notesOfCw(BEHAVIOR, cwId, courseId)` 过滤：
        标了别的课件 id 的批注不算这一份；老记录没 cwId → 算当前这份（不丢历史）
 
-  🔴 两条纪律（验证器断言）
-    1. 重讲内容对**预置示例**（`cw-seed-1`）用内置 `RETEACH`；对别的课件**如实说
-       "还没预置，正式版接模型现场重讲"**，不假装重讲过了
-    2. 批注 / 阅读 / 重讲 / 朗读都进**行为日志**（`logBehavior`，带 `cwId`），
+  🔴 三条纪律（验证器断言）
+    1. 🔴 **不显示预置示例**（第 54 轮，用户明确要求）—— 学生端只显示老师真发来的；
+       没有就显示空态，不拿内置内容冒充
+    2. 重讲：**接了模型就现场重讲**；没接就**如实说"未接模型，正式版接模型现场重讲"**，
+       不假装重讲过了
+    3. 批注 / 阅读 / 重讲 / 朗读都进**行为日志**（`logBehavior`，带 `cwId`），
        批注列表与学情里的「批注条数」**同一份存储**，不再另存一份
   ============================================================
 -->
 <style>
   :root { --font-sans: "Inter", system-ui; }
+  /* 课程选择器（第一层：选课） */
+  .cw-courses { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
+  .cw-courses .lbl { font-size: 12px; color: var(--muted-foreground); margin-right: 2px; }
+  .cw-course {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--border); border-radius: 10px; padding: 6px 12px;
+    background: var(--card); color: var(--foreground); font-size: 12.5px; cursor: pointer;
+    font-family: inherit; transition: background .14s, border-color .14s;
+  }
+  .cw-course:hover { background: var(--secondary); }
+  .cw-course.on {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    font-weight: 600;
+  }
+  .cw-course .n {
+    font-size: 11px; padding: 0 6px; border-radius: 20px;
+    background: var(--secondary); color: var(--muted-foreground);
+  }
+  .cw-course.on .n { background: color-mix(in srgb, var(--primary) 22%, transparent); color: var(--foreground); }
+
+  /* 课件切换（第二层：同一门课下选某一份） */
   .cw-switch { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
   .cw-switch button {
     border: 1px solid var(--border); border-radius: 18px; padding: 5px 13px;
@@ -43,6 +70,14 @@
     font-size: 11px; padding: 1px 8px; border-radius: 20px;
     background: var(--warning-surface); color: var(--warning-foreground); margin-left: 8px;
   }
+  .cw-src-real {
+    font-size: 11px; padding: 1px 8px; border-radius: 20px; margin-left: 8px;
+    background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success);
+  }
+  /* 重讲忙碌指示 */
+  .guess-busy { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted-foreground); }
+  .guess-busy .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); animation: guess-blink 1s infinite; }
+  @keyframes guess-blink { 0%,100% { opacity: .2; } 50% { opacity: 1; } }
 </style>
 </head>
 <body>
@@ -55,7 +90,10 @@
         <p>点击任意段落可选中、批注，或让 AI 换一种方式重讲 —— 也可以直接朗读</p>
       </div>
 
-      <!-- 课件切换（多于一份时才出现） -->
+      <!-- 课程选择（第一层：选哪门课） -->
+      <div class="cw-courses" id="cwCourses" hidden></div>
+
+      <!-- 课件切换（第二层：同一门课下选某一份，多于一份时才出现） -->
       <div class="cw-switch" id="cwSwitch" hidden></div>
 
       <div class="reader-grid">
@@ -122,15 +160,44 @@ let selected = null;
 function currentUser() {
   return (typeof currentUserKey === "function") ? currentUserKey() : "";
 }
-function receivedList() {
-  return (typeof cwsForStudent === "function") ? cwsForStudent(currentUser()) : [];
+
+/** 学生能读到的课件涉及哪些课程（只列已加入且真有课件的课） */
+function courseRows() {
+  return (typeof cwCoursesForStudent === "function") ? cwCoursesForStudent(currentUser()) : [];
 }
 
-const CW_LIST = receivedList();
+/* ---------------- 选课（第 54 轮） ----------------
+   两层选择：① 选课程（#cwCourses）② 选这门课下的某一份（#cwSwitch）。
+   🔴 课程选择器**只列学生已加入、且老师真发来课件**的课 —— 没加入的课不该出现。 */
+let curCourse = "";                   // 当前选中的 courseId；"" = 未选
+
+/**
+ * 深链参数 `?course=<id>`（第 55 轮）—— 与 class.html / analysis.html 同一套约定。
+ * 从「我的学情」或班级页点过来时，直接落到那门课的课件上，而不是回到"全部"。
+ */
+const QUERY_COURSE = (function () {
+  const m = String(location.search || "").match(/[?&]course=([^&]+)/);
+  if (!m) return "";
+  try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
+})();
+function cwList() {                   // 当前课程下的课件
+  return (typeof cwsForStudent === "function") ? cwsForStudent(currentUser(), curCourse) : [];
+}
+
 let curIdx = 0;
-function currentCw() { return CW_LIST[curIdx] || null; }
+function currentCw() { return cwList()[curIdx] || null; }
 function currentCwId() { var c = currentCw(); return c ? c.id : ""; }
 function currentCourseId() { var c = currentCw(); return c ? c.courseId : ""; }
+
+/** 选一门课程（切课后重置课件选择与段落选中） */
+function pickCourse(courseId) {
+  curCourse = courseId || "";
+  curIdx = 0;
+  selected = null;
+  renderCourses();
+  renderSwitch();
+  renderPaper();
+}
 
 function rec(kind, label, seg) {
   if (typeof logBehavior !== "function") return null;
@@ -144,14 +211,45 @@ function rec(kind, label, seg) {
 /** 这一页里已经记过"阅读"的段落（一次会话一段只记一次，别刷屏） */
 const readLogged = new Set();
 
-/* ---------------- 渲染正文 ---------------- */
+/* ---------------- 渲染课程选择器 ---------------- */
+
+function renderCourses() {
+  const box = $("#cwCourses");
+  if (!box) return;
+  const rows = courseRows();
+  if (!rows.length) { box.hidden = true; return; }
+  box.hidden = false;
+
+  // 选中哪门课：① 深链 ?course= ② 只有一门就自动选中（省一次点击）③ 否则让学生自己点
+  if (!curCourse || !rows.some(function (r) { return r.courseId === curCourse; })) {
+    const wanted = rows.some(function (r) { return r.courseId === QUERY_COURSE; }) ? QUERY_COURSE : "";
+    curCourse = wanted || (rows.length === 1 ? rows[0].courseId : "");
+  }
+
+  let html = '<span class="lbl">课程</span>';
+  if (rows.length > 1) {
+    const total = rows.reduce(function (s, r) { return s + r.count; }, 0);
+    html += '<button type="button" class="cw-course' + (curCourse === "" ? " on" : "") +
+      '" data-course="">全部<span class="n">' + total + "</span></button>";
+  }
+  html += rows.map(function (r) {
+    return '<button type="button" class="cw-course' + (curCourse === r.courseId ? " on" : "") +
+      '" data-course="' + escapeHtml(r.courseId) + '">' + escapeHtml(r.name) +
+      '<span class="n">' + r.count + "</span></button>";
+  }).join("");
+  box.innerHTML = html;
+}
+
+/* ---------------- 渲染课件切换（同门课下的多份） ---------------- */
 
 function renderSwitch() {
   const box = $("#cwSwitch");
+  if (!box) return;
   box.innerHTML = "";
-  if (CW_LIST.length <= 1) { box.hidden = true; return; }
+  const list = cwList();
+  if (list.length <= 1) { box.hidden = true; return; }
   box.hidden = false;
-  CW_LIST.forEach(function (c, i) {
+  list.forEach(function (c, i) {
     const b = document.createElement("button");
     b.type = "button";
     b.textContent = c.title;
@@ -172,7 +270,9 @@ function renderPaper() {
     const empty = document.createElement("div");
     empty.className = "note-empty";
     empty.style.padding = "34px 18px";
-    empty.textContent = "老师还没给你发课件。发过来之后，这里就能读、能批注、能逐段「让 AI 再讲一遍」。";
+    empty.textContent = (typeof cwCoursesForStudent === "function" && cwCoursesForStudent(currentUser()).length)
+      ? "这门课老师还没发课件。切到别的课程看看，或者等老师发布。"
+      : "老师还没给你发课件。发过来之后，这里就能读、能批注、能逐段「让 AI 再讲一遍」。";
     body.appendChild(empty);
     renderNotes();
     return;
@@ -181,7 +281,10 @@ function renderPaper() {
   const secs = (typeof cwSections === "function") ? cwSections(c) : [];
   $("#crumb").textContent = (c.courseName || "") + (c.chapters && c.chapters.length ? " › " + c.chapters[0].title : "");
   $("#paperTitle").textContent = c.title;
-  const srcTag = (c.source === "sample") ? '<span class="cw-badge">预置示例</span>' : "";
+  // 老师真发来的（write/upload）标「老师发布」；预置示例（sample）仍如实标出（老存档里可能有）
+  const srcTag = (c.source === "sample")
+    ? '<span class="cw-badge">预置示例</span>'
+    : '<span class="cw-src-real">老师发布</span>';
   $("#paperMeta").innerHTML = "共 " + secs.length + " 个可批注段落" + srcTag;
 
   const body = $("#paperBody");
@@ -375,74 +478,62 @@ $("#addNote").addEventListener("click", function () {
   addNotePrompt(selected.dataset.idx);
 });
 
-/* ---------------- 重讲 ---------------- */
+/* ---------------- 重讲（第 54 轮：接模型现场重讲，没接就如实说） ----------------
+   🔴 不再内置任何"预置重讲"（那是对老师真发来的学生课件编内容）。
+   策略：接了模型 → 拿这一段的原文现讲一遍；没接 → 如实说明，不假装讲过。 */
 
-const RETEACH = {
-  1: `换一个角度：把快排想象成**不断把队伍按身高分成两组**。
+function reteachSystemPrompt() {
+  return [
+    "你是一位计算机课程的阅读助教。学生在读一段课件，想让你「换一种方式再讲一遍」。",
+    "",
+    "要求：",
+    "1. 只针对下面给出的这一段正文重讲，不扩展成整章。",
+    "2. 换一个角度 / 打比方 / 分步拆解，让它比原文更好懂 —— 但**不要改变原意、不要编造事实**。",
+    "3. 用中文、Markdown 排版，控制在 220 字以内。",
+    "4. 不要复述原文，直接给出新的讲法。",
+  ].join("\n");
+}
 
-如果每次分点都恰好在队伍中间，两组人数差不多，你只需要分 log n 轮就能排完 —— 这是 O(n log n)。
-
-但如果每次分点都是**最高的那个人**呢？结果是他一边站，其余所有人都在另一边。队伍只少了一个人，而你还得再分一次。
-
-分 n 轮，每轮还要扫一遍全队 —— 这就是 O(n²)。
-
-**关键不是队伍有多长，而是你每次分得匀不匀。**`,
-  2: `用一句话概括：**pivot 选得越偏，递归树越像一条链表。**
-
-正常情况递归树是"平衡的"，高度 log n，每层总共处理 O(n)，乘起来 O(n log n)。
-
-pivot 每次取到最值时，递归树退化成一条**单链**，高度变成 n，每层还是 O(n)，乘起来 O(n²)。
-
-类比：平衡的树像一颗圆白菜，层层对半；退化的树像一根竹竿，只能一节一节往上爬。`,
-  3: `这里最容易踩的坑是：**很多教材的示例代码恰好取首元素作 pivot**。
-
-而学生做实验时，最常拿"已经排好序的数组"去测试排序算法 —— 于是每次都稳稳地触发最坏情况。
-
-这不是巧合，而是"教学示例代码"与"生产级实现"之间的真实差距。
-
-**工程上没有人会这样写快排。** 标准库的实现都会做随机化或三数取中。`,
-  4: `三种改进，你可以按"解决的问题"来记：
-
-- **随机化 pivot** → 解决"输入刚好有序"的**人为触发**
-- **三数取中** → 解决"有序/逆序"的**系统性问题**，且无随机性开销
-- **三路划分** → 解决"大量重复元素"这个**另一类退化**
-
-前两个是防最坏情况，第三个是防重复元素。**目标不同，可以叠加使用。**
-
-你之前标记过的疑问「随机化 pivot 与洗牌的区别」—— 区别在于：洗牌是**打乱整个数组**（O(n) 开销），随机化只**换一个元素到首位置**（O(1) 开销）。效果类似，成本差很多。`,
-  5: `这是一个典型的**工程权衡**问题。
-
-随机化确实增加了一次交换，但换来的是：**把确定性的最坏情况，变成概率可忽略的最坏情况。**
-
-对绝大多数应用来说，这个交换极其划算 —— 因为真实场景中"输入恰好有序"的概率不低（比如从数据库按主键读出来），而一次交换的成本可以忽略。
-
-**算法工程的核心不是消灭最坏情况，而是让它不再容易被触发。**`,
-  6: `总结成一个判断口诀：
-
-> **看复杂度先看划分，看划分先看 pivot。**
-
-反过来推：
-1. 想知道快排快不快 → 看划分
-2. 划分平不平衡 → 取决于 pivot 怎么选
-3. pivot 选得好不好 → 取决于输入分布 + 你的选择策略
-
-所以优化快排，**本质上是在优化 pivot 的选择策略**。`,
-};
+function reteachUserPrompt(cw, idx, text) {
+  return [
+    "课件：《" + ((cw && cw.title) || "") + "》",
+    (cw && cw.courseName ? "课程：" + cw.courseName : ""),
+    "第 " + idx + " 段原文：",
+    text,
+  ].filter(Boolean).join("\n");
+}
 
 function showReteach(idx, text) {
   const panel = $("#reteachPanel");
+  const cw = currentCw();
   $("#reteachSource").textContent = `第 ${idx} 段 · ${text.slice(0, 24)}…`;
-  let body;
-  if (currentCwId() === "cw-seed-1" && RETEACH[idx]) {
-    body = RETEACH[idx];
-  } else {
-    // 🔴 别的课件没有预置重讲 —— 如实说，不假装已经重讲过了
-    body = "这一讲还没有内置的重讲内容。**正式版会接模型，根据上面这段正文现场换一种方式重讲** —— " +
-      "现在先如实告诉你，不假装它已经重讲过了。\n\n> " + text;
+  const bodyBox = $("#reteachBody");
+
+  // 没接模型 → 如实说，不假装已经重讲过了
+  if (typeof llmReady !== "function" || !llmReady()) {
+    bodyBox.innerHTML = mdToHtml(
+      "**还没接模型**，暂时没法现场重讲。\n\n" +
+      "在「设置 · AI 模型」里填上自己的 API Key（DeepSeek / 通义 / 智谱）后，" +
+      "这里就会根据这一段正文**现场换一种方式重讲** —— 现在先如实告诉你，不假装它已经重讲过了。\n\n> " + text
+    );
+    panel.hidden = false;
+    panel.scrollIntoView({ block: "center", behavior: "smooth" });
+    return;
   }
-  $("#reteachBody").innerHTML = mdToHtml(body);
+
+  bodyBox.innerHTML = '<span class="guess-busy"><span class="dot"></span>正在重讲…</span>';
   panel.hidden = false;
   panel.scrollIntoView({ block: "center", behavior: "smooth" });
+
+  llmChat(reteachSystemPrompt(), reteachUserPrompt(cw, idx, text), { maxTokens: 900, temperature: 0.4 })
+    .then(function (r) {
+      if (r && r.ok) {
+        bodyBox.innerHTML = mdToHtml(r.raw);
+      } else {
+        bodyBox.innerHTML = mdToHtml("**重讲失败**：" + ((r && r.error) || "未知错误") +
+          "\n\n（原段落仍可阅读、可批注、可朗读。）");
+      }
+    });
 }
 
 $("#closeReteach").addEventListener("click", function () { $("#reteachPanel").hidden = true; });
@@ -471,7 +562,13 @@ function speak(text) {
   window.speechSynthesis.speak(u);
 }
 
-/* ---------------- 切换课件 ---------------- */
+/* ---------------- 切换课程 / 切换课件 ---------------- */
+
+$("#cwCourses").addEventListener("click", function (e) {
+  const b = e.target.closest ? e.target.closest("[data-course]") : null;
+  if (!b) return;
+  pickCourse(b.getAttribute("data-course") || "");
+});
 
 $("#cwSwitch").addEventListener("click", function (e) {
   const b = e.target.closest ? e.target.closest("[data-i]") : null;
@@ -484,6 +581,7 @@ $("#cwSwitch").addEventListener("click", function (e) {
 
 /* ---------------- 启动 ---------------- */
 
+renderCourses();
 renderSwitch();
 renderPaper();
 </script>
