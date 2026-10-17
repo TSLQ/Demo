@@ -307,7 +307,7 @@
               <div class="row">
                 <div class="row-body">
                   <b>服务商</b>
-                  <span>需为支持浏览器直调的厂商（DeepSeek / 通义 / 智谱）</span>
+                  <span>支持浏览器直调的厂商（DeepSeek / 通义 / 智谱），或你自己的 OpenAI 兼容地址</span>
                 </div>
                 <div class="row-ctl" style="min-width:180px">
                   <select class="select" id="provider">
@@ -315,14 +315,44 @@
                     <option value="deepseek">DeepSeek</option>
                     <option value="qwen">通义千问</option>
                     <option value="zhipu">智谱 GLM</option>
+                    <option value="custom">自定义接口（OpenAI 兼容）</option>
                   </select>
+                </div>
+              </div>
+
+              <!-- 自定义接口：仅当上面选「自定义接口」时显示 -->
+              <div class="row" id="customEpRow" hidden>
+                <div class="row-body" style="flex:1;max-width:none">
+                  <b>接口地址</b>
+                  <span>OpenAI 兼容的调用地址。填到 /v1 也行，会自动补 /chat/completions；
+                    页面是 https 时地址也必须是 https（浏览器会拦 http，本地服务请用 https 反代）</span>
+                  <div class="key-box" style="margin-top:11px">
+                    <label class="sr-only" for="customEndpoint">接口地址</label>
+                    <input class="input" id="customEndpoint" type="text"
+                           placeholder="https://your-server/v1"
+                           autocomplete="off" spellcheck="false">
+                  </div>
+                  <div class="key-state" id="customEpState"><i></i><span>实际请求：—</span></div>
+                </div>
+              </div>
+
+              <div class="row" id="customModelRow" hidden>
+                <div class="row-body" style="flex:1;max-width:none">
+                  <b>模型名</b>
+                  <span>填服务端实际部署的模型标识，例如 gpt-4o-mini / qwen2.5:7b / deepseek-chat</span>
+                  <div class="key-box" style="margin-top:11px">
+                    <label class="sr-only" for="customModel">模型名</label>
+                    <input class="input" id="customModel" type="text"
+                           placeholder="gpt-4o-mini"
+                           autocomplete="off" spellcheck="false">
+                  </div>
                 </div>
               </div>
 
               <div class="row">
                 <div class="row-body" style="flex:1;max-width:none">
                   <b>API Key</b>
-                  <span>仅保存在本机浏览器（localStorage），不会上传到任何服务器</span>
+                  <span>仅保存在本机浏览器（localStorage），不会上传到任何服务器；自建的本地服务可留空</span>
                   <div class="key-box" style="margin-top:11px">
                     <label class="sr-only" for="apiKey">API Key</label>
                     <input class="input" id="apiKey" type="password"
@@ -633,7 +663,56 @@ $("#toggleKey").addEventListener("click", () => {
 
 $("#provider").addEventListener("change", (e) => {
   store.set("provider", e.target.value);
+  syncCustomUI();
 });
+
+/* ---------- 自定义接口（OpenAI 兼容） ----------
+   🔴 存的是**裸串**；nav.js 侧统一走 readKeyValue()，两种落库都认。
+   地址会被 normalizeLlmEndpoint() 归一（填 /v1 也能用）。 */
+const CUSTOM_EP_KEY = "st_custom_endpoint";
+const CUSTOM_MODEL_KEY = "st_custom_model";
+
+function rawStored(k) {
+  const raw = localStorage.getItem(k) || "";
+  if (!raw) return "";
+  try { const v = JSON.parse(raw); return typeof v === "string" ? v : raw; }
+  catch { return raw; }
+}
+
+function customEpValue() { return rawStored(CUSTOM_EP_KEY).trim(); }
+function customModelValue() { return rawStored(CUSTOM_MODEL_KEY).trim(); }
+
+/** 把输入框里的值落库（点在「测试连接」上时 input 的 change 不一定先到，主动刷一次） */
+function flushCustomInputs() {
+  const ep = $("#customEndpoint").value.trim();
+  const model = $("#customModel").value.trim();
+  if (ep) localStorage.setItem(CUSTOM_EP_KEY, ep); else localStorage.removeItem(CUSTOM_EP_KEY);
+  if (model) localStorage.setItem(CUSTOM_MODEL_KEY, model); else localStorage.removeItem(CUSTOM_MODEL_KEY);
+}
+
+function syncCustomUI() {
+  const isCustom = $("#provider").value === "custom";
+  const epRow = $("#customEpRow"), mdRow = $("#customModelRow");
+  if (epRow) epRow.hidden = !isCustom;
+  if (mdRow) mdRow.hidden = !isCustom;
+  if (!isCustom) return;
+
+  const ep = $("#customEndpoint").value.trim();
+  const state = $("#customEpState");
+  if (!state) return;
+  if (!ep) {
+    state.className = "key-state";
+    state.querySelector("span").textContent = "实际请求：—";
+  } else {
+    state.className = "key-state";
+    state.querySelector("span").textContent =
+      "实际请求：" + (typeof normalizeLlmEndpoint === "function" ? normalizeLlmEndpoint(ep) : ep);
+  }
+}
+
+$("#customEndpoint").addEventListener("change", () => { flushCustomInputs(); syncCustomUI(); });
+$("#customEndpoint").addEventListener("input", syncCustomUI);
+$("#customModel").addEventListener("change", flushCustomInputs);
 
 /**
  * 连接测试 —— **真发一次最小请求**（第 38 轮）。
@@ -644,19 +723,39 @@ $("#provider").addEventListener("change", (e) => {
  */
 function testConnection(provider, key) {
   const cfg = (typeof LLM_PROVIDERS !== "undefined" && LLM_PROVIDERS[provider]) || null;
-  if (!cfg || !cfg.endpoint) {
+  if (!cfg) {
     return Promise.resolve({ ok: false, error: "这个服务商没有配置调用地址" });
   }
+
+  let endpoint = cfg.endpoint;
+  let model = cfg.model;
+
+  // 自定义接口：地址与模型名来自设置页，不在常量表里
+  if (provider === "custom") {
+    endpoint = (typeof normalizeLlmEndpoint === "function")
+      ? normalizeLlmEndpoint(customEpValue()) : customEpValue();
+    model = customModelValue();
+    if (!endpoint) return Promise.resolve({ ok: false, error: "还没填接口地址" });
+    if (!model) return Promise.resolve({ ok: false, error: "还没填模型名" });
+  }
+  if (!endpoint) {
+    return Promise.resolve({ ok: false, error: "这个服务商没有配置调用地址" });
+  }
+
   const body = {
-    model: cfg.model,
+    model: model,
     messages: [{ role: "user", content: "ping" }],
     max_tokens: 1,
     stream: false,
   };
+  // 自定义接口可能没有 Key（本地服务）→ 不发明 Authorization 头
+  const headers = { "Content-Type": "application/json" };
+  if (key) headers["Authorization"] = "Bearer " + key;
+
   const t0 = Date.now();
-  return fetch(cfg.endpoint, {
+  return fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + key },
+    headers: headers,
     body: JSON.stringify(body),
   }).then(function (res) {
     const ms = Date.now() - t0;
@@ -666,7 +765,7 @@ function testConnection(provider, key) {
       if (res.status === 401) msg = "Key 无效或已过期（401）";
       else if (res.status === 403) msg = "Key 被拒绝（403）—— 可能没开通这个模型，或余额不足";
       else if (res.status === 429) msg = "请求太频繁或额度用完了（429）";
-      else if (res.status === 404) msg = "模型名不对（404）—— " + cfg.model + " 这个型号可能没开通";
+      else if (res.status === 404) msg = "模型名不对（404）—— " + model + " 这个型号可能没开通";
       else if (res.status >= 500) msg = "服务商那边出错了（" + res.status + "），等会儿再试";
       return { ok: false, error: msg, detail: String(t || "").slice(0, 200) };
     });
@@ -676,17 +775,25 @@ function testConnection(provider, key) {
     return {
       ok: false,
       error: cors ? "请求没能发出去 —— 多半是浏览器拦了跨域（CORS）" : ("调用失败：" + m),
-      detail: cors ? "换一个支持浏览器直调的厂商试试；也确认下网络是否可达 " + cfg.docs : "",
+      detail: cors
+        ? "换一个支持浏览器直调的厂商试试；自建接口要允许跨域（Access-Control-Allow-Origin）；也确认下网络与地址是否可达"
+        : "",
     };
   });
 }
 
 $("#testBtn").addEventListener("click", () => {
   const btn = $("#testBtn");
-  const key = localStorage.getItem(KEY) || "";
+  flushCustomInputs();                     // 先把输入框值落库，别依赖 change 的时机
   const provider = $("#provider").value;
+  const key = rawStored(KEY);
 
-  if (provider === "demo" || !key) {
+  if (provider === "custom") {
+    if (!customEpValue() || !customModelValue()) {
+      flash("自定义接口还缺接口地址或模型名 —— 两样都填上才能测", "bad");
+      return;
+    }
+  } else if (provider === "demo" || !key) {
     flash(provider === "demo"
       ? "还没接入模型 —— 先在下面选服务商、填上 API Key"
       : "还没填 API Key —— 填上就能测", "bad");
@@ -735,6 +842,18 @@ $("#searchKey").addEventListener("change", (e) => {
   syncSearchKeyUI();
 });
 
+/** 一次性迁移：旧版把键写成了 st_searchProvider（驼峰），与 STORE_KEY 的
+ *  st_search_provider 对不上 —— 症状是「下拉明明选了 Tavily，搜索仍说未配置」。 */
+function migrateSearchProviderKey() {
+  try {
+    const legacy = localStorage.getItem("st_searchProvider");
+    if (legacy === null) return;
+    const v = legacy.replace(/^"|"$/g, "");
+    if (v && v !== "null") store.set("search_provider", v);
+    localStorage.removeItem("st_searchProvider");
+  } catch (_) {}
+}
+
 $("#toggleSearchKey").addEventListener("click", () => {
   const inp = $("#searchKey");
   const show = inp.type === "password";
@@ -743,7 +862,9 @@ $("#toggleSearchKey").addEventListener("click", () => {
 });
 
 $("#searchProvider").addEventListener("change", (e) => {
-  store.set("searchProvider", e.target.value);
+  // 🔴 键名必须与 core.js 的 STORE_KEY.searchProvider（st_search_provider）一致；
+  //    写成 store.set("searchProvider") 会落到 st_searchProvider → nav.js 读不到。
+  store.set("search_provider", e.target.value);
 });
 
 /**
@@ -752,6 +873,9 @@ $("#searchProvider").addEventListener("change", (e) => {
  */
 $("#testSearchBtn").addEventListener("click", () => {
   const btn = $("#testSearchBtn");
+  // 先把输入框里的 Key 落库：浏览器自动填充不一定触发 change
+  const typed = $("#searchKey").value.trim();
+  if (typed) localStorage.setItem(SEARCH_KEY, typed);
   const key = localStorage.getItem(SEARCH_KEY) || "";
   const provider = $("#searchProvider").value;
 
@@ -877,8 +1001,18 @@ $$(".set-toc a").forEach((a) => {
   }
   const provider = store.get("provider");
   if (provider) $("#provider").value = provider;
-  const searchProvider = store.get("searchProvider");
-  if (searchProvider) $("#searchProvider").value = searchProvider;
+
+  // 自定义接口：地址 / 模型名回填
+  const savedEp = customEpValue();
+  if (savedEp && $("#customEndpoint")) $("#customEndpoint").value = savedEp;
+  const savedModel = customModelValue();
+  if (savedModel && $("#customModel")) $("#customModel").value = savedModel;
+
+  migrateSearchProviderKey();
+  const searchProvider = store.get("search_provider");
+  if (searchProvider && searchProvider !== "null") $("#searchProvider").value = searchProvider;
+
+  syncCustomUI();
 })();
 
 renderThemeSeg();

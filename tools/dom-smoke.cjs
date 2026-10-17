@@ -4762,6 +4762,202 @@ console.log("\n=== 4. 内容页独立打开（无壳环境）===");
   dom.window.close();
 }
 
+console.log("\n=== 4x. 设置页：自定义接口 + 联网搜索（真 DOM，第 60 轮）===");
+{
+  /* ---------- ① 自定义接口：选了才出现，地址自动补全，真打到自定义地址 ---------- */
+  const dom = load("settings.html", { role: "teacher" });
+  await settle(dom);
+  const w = dom.window, d = w.document;
+
+  const epRow = d.getElementById("customEpRow");
+  const mdRow = d.getElementById("customModelRow");
+  epRow && mdRow
+    ? P("设置页有「接口地址 / 模型名」两个输入（自定义接口）")
+    : F("设置页缺自定义接口的输入");
+  epRow && mdRow && epRow.hidden && mdRow.hidden
+    ? P("没选「自定义」时两行是收起的（不干扰普通用户）")
+    : F("自定义接口行默认就展开了");
+
+  if (epRow && mdRow) {
+    const sel = d.getElementById("provider");
+    sel.value = "custom";
+    sel.dispatchEvent(new w.Event("change", { bubbles: true }));
+    !epRow.hidden && !mdRow.hidden
+      ? P("选「自定义接口」后两行才露出来")
+      : F("选了自定义却没露出输入框");
+
+    const ep = d.getElementById("customEndpoint");
+    ep.value = "http://127.0.0.1:11434/v1";     // 只填到 /v1
+    ep.dispatchEvent(new w.Event("input", { bubbles: true }));
+    const preview = (d.getElementById("customEpState") || {}).textContent || "";
+    /\/v1\/chat\/completions/.test(preview)
+      ? P("只填到 /v1 时，界面直接显示补全后的请求地址")
+      : F("地址预览没补全: " + preview);
+
+    let seen = [];
+    w.fetch = (url) => {
+      seen.push(String(url));
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve("{}"),
+        json: () => Promise.resolve({ choices: [{ message: { content: "pong" } }], results: [] }),
+      });
+    };
+
+    // 只填了地址、没填模型 → 不该发请求
+    d.getElementById("testBtn").dispatchEvent(new w.Event("click", { bubbles: true }));
+    await settle(dom);
+    seen.length === 0
+      ? P("缺模型名时不发请求（先提示，不瞎打一次必失败的调用）")
+      : F("缺模型名也发了请求");
+
+    // 补上模型名 → 真的发出去
+    d.getElementById("customModel").value = "qwen2.5:7b";
+    d.getElementById("testBtn").dispatchEvent(new w.Event("click", { bubbles: true }));
+    for (let i = 0; i < 80 && seen.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+    seen.length === 1
+      ? P("地址 + 模型名齐了，「测试连接」真的发出请求")
+      : F("自定义接口没发出请求（" + seen.length + "）");
+    seen[0] === "http://127.0.0.1:11434/v1/chat/completions"
+      ? P("请求打到补全后的自定义地址")
+      : F("请求地址不对: " + seen[0]);
+
+    w.llmReady && w.llmReady()
+      ? P("自定义接口不填 Key 也算可用（本地服务）")
+      : F("自定义接口没 Key 就不可用 —— 本地服务用不了");
+  }
+
+  dom.window.close();
+}
+
+{
+  /* ---------- ③ 配好之后，调用层必须真的用这个地址 ----------
+     agent / 出题 / 课件 / 工作台**共用 llmChat 这一条链路**，所以这里验的是
+     「设置页配的东西，别的页面真的能用上」—— 而不是只在设置页自洽。 */
+  const dom = load("settings.html", {
+    restore: { ls: {
+      st_provider: JSON.stringify("custom"),
+      st_custom_endpoint: "http://127.0.0.1:11434/v1",
+      st_custom_model: "qwen2.5:7b",
+    } },
+  });
+  await settle(dom);
+  const w = dom.window;
+
+  let seen = [];
+  w.fetch = (url) => {
+    seen.push(String(url));
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: "好的，这是生成的内容。" } }] }),
+    });
+  };
+  const r = await w.llmChat("你是助教", "帮我拟一段开场白");
+  r && r.ok
+    ? P("配好自定义接口后，llmChat 真的返回了内容（不是「还没接模型」）")
+    : F("自定义接口下 llmChat 仍失败: " + JSON.stringify(r));
+  seen[0] === "http://127.0.0.1:11434/v1/chat/completions"
+    ? P("调用层真的打到自定义地址（agent / 出题 / 工作台共用这条链路）")
+    : F("调用层没走自定义地址: " + seen[0]);
+
+  dom.window.close();
+}
+
+{
+  /* ---------- ② 联网搜索：填了 Key 就必须真的发出去（修「永远说未配置」） ---------- */
+  const dom = load("settings.html", { role: "teacher" });
+  await settle(dom);
+  const w = dom.window, d = w.document;
+
+  const sp = d.getElementById("searchProvider");
+  sp.value = "tavily";
+  sp.dispatchEvent(new w.Event("change", { bubbles: true }));
+  const saved = String(w.localStorage.getItem("st_search_provider"));
+  /tavily/.test(saved)
+    ? P("选 Tavily 后写进 st_search_provider（与 STORE_KEY 同名）")
+    : F("搜索服务商写到了错的键: " + saved);
+  w.localStorage.getItem("st_searchProvider") === null
+    ? P("不再往错的 st_searchProvider 写")
+    : F("仍在写驼峰错键");
+
+  d.getElementById("searchKey").value = "tvly-test-123";
+  let seen = [];
+  w.fetch = (url, opt) => {
+    seen.push(String(url));
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({
+        results: [{ title: "归并排序", url: "https://example.com/mSort", content: "摘要" }],
+      }),
+    });
+  };
+  d.getElementById("testSearchBtn").dispatchEvent(new w.Event("click", { bubbles: true }));
+  for (let i = 0; i < 80 && seen.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+  seen.length === 1
+    ? P("填了搜索 Key 之后「测试搜索」真的发出请求（不再误报未配置）")
+    : F("仍然没发请求 —— 服务商配置读不回来");
+  /^https:\/\/api\.tavily\.com\/search/.test(seen[0] || "")
+    ? P("请求打到 Tavily 的搜索接口")
+    : F("搜索地址不对: " + seen[0]);
+
+  dom.window.close();
+}
+
+console.log("\n=== 4y. 课件「AI 重讲」：接了模型就现场重讲（真 DOM）===");
+{
+  const dom = load("reader.html", {
+    role: "student",
+    restore: { ls: {
+      st_provider: JSON.stringify("custom"),
+      st_custom_endpoint: "https://llm.example.com/v1",
+      st_custom_model: "e2e-model",
+    } },
+  });
+  await settle(dom);
+  const w = dom.window, d = w.document;
+
+  w.llmReady && w.llmReady()
+    ? P("阅读页认得「模型已接」（用自定义接口的存档）")
+    : F("阅读页没认出模型配置");
+
+  if (typeof w.showReteach !== "function") {
+    F("阅读页没有 showReteach（重讲入口缺失）");
+  } else {
+    let seen = [];
+    w.fetch = (url) => {
+      seen.push(String(url));
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: {
+          content: "换个说法：先把数组从中间切开，两边各自排好，再拼起来。",
+        } }] }),
+      });
+    };
+
+    w.showReteach(0, "快速排序的基本思想是分治：选一个基准，把数组分成两半。");
+    for (let i = 0; i < 100 && !seen.length; i++) await new Promise((r) => setTimeout(r, 20));
+    seen.length === 1
+      ? P("点「AI 重讲」真的发出了模型请求")
+      : F("重讲没发请求（还停在骨架/预置说明？）");
+    seen[0] === "https://llm.example.com/v1/chat/completions"
+      ? P("重讲打的是当前配置的接口地址")
+      : F("重讲地址不对: " + seen[0]);
+
+    // 请求发出 ≠ 渲染完成：.then 里还要转 Markdown，等它落到面板上再断言
+    for (let i = 0; i < 120; i++) {
+      const now = (d.getElementById("reteachBody") || {}).textContent || "";
+      if (/切开|分治|拼起来/.test(now)) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const panel = d.getElementById("reteachPanel");
+    const body = (d.getElementById("reteachBody") || {}).textContent || "";
+    (!panel || !panel.hidden) && /切开|分治|拼起来/.test(body)
+      ? P("重讲面板里是模型现场生成的内容（不是预置示例）")
+      : F("重讲结果没渲染: " + body.slice(0, 90));
+  }
+  dom.window.close();
+}
+
 console.log("\n=== 5. 各内容页独立打开 ===");
 /* 🔴 界面可见文本里不许再出现「演示 XX」这类提示（用户明确要求全部清掉）。
    ⚠️ 只匹配「演示 + 名词」的组合词 —— 教案内容里的**动词**用法（"动画演示冒泡排序"）

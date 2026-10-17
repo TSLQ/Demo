@@ -83,6 +83,8 @@ const STORE_KEY = {
   apiKey:   "st_api_key",
   searchProvider: "st_search_provider", // 联网搜索服务商（猜想验证）
   searchKey:      "st_search_key",      // 联网搜索 API Key
+  customEndpoint: "st_custom_endpoint", // 自定义模型接口地址（OpenAI 兼容）
+  customModel:    "st_custom_model",    // 自定义模型名
   accounts: "st_accounts",          // 本地账号库
   readMode: "st_a11y_read_mode",    // 无障碍阅读模式开关
   agentTask: "st_agent_task",       // 交给 AI 助手的任务（含原文），见 schedule.html 方式三

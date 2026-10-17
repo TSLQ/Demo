@@ -520,6 +520,75 @@ async function main() {
   /* ============================================================
      二、学生：登录 → 上课 → 交作业
      ============================================================ */
+  step("T16", "接上模型之后：出题 / agent 真的能生成（不只是设置页自洽）");
+  {
+    // 用「自定义接口」—— 顺便把第 60 轮新加的这条链路走一遍
+    B.ls["st_provider"] = JSON.stringify("custom");
+    B.ls["st_custom_endpoint"] = "https://llm.example.com/v1";
+    B.ls["st_custom_model"] = "e2e-model";
+
+    const reply = (txt) => () => Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(txt),
+      json: () => Promise.resolve({ choices: [{ message: { content: txt } }] }),
+    });
+
+    // ① 出题页：点「生成题目」→ 真的打到模型 → 进「待审」
+    {
+      const p = await B.open("exam.html");
+      const seen = [];
+      p.w.fetch = (url) => {
+        seen.push(String(url));
+        return reply('[{"type":"single","text":"快速排序在什么情况下最坏？","options":["随机数组","已有序数组","元素全相同","链式存储"],"answer":"B","analysis":"基准选端点时退化为 O(n²)"}]')();
+      };
+      if (p.has("#genBtn")) {
+        const n0 = (p.w.EXAMS || []).length;
+        p.click("#genBtn");
+        for (let i = 0; i < 200 && !seen.length; i++) await sleep(20);
+        chk(seen.length >= 1, "AI 出题真的发出了模型请求（不再提示去设置）", "AI 出题没有发请求");
+        chk(/llm\.example\.com/.test(seen[0] || ""),
+          "出题请求打到当前配置的接口地址", "出题请求地址不对: " + seen[0]);
+
+        // 🔴 等「卷子真的多了一份」——不要等页面文案。
+        //    页面本来就有「待审」两个字（说明文字），拿它当信号会**提前满足**，
+        //    断言跑在 Promise 完成之前 → 假失败（踩过一次）。
+        for (let i = 0; i < 200 && (p.w.EXAMS || []).length <= n0; i++) await sleep(20);
+        chk((p.w.EXAMS || []).length > n0,
+          "生成的题真的建成了新卷（进「待审」队列）", "没有新卷落库");
+
+        for (let i = 0; i < 60 && !/最坏/.test((p.$("#qList") || {}).textContent || ""); i++) await sleep(20);
+        const cardText = (p.$("#qList") || {}).textContent || "";
+        chk(/最坏/.test(cardText),
+          "页面上能看到模型生成的那道题",
+          "看不到生成内容；卡片=" + p.d.querySelectorAll("#qList .q-card").length
+            + " 文本=" + cardText.slice(0, 100));
+      } else F("出题页没有「生成题目」按钮");
+      p.close();
+    }
+
+    // ② agent：一句「起草教案」→ 技能链 → 模型成稿
+    {
+      const p = await B.open("agent.html");
+      const seen = [];
+      p.w.fetch = (url) => {
+        seen.push(String(url));
+        return reply("【模型成稿】第 3 章 排序\n\n一、教学目标：理解三种排序的差异……")();
+      };
+      p.fill("#input", "帮我起草一份排序算法的教案");
+      p.click("#sendBtn");
+      let waited = 0;
+      while (!p.$("#chatLog .res-card") && waited < 9000) { await sleep(80); waited += 80; }
+      chk(!!p.$("#chatLog .res-card"), "agent 答上了（有结果卡）", "agent 没出结果卡");
+      for (let i = 0; i < 120 && !seen.length; i++) await sleep(20);
+      chk(seen.length >= 1, "agent 的技能链真的调了模型（不是只给骨架）", "agent 没调模型");
+      chk(/模型成稿|教学目标/.test(p.text()), "结果卡里是模型生成的内容", "结果卡里没有生成内容");
+      for (let i = 0; i < 60 && !/llm\.example\.com/.test(seen.join(" ")); i++) await sleep(20);
+      chk(/llm\.example\.com/.test(seen.join(" ")),
+        "agent 请求也走当前配置的接口地址", "agent 请求地址不对: " + seen[0]);
+      p.close();
+    }
+  }
+
   console.log("\n【二】学生端：同一台电脑，换个身份上课");
 
   B.login("student", "student");

@@ -3624,6 +3624,56 @@ function verifyTrainingData() {
     ? pass("agent 页的「确认执行」调 runAgentStep（真的落地，不是只把节点标 ✓）")
     : fail("agent 页确认按钮没接执行层");
 
+  /* --- ⑭ 自定义接口 · 搜索服务商键名（第 60 轮）--- */
+  /custom:\s*\{[\s\S]{0,220}key:\s*"custom"/.test(navSrc)
+    ? pass("服务商表里有「自定义接口」一档（能用自己部署 / 自建网关的地址）")
+    : fail("LLM_PROVIDERS 没有自定义接口");
+  probe("normalizeLlmEndpoint('https://x.com')") === "https://x.com/v1/chat/completions" &&
+  probe("normalizeLlmEndpoint('https://x.com/v1')") === "https://x.com/v1/chat/completions" &&
+  probe("normalizeLlmEndpoint('https://x.com/v1/chat/completions')") === "https://x.com/v1/chat/completions"
+    ? pass("自定义地址三种填法都能归一成 /chat/completions（只填域名 / 填到 v1 / 填全）")
+    : fail("地址归一不对 —— 用户填了 /v1 会发到错的地址");
+  /st_custom_endpoint/.test(navSrc) && /readKeyValue\(epKey\)/.test(navSrc) &&
+  /readKeyValue\(mdKey\)/.test(navSrc)
+    ? pass("自定义地址与模型名都走 readKeyValue（裸串 / JSON 都认）")
+    : fail("自定义地址没接进 llmConfig");
+
+  // 造一个「自定义接口、没有 Key」的存档 → 本地服务也该算可用
+  probe("(function () { try { localStorage.setItem('st_provider', JSON.stringify('custom'));"
+        + " localStorage.setItem('st_custom_endpoint', 'http://127.0.0.1:11434/v1');"
+        + " localStorage.setItem('st_custom_model', 'qwen2.5:7b');"
+        + " localStorage.removeItem('st_api_key'); return 1; } catch (e) { return 0; } })()");
+  probe("llmConfig().cfg.endpoint") === "http://127.0.0.1:11434/v1/chat/completions"
+    ? pass("自定义接口读出来是补全后的完整地址")
+    : fail("自定义接口地址读错: " + probe("llmConfig().cfg.endpoint"));
+  probe("llmConfig().cfg.model") === "qwen2.5:7b"
+    ? pass("自定义接口读得出模型名")
+    : fail("自定义接口没读到模型名");
+  probe("llmReady()") === true
+    ? pass("自定义接口不填 Key 也算可用（Ollama 这类本地服务本来就不要 Key）")
+    : fail("自定义接口没 Key 就判成不可用 —— 本地服务会被挡在门外");
+  probe("hasApiKey()") === true
+    ? pass("hasApiKey() 认得「自定义接口已可用」")
+    : fail("hasApiKey() 仍只认 Key 字段");
+  probe("(function () { try { localStorage.setItem('st_provider', JSON.stringify('demo'));"
+        + " localStorage.removeItem('st_custom_endpoint'); localStorage.removeItem('st_custom_model');"
+        + " return 1; } catch (e) { return 0; } })()");
+
+  // 🔴 搜索服务商的键名必须与 STORE_KEY 同名，否则下拉选了也算「未配置」
+  /store\.set\("search_provider"/.test(settSrc57)
+    ? pass("搜索服务商写的是 st_search_provider（与 STORE_KEY 一致）")
+    : fail("搜索服务商键名写错 —— 选了 Tavily 也会永远说「还没配置联网搜索」");
+  // ⚠️ 只查**实际调用行**：说明注释里故意引用了那个错写法（讲清楚为什么不能这么写）
+  !/^\s*store\.set\("searchProvider"/m.test(settSrc57)
+    ? pass("旧的驼峰键写法已清零（注释里的反面例子不算）")
+    : fail("还有 store.set(\"searchProvider\") 的错写法");
+  /function migrateSearchProviderKey/.test(settSrc57)
+    ? pass("老存档里写错的键会被迁移到正确位置（不用手动重选）")
+    : fail("缺迁移逻辑 —— 老用户升级后仍然是坏的");
+  /id="customEndpoint"/.test(settSrc57) && /id="customModel"/.test(settSrc57)
+    ? pass("设置页有自定义接口的「地址 / 模型名」两个输入")
+    : fail("设置页缺自定义接口输入");
+
   /* --- ⑧ 未知状态一律兜底，别 undefined.label 崩 --- */
   probe("activityStatus('nonsense').label") === "草案"
     ? pass("未知状态读出来有兜底（不会 undefined.label 崩掉整页）") : fail("状态兜底失效");

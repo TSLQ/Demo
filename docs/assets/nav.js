@@ -4611,6 +4611,8 @@ function parseDiffText(md) {
 
 /** 本机有没有配 API Key（纯静态站的 AI 能力全靠它） */
 function hasApiKey() {
+  // 自定义接口可能不需要 Key（本地服务），所以先问「是不是已经能用了」
+  try { if (llmReady()) return true; } catch (_) {}
   // 🔴 走 readKeyValue 兼容两种落库方式（见它的说明）—— 别再裸读
   const k = (typeof STORE_KEY !== "undefined" && STORE_KEY.apiKey) ? STORE_KEY.apiKey : "st_api_key";
   return !!String(readKeyValue(k)).trim();
@@ -6369,8 +6371,36 @@ var LLM_PROVIDERS = {
     model: "glm-4-flash",
     keyHint: "…", docs: "open.bigmodel.cn",
   },
+  // 用户自己部署 / 自建网关 / 中转站：地址与模型名都在设置页填（OpenAI 兼容）
+  custom: {
+    key: "custom", label: "自定义接口",
+    endpoint: "", model: "",
+    keyHint: "可留空（本地服务）", docs: "",
+    note: "填你自己的 OpenAI 兼容地址与模型名；本地服务通常不需要 Key",
+  },
 };
 var LLM_PROVIDER_FALLBACK = "demo";
+
+/**
+ * 把用户填的接口地址归一成可直接 POST 的 /chat/completions 地址。
+ * 三种填法都认（减少"填了地址还是连不上"这类事故）：
+ *   · https://host/v1/chat/completions → 原样
+ *   · https://host/v1                  → 补 /chat/completions
+ *   · https://host                     → 补 /v1/chat/completions
+ */
+function normalizeLlmEndpoint(raw) {
+  var u = String(raw == null ? "" : raw).trim();
+  if (!u) return "";
+  if (!/^https?:\/\//i.test(u)) {
+    // 只填域名也接受：本机地址默认 http（Ollama / vLLM 通常没证书），其余默认 https
+    var isLocal = /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(u);
+    u = (isLocal ? "http://" : "https://") + u;
+  }
+  u = u.replace(/\/+$/, "");
+  if (/\/chat\/completions$/i.test(u)) return u;
+  if (/\/v\d+$/i.test(u)) return u + "/chat/completions";
+  return u + "/v1/chat/completions";
+}
 
 /**
  * 读一个**字符串型**凭据（API Key 这类）。
@@ -6396,8 +6426,13 @@ function readKeyValue(k) {
 /** 当前配置（页面与设置页共用同一份键） */
 function llmConfig() {
   var provider = LLM_PROVIDER_FALLBACK;
+  // ⚠️ 不经过 LS：nav.js 可能被单独加载（没有 core.js 就没有 LS / STORE_KEY）。
+  //    这里直接读 localStorage 并兼容「JSON 串 / 裸串」两种落库方式。
   try {
-    var p = LS.get(STORE_KEY.provider, "");
+    var pKey = (typeof STORE_KEY !== "undefined" && STORE_KEY.provider) ? STORE_KEY.provider : "st_provider";
+    var rawP = window.localStorage.getItem(pKey);
+    var p = rawP;
+    if (rawP) { try { var jp = JSON.parse(rawP); if (typeof jp === "string") p = jp; } catch (_) {} }
     if (p && LLM_PROVIDERS[p]) provider = p;
   } catch (_) {}
   // 🔴 用 readKeyValue 而不是 LS.get：设置页是**裸串**写的，JSON.parse 会失败。
@@ -6405,18 +6440,41 @@ function llmConfig() {
   //       求值 `STORE_KEY.apiKey` 会抛错 —— 那样 llmReady() 会**炸**而不是安静地返回 false。
   var key = "";
   try { key = readKeyValue(STORE_KEY.apiKey); } catch (_) {}
-  return { provider: provider, key: key, cfg: LLM_PROVIDERS[provider] || LLM_PROVIDERS.demo };
+
+  var cfg = LLM_PROVIDERS[provider] || LLM_PROVIDERS.demo;
+  // 自定义接口：地址与模型名不在常量表里，从设置页的存档读。
+  // 🔴 必须复制一份再改 —— 别把 LLM_PROVIDERS.custom 本体改脏了（下次读就串味）。
+  if (provider === "custom") {
+    cfg = Object.assign({}, cfg);
+    // ⚠️ 键名用字面量兜底：nav.js 可能被单独加载（此时没有 core.js 的 STORE_KEY）——
+    //    和 hasApiKey() 同一个写法，别让「改个服务商」把整条链路抛错。
+    var epKey = (typeof STORE_KEY !== "undefined" && STORE_KEY.customEndpoint) ? STORE_KEY.customEndpoint : "st_custom_endpoint";
+    var mdKey = (typeof STORE_KEY !== "undefined" && STORE_KEY.customModel) ? STORE_KEY.customModel : "st_custom_model";
+    try {
+      cfg.endpoint = normalizeLlmEndpoint(readKeyValue(epKey));
+      cfg.model = String(readKeyValue(mdKey) || "").trim();
+    } catch (_) {}
+  }
+  return { provider: provider, key: key, cfg: cfg };
 }
 
 /** 能不能真调模型 —— 界面据此决定「生成」是可用还是给引导 */
 function llmReady() {
   var c = llmConfig();
-  return !!(c.provider !== "demo" && c.key && c.cfg && c.cfg.endpoint);
+  if (c.provider === "demo" || !c.cfg || !c.cfg.endpoint) return false;
+  // 自定义接口：只要有地址 + 模型名就算可用 —— 本地服务（Ollama 等）通常不要 Key
+  if (c.provider === "custom") return !!c.cfg.model;
+  return !!c.key;
 }
 
 function llmStatusText() {
   var c = llmConfig();
   if (c.provider === "demo") return "还没有接入模型 —— 去「设置 → 模型接入」选服务商并填 Key，就能真的生成";
+  if (c.provider === "custom") {
+    if (!c.cfg.endpoint) return "选了「自定义接口」但还没填接口地址 —— 去「设置 → 模型接入」填上";
+    if (!c.cfg.model) return "自定义接口还缺模型名 —— 去「设置 → 模型接入」填上";
+    return "已接入自定义接口（" + c.cfg.model + "），可以现场生成";
+  }
   if (!c.key) return "选了 " + c.cfg.label + " 但还没填 API Key —— 去「设置 → 模型接入」填上";
   return "已接入 " + c.cfg.label + "（" + c.cfg.model + "），可以现场生成";
 }
@@ -6448,9 +6506,13 @@ var WEB_SEARCH_PROVIDERS = {
 /** 当前搜索配置（设置页与调用层共用同一份键） */
 function searchConfig() {
   var provider = "none";
+  // ⚠️ 同上：不用 LS（nav.js 可能单独加载），并兼容 JSON 串 / 裸串
   try {
-    var p = LS.get(STORE_KEY.searchProvider, "");
-    if (p && WEB_SEARCH_PROVIDERS[p]) provider = p;
+    var spKey = (typeof STORE_KEY !== "undefined" && STORE_KEY.searchProvider) ? STORE_KEY.searchProvider : "st_search_provider";
+    var rawSp = window.localStorage.getItem(spKey);
+    var sp = rawSp;
+    if (rawSp) { try { var jsp = JSON.parse(rawSp); if (typeof jsp === "string") sp = jsp; } catch (_) {} }
+    if (sp && WEB_SEARCH_PROVIDERS[sp]) provider = sp;
   } catch (_) {}
   // 🔴 同上：设置页的搜索 Key 也是裸串写的；同样保留 try/catch（nav.js 可能单独加载）
   var key = "";
@@ -6642,12 +6704,23 @@ function validateSimHtml(html) {
 function llmChat(system, user, opt) {
   var o = opt || {};
   var c = llmConfig();
-  if (c.provider === "demo" || !c.key) {
+
+  var ready = false;
+  try { ready = llmReady(); } catch (_) {}
+  if (!ready) {
+    var why;
+    if (c.provider === "demo") {
+      why = "还没接入模型，不会真去写代码。去「设置 → 模型接入」选一个服务商（或填自己的接口地址）并填上 API Key。";
+    } else if (c.provider === "custom") {
+      why = !c.cfg.endpoint
+        ? "选了「自定义接口」但还没填接口地址 —— 去「设置 → 模型接入」填上。"
+        : "自定义接口还缺模型名 —— 去「设置 → 模型接入」填上（例如 gpt-4o-mini / qwen2.5:7b）。";
+    } else {
+      why = "选了 " + c.cfg.label + " 但还没填 API Key。去「设置 → 模型接入」填上。";
+    }
     return Promise.resolve({
       ok: false, demo: true,
-      error: c.provider === "demo"
-        ? "还没接入模型，不会真去写代码。去「设置 → 模型接入」选一个服务商并填上 API Key。"
-        : "选了 " + c.cfg.label + " 但还没填 API Key。去「设置 → 模型接入」填上。",
+      error: why,
       hint: "填好后回到这里再点一次，它会真的现场写出来。",
     });
   }
@@ -6664,9 +6737,13 @@ function llmChat(system, user, opt) {
     stream: false,
   };
 
+  // 自定义接口可能没有 Key（本地服务）→ 这时不发明 Authorization 头
+  var headers = { "Content-Type": "application/json" };
+  if (c.key) headers["Authorization"] = "Bearer " + c.key;
+
   return fetch(c.cfg.endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + c.key },
+    headers: headers,
     body: JSON.stringify(body),
   }).then(function (res) {
     if (!res.ok) {
@@ -6687,7 +6764,7 @@ function llmChat(system, user, opt) {
   }).catch(function (err) {
     var m = String((err && err.message) || err);
     var hint = /Failed to fetch|NetworkError|load failed/i.test(m)
-      ? "这次请求没能发出去。如果是浏览器拦的 CORS，换 DeepSeek / 通义 / 智谱 这类支持直调的厂商；也确认下网络。"
+      ? "这次请求没能发出去。如果是浏览器拦的 CORS，换 DeepSeek / 通义 / 智谱 这类支持直调的厂商，或确认自建接口允许跨域（Access-Control-Allow-Origin）；也确认下网络与地址是否可达。"
       : "";
     return { ok: false, error: "调用失败：" + m, hint: hint };
   });
