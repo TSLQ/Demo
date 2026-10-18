@@ -213,8 +213,11 @@ function go(page) {
   }
 
   currentPage = real;
-  highlightNav();                       // 切页后立即更新高亮，否则点了像没反应
-  location.hash = real;
+  // 🔴 高亮只是锦上添花：它要是抛错（存档里有异常菜单项之类），
+  //    下面的 frame.src 就永远执行不到 —— 症状是「点哪都没反应、停在原页」。
+  //    所以单独兜住，绝不拖垮换页。
+  try { highlightNav(); } catch (err) { console.warn("[shell] 高亮失败（不影响换页）:", err); }
+  try { if (location.hash !== "#" + real) location.hash = real; } catch (_) {}
 
   const frame = document.getElementById("contentFrame");
   if (!frame) return;
@@ -886,7 +889,9 @@ function boot() {
   // hash 变化（浏览器前进/后退）也要跟随
   window.addEventListener("hashchange", () => {
     const p = location.hash.replace(/^#/, "").trim();
-    if (p && p !== currentPage) go(p);
+    // ⚠️ 用裸页名比较：`chat.html?course=ds` 与 `chat.html` 是同一页，
+    //    按原串比会判定"变了"从而反复 go()，页面来回抖。
+    if (p && normalize(p) !== normalize(currentPage)) go(p);
   });
 
   // 接收子页面发来的设置变更（子页面改了主题/无障碍 → 壳刷新自己）

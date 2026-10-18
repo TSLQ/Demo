@@ -297,6 +297,67 @@ console.log("\n=== 2b. 无障碍阅读模式：内容页真的生效（第 57 �
   dom.window.close();
 }
 
+console.log("\n=== 3z. 侧栏逐项可达（切身份后不能「点哪都是同一页」）===");
+{
+  /* ---------- ① 学生身份：每一项都必须换到自己的页面 ---------- */
+  const dom = load("app.html", {
+    role: "student",
+    restore: { ls: {
+      st_role: JSON.stringify("student"),
+      st_current_user: JSON.stringify("student:student"),
+    } },
+  });
+  await settle(dom);
+  const w = dom.window, d = w.document;
+  const frame = d.getElementById("contentFrame");
+  const items = [...d.querySelectorAll(".side-item")];
+
+  items.length >= 6
+    ? P("学生端渲染出 " + items.length + " 个菜单项")
+    : F("学生端菜单项过少: " + items.length);
+
+  const bad = [];
+  items.forEach((b) => {
+    b.dispatchEvent(new w.Event("click", { bubbles: true }));
+    const want = b.dataset.page || "";
+    const got = frame.getAttribute("src") || "";
+    if (getPlain(got) !== getPlain(want)) {
+      bad.push(((b.textContent || "").trim() || "?") + " → " + got + "（期望 " + want + "）");
+    }
+  });
+  bad.length === 0
+    ? P("学生端逐项点击都换到了自己的页面（不会全落到 AI 答疑）")
+    : F("有菜单项跳错: " + bad.join(" / "));
+
+  /* ---------- ② 高亮抛错不能拖垮换页 ---------- */
+  // 🔴 回归点：go() 里原来先 highlightNav() 再设 frame.src，
+  //    高亮一抛错就永远执行不到换页 —— 用户看到的是「点哪都不动」。
+  const orig = w.highlightNav;
+  w.highlightNav = function () { throw new Error("boom"); };
+  w.go("reader.html");
+  const after = frame.getAttribute("src");
+  getPlain(after) === "reader.html"
+    ? P("高亮函数抛错时，换页仍然发生（不静默卡死）")
+    : F("高亮抛错把换页一起带走了: " + after);
+  w.highlightNav = orig;
+
+  /* ---------- ③ hash 里带查询串时不来回抖 ---------- */
+  w.go("chat.html?course=ds");
+  const h1 = w.location.hash;
+  w.go("chat.html");
+  const h2 = w.location.hash;
+  getPlain(h1) === "chat.html" && getPlain(h2) === "chat.html"
+    ? P("带 ?course= 与裸页名互切不会把页面顶回上一页")
+    : F("hash 比较仍有抖动: " + h1 + " / " + h2);
+
+  dom.window.close();
+}
+
+function getPlain(u) {
+  // ⚠️ location.hash 带前导 #，先剥掉再按 ? 切
+  return String(u || "").replace(/^#/, "").split("#")[0].split("?")[0].trim();
+}
+
 console.log("\n=== 3. 应用壳（教师身份）===");
 {
   const dom = load("app.html", { role: "teacher" });

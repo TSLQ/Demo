@@ -372,7 +372,13 @@ function enter(displayName, account) {
   LS.rawSet("st_current_user", user ? (role + ":" + user) : "");
   const fallback = PERSONA[role] || ROLE_META[role].label;
   LS.rawSet("st_display_name", displayName || fallback);
-  location.href = "app.html#" + ROLE_META[role].home;
+  // 🔴 若登录页是被塞进壳的 iframe（例如从设置页跳过来），
+  //    在这里跳 app.html 会**套出第二层壳**。必须让顶层整页跳。
+  const dest = "app.html#" + ROLE_META[role].home;
+  try {
+    if (window.self !== window.top) { window.top.location.href = dest; return; }
+  } catch (_) { /* 跨域 → 退回本页跳转 */ }
+  location.href = dest;
 }
 
 $("#loginForm").addEventListener("submit", (e) => {

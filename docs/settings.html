@@ -451,7 +451,7 @@
                   <span id="acctRole">—</span>
                 </div>
                 <div class="row-ctl">
-                  <a class="btn btn-sm" href="index.html">切换身份</a>
+                  <a class="btn btn-sm" href="index.html" id="switchRoleBtn">切换身份</a>
                 </div>
               </div>
 
@@ -916,6 +916,25 @@ function syncAccount() {
 
 $("#displayName").addEventListener("change", (e) => {
   store.set("display_name", e.target.value.trim());
+});
+
+/**
+ * 切换身份。
+ * 🔴 必须先判断「是不是在壳里」：设置页在壳内是 iframe，
+ *    普通 `<a href="index.html">` 会让**中间那块**去加载登录页 ——
+ *    登录完又在同一块里加载 app.html，于是套出**第二层壳**：
+ *    用户看到两层侧栏，点哪都像没换页（实际是在操作里面那层）。
+ *    所以壳内一律让**顶层窗口**整页回登录页。
+ */
+$("#switchRoleBtn").addEventListener("click", (e) => {
+  e.preventDefault();
+  try {
+    if (window.self !== window.top) {
+      window.top.location.href = "index.html";
+      return;
+    }
+  } catch (_) { /* 跨域读不到 top —— 退回本页跳转 */ }
+  location.href = "index.html";
 });
 
 /* ---------- 存储统计 ---------- */

@@ -3674,6 +3674,23 @@ function verifyTrainingData() {
     ? pass("设置页有自定义接口的「地址 / 模型名」两个输入")
     : fail("设置页缺自定义接口输入");
 
+  const navShell62 = () => fs.readFileSync(path.join(SITE, "assets/shell.js"), "utf8");
+  /* --- ⑮ 切换身份不能在壳里套娃（第 62 轮）--- */
+  const settSrc62 = fs.readFileSync(path.join(SITE, "settings.html"), "utf8");
+  const idxSrc62 = fs.readFileSync(path.join(SITE, "index.html"), "utf8");
+  /id="switchRoleBtn"/.test(settSrc62) && /window\.self !== window\.top/.test(settSrc62)
+    ? pass("设置页「切换身份」在壳内走**顶层**跳转（不在 iframe 里套出第二层登录页）")
+    : fail("切换身份还是裸 href —— 壳内点击会嵌套出第二层壳");
+  /window\.self !== window\.top/.test(idxSrc62)
+    ? pass("登录成功后同样避开 iframe（被塞进壳里时不会套壳）")
+    : fail("登录页在 iframe 内跳 app.html —— 会套出第二层壳");
+  /try \{ highlightNav\(\); \} catch/.test(navShell62())
+    ? pass("go() 里高亮失败被单独兜住（不拖垮换页）")
+    : fail("highlightNav 仍会阻断 frame.src —— 高亮一抛错就点哪都不动");
+  /normalize\(p\) !== normalize\(currentPage\)/.test(navShell62())
+    ? pass("hashchange 用裸页名比较（?course= 与裸名不会来回抖）")
+    : fail("hashchange 仍按原串比较");
+
   /* --- ⑧ 未知状态一律兜底，别 undefined.label 崩 --- */
   probe("activityStatus('nonsense').label") === "草案"
     ? pass("未知状态读出来有兜底（不会 undefined.label 崩掉整页）") : fail("状态兜底失效");
