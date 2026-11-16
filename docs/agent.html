@@ -123,6 +123,12 @@
   .res-sec { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
   .res-sec:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
   .res-sec h4 { margin: 0 0 8px; font-size: 13.5px; font-weight: 500; }
+  /* 图表（ECharts）：高度必须由容器给，canvas 自己不会撑开 */
+  .res-chart { width: 100%; height: 260px; margin: 10px 0 4px; border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px; background: var(--surface); }
+  .chart-fallback { font-size: 12px; color: var(--muted-foreground); line-height: 1.6; }
+  .chart-raw { margin: 8px 0 0; max-height: 120px; overflow: auto; font-size: 11.5px;
+    color: var(--muted-foreground); white-space: pre-wrap; }
   .res-note {
     margin: 12px 0 0; padding: 10px 12px; border-radius: 9px; font-size: 12.5px; line-height: 1.75;
     background: var(--secondary); border: 1px solid var(--border); color: var(--muted-foreground);
@@ -394,7 +400,7 @@
             <div class="composer-box">
               <label class="sr-only" for="input">给助手下达任务</label>
               <textarea id="input" rows="1"
-                placeholder="例如：圈第 6、7 章出 8 道题 / 把第 7 章课件发给计科 2301 班 / 你能做什么"></textarea>
+                placeholder="例如：圈第 6、7 章出 8 道题 / 画个图看看各课程的课时数 / 你能做什么"></textarea>
               <button class="send-btn" id="sendBtn" title="发送" aria-label="发送">↑</button>
             </div>
             <div class="composer-foot">
@@ -416,6 +422,7 @@
 
 const SUGGESTS = [
   "你能做什么",
+  "画个图看看本机有多少教案和实训",
   "把第 7 章课件发给计科 2301 班",
   "圈第 6、7 章出 8 道题",
   "帮我看谁反复卡住",
@@ -573,84 +580,112 @@ function skillChainEl(route) {
   return box;
 }
 
-/* ---------- 动作链：逐步执行，写操作停下来问 ---------- */
-function runSteps(steps, ctx, done) {
+/* ---------- 动作链：先跑技能，再按**真实结果**逐个落账 ---------- */
+/**
+ * 建链 + 建节点，**先不打勾**。返回 `{ el, settle(runs, done) }`：
+ *   · 只读步：只有它对应的技能真跑过（`runs.executed` 里有名字）才打 ✓，
+ *     否则标「仅流程说明」——
+ *     🔴 第 62 轮修：以前这里是无条件 `setTimeout 320ms` 打勾，界面在撒谎
+ *        （动作链说"完成"，其实什么都没执行）。
+ *   · 写步：停下来问；确认后走 `runAgentStep`，按它的真实返回值标 ✓ / —。
+ */
+function runSteps(steps, ctx) {
+  // 一个动作都没有（例如只跑了 chainless 的画像跟进）→ 不摆一条空的动作链
+  if (!steps.length) {
+    return { el: null, settle: function (runs, done) { if (typeof done === "function") done(); } };
+  }
   const chain = el('<div class="tool-chain"><div class="tc-head"><span class="tc-spin"></span>' +
-    '<span>正在执行 ' + steps.length + ' 个操作…</span></div><div class="tc-list"></div></div>');
+    '<span>正在跑 ' + steps.length + ' 个操作…</span></div><div class="tc-list"></div></div>');
   logEl.appendChild(chain);
   const listEl = chain.querySelector(".tc-list");
   const head = chain.querySelector(".tc-head");
-  let i = 0;
 
-  const nodeFor = function (s) {
-    return el('<div class="tc-step run"><span class="tc-ico">›</span><div class="tc-body">' +
+  const nodes = steps.map(function (s) {
+    const node = el('<div class="tc-step run"><span class="tc-ico">›</span><div class="tc-body">' +
       '<div class="tc-name">' + escHtml(s.name) +
       '<span class="tc-src">' + escHtml(SKILL_LAYER[s.layer].name) + "</span></div>" +
       '<div class="tc-arg">' + escHtml(s.arg || "—") + "</div></div></div>");
-  };
-
-  const next = function () {
-    if (i >= steps.length) {
-      head.innerHTML = '<span class="tc-spin tc-done"></span><span>已完成 ' + steps.length + ' 个操作</span>';
-      done();
-      return;
-    }
-    const s = steps[i];
-    const node = nodeFor(s);
     if (s.downgraded) node.classList.add("skip");
     listEl.appendChild(node);
-    logEl.scrollTop = logEl.scrollHeight;
-    i++;
+    return node;
+  });
+  logEl.scrollTop = logEl.scrollHeight;
 
-    // 会改动的动作：停下来问一次（学生端不会走到这里 —— 那边没有写技能）
-    if (s.wait) {
-      node.classList.remove("run");
-      node.classList.add("wait");
-      node.querySelector(".tc-ico").textContent = "!";
-      const ask = el('<div class="tc-ask"></div>');
-      const okBtn = el('<button class="btn btn-primary btn-sm" type="button">确认执行</button>');
-      const noBtn = el('<button class="btn btn-ghost btn-sm" type="button">只给我建议</button>');
-      ask.appendChild(okBtn); ask.appendChild(noBtn);
-      node.querySelector(".tc-body").appendChild(ask);
-      okBtn.addEventListener("click", () => {
-        // 🔴 第 55 轮：**真的执行**（走 nav.js 的 runAgentStep），不再是只把节点标成 ✓。
-        //    缺具体对象时它返回 ok:false —— 那就如实说"没执行"，不装成功。
-        const r = (typeof runAgentStep === "function")
-          ? runAgentStep(s, ctx)
-          : { ok: false, reason: "执行层没加载" };
-        ask.remove(); node.classList.remove("wait");
-        node.querySelector(".tc-body").insertAdjacentHTML("beforeend",
-          r.ok
-            ? '<div class="tc-arg" style="color:var(--success)">→ ' + escHtml(r.detail || "已执行") + "</div>"
-            : '<div class="tc-arg">→ 没有执行：' + escHtml(r.reason || "缺具体对象") + "</div>");
-        node.classList.add(r.ok ? "ok" : "skip");
-        node.querySelector(".tc-ico").textContent = r.ok ? "✓" : "—";
-        // 真执行完 → 带他去结果页；没执行则留在原地（别把人拽走）
-        if (r.ok && r.goto) navigate(r.goto);
-        next();
-      });
-      noBtn.addEventListener("click", () => {
-        ask.remove(); node.classList.remove("wait"); node.classList.add("skip");
-        node.querySelector(".tc-ico").textContent = "—";
-        node.querySelector(".tc-body").insertAdjacentHTML("beforeend", '<div class="tc-arg">→ 已改为只给建议，不动数据</div>');
-        next();
-      });
-      logEl.scrollTop = logEl.scrollHeight;
-      return;
-    }
-
-    setTimeout(function () {
-      node.classList.remove("run");
-      node.classList.add("ok");
-      node.querySelector(".tc-ico").textContent = "✓";
+  const mark = function (node, state, ico, note) {
+    node.classList.remove("run");
+    node.classList.add(state);
+    node.querySelector(".tc-ico").textContent = ico;
+    if (note) {
       node.querySelector(".tc-body").insertAdjacentHTML("beforeend",
-        '<div class="tc-arg" style="color:var(--success)">→ ' + (s.downgraded ? "跳过（授权关闭，只给建议）" : "完成") + "</div>");
-      logEl.scrollTop = logEl.scrollHeight;
-      next();
-    }, 320);
+        '<div class="tc-arg"' + (state === "ok" ? ' style="color:var(--success)"' : "") + ">→ " +
+        escHtml(note) + "</div>");
+    }
   };
-  next();
-  return chain;
+
+  return {
+    el: chain,
+    settle: function (runs, done) {
+      const executed = (runs && runs.executed) || [];
+      const failed = ((runs && runs.failed) || []).reduce(function (m, f) { m[f.name] = f.error; return m; }, {});
+      const nameOf = function (s) {
+        const sk = (typeof skillOf === "function") ? skillOf(s.skill, "teacher") : null;
+        return sk ? sk.name : "";
+      };
+      let i = 0;
+      const next = function () {
+        if (i >= steps.length) {
+          const okN = nodes.filter(function (n) { return n.classList.contains("ok"); }).length;
+          head.innerHTML = '<span class="tc-spin tc-done"></span><span>已核对 ' + steps.length +
+            " 个操作：<b>" + okN + "</b> 个真跑完" +
+            (okN < steps.length ? "，其余只是说明或没执行" : "") + "</span>";
+          if (typeof done === "function") done();
+          return;
+        }
+        const s = steps[i], node = nodes[i];
+        i++;
+
+        // 会改动的动作：停下来问一次（学生端不会走到这里 —— 那边没有写技能）
+        if (s.wait) {
+          node.classList.remove("run");
+          node.classList.add("wait");
+          node.querySelector(".tc-ico").textContent = "!";
+          const ask = el('<div class="tc-ask"></div>');
+          const okBtn = el('<button class="btn btn-primary btn-sm" type="button">确认执行</button>');
+          const noBtn = el('<button class="btn btn-ghost btn-sm" type="button">只给我建议</button>');
+          ask.appendChild(okBtn); ask.appendChild(noBtn);
+          node.querySelector(".tc-body").appendChild(ask);
+          okBtn.addEventListener("click", () => {
+            // 🔴 **真的执行**（走 nav.js 的 runAgentStep）。缺具体对象时它返回 ok:false —— 那就如实说，不装成功。
+            const r = (typeof runAgentStep === "function")
+              ? runAgentStep(s, ctx)
+              : { ok: false, reason: "执行层没加载" };
+            ask.remove(); node.classList.remove("wait");
+            mark(node, r.ok ? "ok" : "skip", r.ok ? "✓" : "—",
+              r.ok ? (r.detail || "已执行") : ("没有执行：" + (r.reason || "缺具体对象")));
+            // 真执行完 → 带他去结果页；没执行则留在原地（别把人拽走）
+            if (r.ok && r.goto) navigate(r.goto);
+            next();
+          });
+          noBtn.addEventListener("click", () => {
+            ask.remove();
+            mark(node, "skip", "—", "已改为只给建议，不动数据");
+            next();
+          });
+          logEl.scrollTop = logEl.scrollHeight;
+          return;
+        }
+
+        // 只读步：只认技能链回报的真实结果
+        if (s.downgraded) { mark(node, "skip", "—", "跳过（授权关闭，只给建议）"); return next(); }
+        const nm = nameOf(s);
+        if (nm && failed[nm]) { mark(node, "skip", "—", "没跑成：" + failed[nm]); return next(); }
+        if (nm && executed.indexOf(nm) >= 0) { mark(node, "ok", "✓", "真跑完了"); return next(); }
+        mark(node, "skip", "—", "仅流程说明（这条技能这次没有执行器）");
+        next();
+      };
+      next();
+    },
+  };
 }
 
 /* ---------- 跑技能 → 结果卡 ---------- */
@@ -662,6 +697,12 @@ function resultCard(runs, back, meta) {
   runs.secs.forEach(function (s, i) {
     const sec = el('<div class="res-sec"><h4>' + escHtml(s.title) + "</h4><div></div></div>");
     sec.querySelector("div").innerHTML = renderLines(s.lines);
+    // 图表：先把 option 挂在节点上，等插入文档并有尺寸后再由 core.js 的 mountCharts 渲染
+    if (s.chart) {
+      const wrap = el('<div class="res-chart" data-chart="1"></div>');
+      wrap._chartOption = s.chart;
+      sec.appendChild(wrap);
+    }
     box.appendChild(sec);
   });
   if (runs.notes.length) {
@@ -691,6 +732,21 @@ function resultCard(runs, back, meta) {
     const a = el('<a href="#" data-act="back">' + escHtml(back.label) + "</a>");
     a.addEventListener("click", function (e) { e.preventDefault(); navigate(back.page); });
     foot.appendChild(a);
+  }
+  // 「AI 评分」：把这一卡的正文按 6 项量表评一遍（不用手动复制粘贴）
+  // ⚠️ 只在「这张卡确实是教案」时挂 —— 量表是给教案的，拿它去评一份题单会得出没意义的分数。
+  // ⚠️ 自查/评分自己的卡上也不挂，否则会自己评自己、一轮套一轮。
+  const cardBody = runs.secs.map(function (s) { return (s.lines || []).join("\n"); }).join("\n\n").trim();
+  const looksLikeLesson = /教学目标/.test(cardBody) && /课堂流程|教学流程/.test(cardBody);
+  if (meta && meta.fromId !== "atom-lesson-check" && looksLikeLesson && cardBody.length > 200 && typeof handle === "function") {
+    const rev = el('<a href="#" data-act="review" title="按 6 项量表评这份教案">AI 评分</a>');
+    rev.addEventListener("click", function (e) {
+      e.preventDefault();
+      handle("按量表给这份教案打个分", {
+        skills: ["atom-lesson-check"], payload: { text: cardBody }, back: null,
+      });
+    });
+    foot.appendChild(rev);
   }
   if (foot.childNodes.length) box.appendChild(foot);
   return box;
@@ -731,6 +787,8 @@ function addResult(runs, back, meta) {
   node.querySelector(".bubble").appendChild(inner);
   logEl.appendChild(node);
   logEl.scrollTop = logEl.scrollHeight;
+  // 图要等节点进了文档、拿到宽度之后再画（ECharts 读不到尺寸会画成 0×0）
+  if (typeof mountCharts === "function") mountCharts(node);
   // 课表任务跑完 → 结果放回导入框（闭环）
   if (pendingScheduleTask) { pendingScheduleTask = false; stashScheduleImport(runs); }
 }
@@ -738,55 +796,100 @@ function addResult(runs, back, meta) {
 /* ---------- 主流程 ---------- */
 let busy = false;
 
+/** 运行中：同一个按钮变成「停止」（点一下 = 中断这次请求，不是再发一次） */
+function setRunUI(on) {
+  const b = $("#sendBtn");
+  if (!b) return;
+  b.classList.toggle("is-stop", !!on);
+  b.textContent = on ? "■" : "↑";
+  b.title = on ? "停止（正在跑，点一下中断）" : "发送";
+  b.setAttribute("aria-label", on ? "停止" : "发送");
+  b.disabled = false;          // 🔴 停止按钮必须点得动 —— 以前这里 disable 掉，请求一挂就再也回不来
+}
+
+function finishRun() {
+  busy = false;
+  setRunUI(false);
+  if (typeof abortAgent === "function") abortAgent();
+  renderPersona();
+  const inp = $("#input");
+  if (inp) inp.focus();
+}
+
+/** 一句话摘要（进对话记录用；不存整张结果卡，那只是冗余） */
+function replyDigest(runs) {
+  const s = (runs && runs.secs && runs.secs[0]) || null;
+  if (!s) return "（没有结果）";
+  const first = (s.lines || []).filter(function (l) { return String(l).trim(); })[0] || "";
+  return String(s.title || "") + "：" +
+    String(first).replace(/[*`>#|]/g, "").replace(/^-+\s*/, "").slice(0, 60);
+}
+
 function handle(text, forced) {
   if (busy) return;
   const t = String(text || "").trim();
   if (!t) return;
   busy = true;
-  $("#sendBtn").disabled = true;
+  setRunUI(true);
+  if (typeof startAgentRun === "function") startAgentRun();
+  const t0 = Date.now();
 
   addMe(t);
   rec("ask", t);
   const ctx = routeCtx();
+  // 上下文：把最近几轮带进这次调用（真正怎么裁由 nav.js 的 fitContext 按预算决定）
+  ctx.history = (typeof agentChatHistory === "function") ? agentChatHistory(6) : [];
+  ctx.budgetReport = [];
+  ctx.signal = (typeof agentRunSignal === "function") ? agentRunSignal() : null;
+
   const route = forced
     ? (function () { const r = routeSkills(t, ctx); r.atomic = forced.skills.map(function (id) { return skillOf(id, "teacher"); }).filter(Boolean); r.chain = r.system.concat(r.group, r.atomic); return r; })()
     : routeSkills(t, ctx);
 
   logEl.appendChild(skillChainEl(route));
 
-  // 谁该跑：**先算清楚**，动作链只展示真的要做的那些。
-  // 🔴 **系统层默认只挂不跑**（它每次都在，但「应用地图 / 数据边界」那几篇说明不该把
-  //    每次对话的结果卡撑爆）—— 除非它自己被命中（「你能做什么」「数据哪来的」），
-  //    或者这次一条能跑的都没有（那就给一份「我能干什么」当兜底）。
-  const runnable = route.chain.filter(function (s) {
-    return typeof s.run === "function" || !!SKILL_RUNNERS[s.id];
-  });
-  let ids = runnable.filter(function (s) {
-    return s.layer !== "system" || (s.hit || []).length > 0;
-  }).map(function (s) { return s.id; });
-  if (!ids.length) ids = runnable.map(function (s) { return s.id; });
+  // 谁该跑 —— 🔴 实现在 nav.js（`runnableIds`），两页共用同一份判断
+  const ids = (typeof runnableIds === "function") ? runnableIds(route) : [];
   const runChain = route.chain.filter(function (s) { return ids.indexOf(s.id) >= 0; });
   // 全关掉了（含系统层）→ 这是"你把技能都关了"，要说清楚，不能给一片空白
   if (!ids.length) {
     addMsg("<p>这次<b>一条技能都没挂</b> —— 你把它们都关掉了。在左栏勾上至少一条（或点「恢复默认」），我再试。</p>");
-    busy = false;
-    $("#sendBtn").disabled = false;
+    finishRun();
     return;
   }
+
   const payload = Object.assign({}, (forced && forced.payload) || {});
+  // 画图这类技能要看原话；用 `ask` 单独给，**不复用 `text`**（会改掉「校对」的取数口径）
+  payload.ask = t;
   const steps = planFromChain(runChain, Object.assign({}, ctx, { chain: runChain }));
-  runSteps(steps, ctx, function () {
-    // 🔴 第 57 轮：技能链可能返回 Promise（起草教案 / 改进 / 差异解读 / 课表解析接了模型后会真去生成）
-    //    → 统一 then 一次，两种形状都能接住。慢的时候动作链动画还在转，不会看着像卡死。
-    Promise.resolve(runSkills(ids, payload, ctx)).then(function (runs) {
+
+  // 🔴 顺序（第 62 轮）：**先跑技能，再落动作链**。
+  //    以前是动作链先跑完动画、技能才开始 → 打勾与实际执行是两条时间线，界面必然撒谎。
+  const flow = runSteps(steps, ctx);
+  Promise.resolve(runSkills(ids, payload, ctx)).then(function (runs) {
+    flow.settle(runs, function () {
       addResult(runs, forced ? forced.back : null,
         { input: t, fromId: primarySkillId(route, ids), courseId: ctx.courseId, role: "teacher" });
       if (forced && forced.clearTask) clearHandoff();
-      busy = false;
-      $("#sendBtn").disabled = false;
-      renderPersona();
-      $("#input").focus();
+      // 对话记录：一次问答一条（可观测性最小实现，按账号分桶）
+      if (typeof pushAgentChat === "function") {
+        pushAgentChat({
+          ask: t,
+          reply: replyDigest(runs),
+          chain: route.chain.map(function (s) { return s.layer + ":" + s.name; }),
+          executed: runs.executed,
+          failed: runs.failed,
+          aborted: !!runs.aborted,
+          budget: ctx.budgetReport,
+          ms: Date.now() - t0,
+        });
+      }
+      if (runs.aborted) addMsg("<p>这次请求被你停下了 —— 上面是停下前的那部分。</p>");
+      finishRun();
     });
+  }).catch(function (e) {
+    addMsg("<p>这次没跑完：" + escHtml(String((e && e.message) || e)) + "</p>");
+    finishRun();
   });
 }
 
@@ -854,6 +957,42 @@ function renderPersona() {
         e.changes.map(function (c) { return escHtml(c); }).join("<br>") + "</li>";
     }).join("")
     : "<li>还没有磨合过 —— 点下面的按钮，用你现有的行为记录对一次。</li>";
+}
+
+/* ---------- 对话记录（本机，最近 60 条；按账号分桶） ----------
+   为什么要它：出问题的时候，「刚才那次到底挂了什么技能、哪一步没成」必须查得到。
+   以前对话只在内存里，刷新就没了 → 只能靠截图 + 代码推理。              */
+function renderChatHistory() {
+  if (typeof loadAgentChat !== "function") return;
+  const list = loadAgentChat();
+  if (!list.length) return;
+  const last = list.slice(-6);
+  const box = el('<details class="skill-chain"><summary class="sc-head" style="cursor:pointer">' +
+    '<b>最近 ' + last.length + ' 轮对话（本机记录）</b>' +
+    '<span>点开看 · 换浏览器或换端口就没了</span></summary></details>');
+  last.forEach(function (r) {
+    box.appendChild(el('<div class="lg"><div class="lg-head" style="display:block">' +
+      '<div><b>' + escHtml(r.ask || "") + '</b> <span class="lg-tag">' +
+      escHtml(agoText(r.at, Date.now())) + "</span></div>" +
+      '<div class="sk-why">→ ' + escHtml(r.reply || "（没有结果）") + "</div>" +
+      '<div class="sk-steps">挂了 ' + ((r.chain || []).length) + " 个技能 · 真跑完 " +
+      ((r.executed || []).length) + " 个" +
+      (r.aborted ? " · 被中途停下" : "") +
+      (r.ms ? " · " + (Math.round(r.ms / 100) / 10) + " 秒" : "") +
+      "</div></div></div>"));
+  });
+  box.appendChild(el('<div class="lg"><div class="lg-head" style="display:block">' +
+    '<a href="#" id="chatClear">清空对话记录</a></div></div>'));
+  logEl.appendChild(box);
+  const a = box.querySelector("#chatClear");
+  if (a) a.addEventListener("click", function (e) {
+    e.preventDefault();
+    if (typeof clearAgentChat !== "function") return;
+    if (!window.confirm("清空本机保存的 AI 对话记录？\n\n只清这份记录 —— 课程、教案、技能开关都不动。")) return;
+    clearAgentChat();
+    box.remove();
+    flash("对话记录已清空", "ok");
+  });
 }
 
 /* ============================================================
@@ -1148,6 +1287,7 @@ function renderSkillTree() {
 
 /* ---------- 启动 ---------- */
 (function boot() {
+  renderChatHistory();   // 先把本机存着的最近几轮摆出来（没有就不显示）
   addMsg("<p>我是你的教学助手。这次和以前不一样 —— 我不是「一套提示词」，而是三层技能：</p>" +
     "<p><b>系统层</b>管怎么用这个应用（每次都挂着）；<b>群组层</b>管你的班和课（从你的班级、课程里派生的，不是我编的分类）；" +
     "<b>原子层</b>管最细的一件活（校对、起草、出题、差异解读…）。</p>" +
@@ -1156,7 +1296,10 @@ function renderSkillTree() {
     "于是我能顺着你已经会的东西，讲到你想会的东西。右栏就是这份画像。</p>" +
     "<p>涉及发布、删除的动作，我一定先停下来问一次。</p>" +
     "<p><b>左边的技能库是我现在挂着的技能</b>：可以逐条勾选或关掉，也可以新建分组把常用的收在一起 —— " +
-    "改动立刻生效，下次对话就按新的来。</p>");
+    "改动立刻生效，下次对话就按新的来。</p>" +
+    "<p>想看图就直接说「<b>画个图</b>」—— 我用 ECharts 在这里画出来。能自己数的（本机有多少教案、实训、课件）" +
+    "我直接数，不麻烦模型；要成图的趋势/占比才交给模型写。</p>" +
+    "<p>每次问答都会在本机留一条记录（挂了哪些技能、哪步真跑完），出问题查得到；跑着的时候右边那个 ↑ 会变成 ■，点一下就停。</p>");
 
   const task = readHandoff();
   if (task) renderTaskBar(task);
@@ -1180,9 +1323,21 @@ $$(".suggest").forEach(function (b) {
   b.addEventListener("click", function () { $("#input").value = b.textContent; handle(b.textContent); });
 });
 
-$("#sendBtn").addEventListener("click", function () { const v = $("#input").value; $("#input").value = ""; handle(v); });
+$("#sendBtn").addEventListener("click", function () {
+  // 运行中 = 停止（同一个按钮，两种身份）；否则照常发送
+  if (busy) {
+    if (typeof abortAgent === "function") abortAgent();
+    flash("已停止 —— 等这一轮收尾", "");
+    return;
+  }
+  const v = $("#input").value; $("#input").value = ""; handle(v);
+});
 $("#input").addEventListener("keydown", function (e) {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = $("#input").value; $("#input").value = ""; handle(v); }
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    if (busy) return;                    // 运行中按回车不清空输入框（免得把话弄丢）
+    const v = $("#input").value; $("#input").value = ""; handle(v);
+  }
 });
 $("#input").addEventListener("input", function (e) {
   e.target.style.height = "auto";

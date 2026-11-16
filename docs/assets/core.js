@@ -88,6 +88,7 @@ const STORE_KEY = {
   accounts: "st_accounts",          // 本地账号库
   readMode: "st_a11y_read_mode",    // 无障碍阅读模式开关
   agentTask: "st_agent_task",       // 交给 AI 助手的任务（含原文），见 schedule.html 方式三
+  agentChat: "st_agent_chat",       // AI 对话记录（一次问答一条，按账号分桶）——见 nav.js
   scheduleImport: "st_schedule_import",  // AI 转好的课表文本（agent 页 → 课表页导入框的一次性交接）
   currentUser: "st_current_user",   // 当前登录账号（"角色:账号"）—— 数据按它分开存，见 nav.js
 };
@@ -894,6 +895,123 @@ function renderLines(lines) {
 function escHtml(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/* ============================================================
+   图表（ECharts）—— 第 62 轮
+   ------------------------------------------------------------
+   技能返回 `chart: {option}`，结果卡里那块 `[data-chart]` 由这里接管。
+   🔴 三条硬要求：
+     ① **按需加载**：只有真出现图表才去拉 echarts，首屏不为它付代价
+     ② **拉不到不装没事**：离线 / CDN 被拦时如实说一句，并保留原始数据
+     ③ **主题跟随**：ECharts 默认配色是给白底的，深色页必须把文字与网格线改浅
+   ⚠️ ECharts 已本地化：`assets/echarts.min.js`（5.5.1，约 1 MB）随交付物走，
+      断网也能画；本地缺失时自动退回 CDN。
+   ============================================================ */
+
+/* 🔴 本地优先：`assets/echarts.min.js`（Apache ECharts 5.5.1，Apache-2.0）已随交付物一起放好，
+   断网 / 内网 / 比赛现场都能画。本地拿不到（文件漏拷、路径不对）才退回 CDN ——
+   **降级顺序不能反**：先 CDN 的话，离线时每次都要白等一次超时才落到本地。 */
+var ECHARTS_SRC = "assets/echarts.min.js";
+var ECHARTS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js";
+var echartsLoading = null;
+
+function loadScriptOnce(src) {
+  return new Promise(function (resolve) {
+    if (typeof document === "undefined") return resolve(false);
+    var s = document.createElement("script");
+    s.src = src;
+    s.async = true;
+    s.onload = function () { resolve(!!window.echarts); };
+    s.onerror = function () { resolve(false); };
+    document.head.appendChild(s);
+  });
+}
+
+function ensureEcharts() {
+  if (typeof window === "undefined" || typeof document === "undefined") return Promise.resolve(false);
+  if (window.echarts) return Promise.resolve(true);
+  if (echartsLoading) return echartsLoading;
+  echartsLoading = loadScriptOnce(ECHARTS_SRC)
+    .then(function (ok) { return ok ? true : loadScriptOnce(ECHARTS_CDN); })
+    .then(function (ok) {
+      // 两条都失败 → 置空，允许用户下次点「重试」或下一张图再试一次
+      if (!ok) echartsLoading = null;
+      return ok;
+    });
+  return echartsLoading;
+}
+
+/** 深色页把轴标签 / 网格线 / 标题 / 图例改成浅色；背景一律透明（跟着卡片走） */
+function chartTheme(option) {
+  var dark = String(document.documentElement.getAttribute("data-theme") || "") === "dark";
+  var fg = dark ? "#D3D1C7" : "#444441";
+  var grid = dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)";
+  var o = JSON.parse(JSON.stringify(option || {}));
+
+  function paintAxis(a) {
+    if (!a || typeof a !== "object") return;
+    a.axisLabel = Object.assign({ color: fg }, a.axisLabel || {});
+    a.axisLine = Object.assign({ lineStyle: { color: grid } }, a.axisLine || {});
+    a.splitLine = Object.assign({ lineStyle: { color: grid } }, a.splitLine || {});
+    if (a.nameTextStyle) a.nameTextStyle = Object.assign({ color: fg }, a.nameTextStyle);
+  }
+
+  o.textStyle = Object.assign({ color: fg }, o.textStyle || {});
+  ["xAxis", "yAxis"].forEach(function (k) {
+    var ax = o[k];
+    if (!ax || typeof ax !== "object") return;
+    if (Array.isArray(ax)) ax.forEach(paintAxis); else paintAxis(ax);
+  });
+  if (o.legend && !o.legend.textStyle) o.legend.textStyle = { color: fg };
+  if (o.title && !o.title.textStyle) o.title.textStyle = { color: fg, fontSize: 13 };
+  o.backgroundColor = "transparent";
+  return o;
+}
+
+/** 把 `[data-chart]` 里的 option 真的渲染出来；返回渲染了几个 */
+function mountCharts(root) {
+  var host = root || document;
+  var boxes = Array.prototype.slice.call(host.querySelectorAll("[data-chart]"));
+  if (!boxes.length) return Promise.resolve(0);
+  return ensureEcharts().then(function (ok) {
+    boxes.forEach(function (box) {
+      var opt = box._chartOption;
+      if (!opt || box._chartDone) return;
+      box._chartDone = true;
+      if (!ok || !window.echarts) {
+        box.innerHTML = "";
+        var tip = document.createElement("div");
+        tip.className = "chart-fallback";
+        tip.textContent = "图表没画出来：这台机器连不上 ECharts 的 CDN（离线演示时会这样）。数据还在，见下面的原始值。";
+        box.appendChild(tip);
+        var pre = document.createElement("pre");
+        pre.className = "chart-raw";
+        pre.textContent = JSON.stringify((opt && opt.series) || [], null, 2);
+        box.appendChild(pre);
+        return;
+      }
+      try {
+        var inst = window.echarts.init(box, null, { renderer: "canvas" });
+        inst.setOption(chartTheme(opt), true);
+        box._chartInst = inst;
+      } catch (e) {
+        box.textContent = "图表渲染失败：" + ((e && e.message) || e);
+      }
+    });
+    return boxes.length;
+  });
+}
+
+/** 窗口变大变小时图表要跟着重算（ECharts 不会自己响应容器变化） */
+if (typeof window !== "undefined") {
+  window.addEventListener("resize", function () {
+    Array.prototype.slice.call(document.querySelectorAll("[data-chart]")).forEach(function (box) {
+      if (box._chartInst && typeof box._chartInst.resize === "function") {
+        try { box._chartInst.resize(); } catch (_) { }
+      }
+    });
+  });
 }
 
 /* ============================================================

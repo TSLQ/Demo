@@ -69,6 +69,12 @@
   .res-sec { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
   .res-sec:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
   .res-sec h4 { margin: 0 0 8px; font-size: 14px; font-weight: 500; }
+  /* 图表（ECharts）：高度必须由容器给，canvas 不会自己撑开 */
+  .res-chart { width: 100%; height: 240px; margin: 10px 0 4px; border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px; background: var(--surface); }
+  .chart-fallback { font-size: 12px; color: var(--muted-foreground); line-height: 1.6; }
+  .chart-raw { margin: 8px 0 0; max-height: 120px; overflow: auto; font-size: 11.5px;
+    color: var(--muted-foreground); white-space: pre-wrap; }
   .res-note { margin: 12px 0 0; padding: 10px 12px; border-radius: 9px; font-size: 12.5px; line-height: 1.75; background: var(--secondary); border: 1px solid var(--border); color: var(--muted-foreground); }
   .bubble table.data { font-size: 12.5px; margin: 6px 0; }
 
@@ -301,7 +307,7 @@
             <div class="composer-box">
               <label class="sr-only" for="input">告诉助手你想做什么</label>
               <textarea id="input" rows="1"
-                placeholder="例如：我哪块最弱 / 用我懂的类比讲讲「图」/ 考考我"></textarea>
+                placeholder="例如：我哪块最弱 / 用我懂的类比讲讲「图」/ 画个图看看我这周的提问"></textarea>
               <button class="send-btn" id="sendBtn" title="发送" aria-label="发送">↑</button>
             </div>
             <div class="composer-foot">
@@ -400,37 +406,60 @@ function flash(msg, tone) {
   flashTimer = setTimeout(function () { box.hidden = true; }, 3000);
 }
 
-/** 学生端的动作链：**没有「等待确认」那一支** —— 学生端压根没有会改动的技能 */
-function runSteps(steps, done) {
+/**
+ * 学生端的动作链：**没有「等待确认」那一支** —— 学生端压根没有会改动的技能。
+ * 🔴 第 62 轮：打勾只认技能链回报的真实结果（`runs.executed`），
+ *    不再「无条件 setTimeout 打 ✓」—— 那是界面在撒谎。
+ */
+function runSteps(steps) {
+  // 一个动作都没有（例如只跑了 chainless 的画像跟进）→ 不摆一条空的动作链
+  if (!steps.length) {
+    return { el: null, settle: function (runs, done) { if (typeof done === "function") done(); } };
+  }
   const chain = el('<div class="tool-chain"><div class="tc-head"><span class="tc-spin"></span>' +
     '<span>正在做 ' + steps.length + ' 个动作…</span></div><div class="tc-list"></div></div>');
   logEl.appendChild(chain);
   const listEl = chain.querySelector(".tc-list");
   const head = chain.querySelector(".tc-head");
-  let i = 0;
-  const next = function () {
-    if (i >= steps.length) {
-      head.innerHTML = '<span class="tc-spin tc-done"></span><span>做完了（都是只读动作）</span>';
-      done();
-      return;
-    }
-    const s = steps[i];
+  const nodes = steps.map(function (s) {
     const node = el('<div class="tc-step run"><span class="tc-ico">›</span><div class="tc-body">' +
       '<div class="tc-name">' + escHtml(s.name) + '<span class="tc-src">' + escHtml(SKILL_LAYER[s.layer].name) + "</span></div>" +
       '<div class="tc-arg">' + escHtml(s.arg || "—") + "</div></div></div>");
     listEl.appendChild(node);
-    logEl.scrollTop = logEl.scrollHeight;
-    i++;
-    setTimeout(function () {
-      node.classList.remove("run"); node.classList.add("ok");
-      node.querySelector(".tc-ico").textContent = "✓";
-      node.querySelector(".tc-body").insertAdjacentHTML("beforeend",
-        '<div class="tc-arg" style="color:var(--success)">→ 完成</div>');
-      logEl.scrollTop = logEl.scrollHeight;
-      next();
-    }, 300);
+    return node;
+  });
+  logEl.scrollTop = logEl.scrollHeight;
+
+  const mark = function (node, state, ico, note) {
+    node.classList.remove("run");
+    node.classList.add(state);
+    node.querySelector(".tc-ico").textContent = ico;
+    if (note) node.querySelector(".tc-body").insertAdjacentHTML("beforeend",
+      '<div class="tc-arg"' + (state === "ok" ? ' style="color:var(--success)"' : "") + ">→ " + escHtml(note) + "</div>");
   };
-  next();
+
+  return {
+    el: chain,
+    settle: function (runs, done) {
+      const executed = (runs && runs.executed) || [];
+      const failed = ((runs && runs.failed) || []).reduce(function (m, f) { m[f.name] = f.error; return m; }, {});
+      steps.forEach(function (s, i) {
+        const nm = (function () {
+          const sk = (typeof skillOf === "function") ? skillOf(s.skill, "student") : null;
+          return sk ? sk.name : "";
+        })();
+        const node = nodes[i];
+        if (nm && failed[nm]) mark(node, "skip", "—", "没跑成：" + failed[nm]);
+        else if (nm && executed.indexOf(nm) >= 0) mark(node, "ok", "✓", "真跑完了");
+        else mark(node, "skip", "—", "仅流程说明（这条技能这次没有执行器）");
+      });
+      const okN = nodes.filter(function (n) { return n.classList.contains("ok"); }).length;
+      head.innerHTML = '<span class="tc-spin tc-done"></span><span>已核对 ' + steps.length +
+        " 个动作：<b>" + okN + "</b> 个真跑完（其余只是说明）</span>";
+      logEl.scrollTop = logEl.scrollHeight;
+      if (typeof done === "function") done();
+    },
+  };
 }
 
 /** 跑一串技能 —— 🔴 实现在 nav.js（`runSkillChain`），工作台与两页共用同一份 */
@@ -442,6 +471,12 @@ function addResult(runs, back, meta) {
   runs.secs.forEach(function (s) {
     const sec = el('<div class="res-sec"><h4>' + escHtml(s.title) + "</h4><div></div></div>");
     sec.querySelector("div").innerHTML = renderLines(s.lines);
+    // 图表：先挂 option，等节点进文档拿到宽度后再由 core.js 的 mountCharts 渲染
+    if (s.chart) {
+      const wrap = el('<div class="res-chart" data-chart="1"></div>');
+      wrap._chartOption = s.chart;
+      sec.appendChild(wrap);
+    }
     box.appendChild(sec);
   });
   if (runs.notes.length) {
@@ -470,45 +505,93 @@ function addResult(runs, back, meta) {
   }
   logEl.appendChild(node);
   logEl.scrollTop = logEl.scrollHeight;
+  // 图要等节点进了文档、拿到宽度之后再画（ECharts 读不到尺寸会画成 0×0）
+  if (typeof mountCharts === "function") mountCharts(node);
 }
 
 let busy = false;
+
+/** 运行中：同一个按钮变成「停止」（点一下 = 中断这次请求） */
+function setRunUI(on) {
+  const b = $("#sendBtn");
+  if (!b) return;
+  b.classList.toggle("is-stop", !!on);
+  b.textContent = on ? "■" : "↑";
+  b.title = on ? "停止（正在跑，点一下中断）" : "发送";
+  b.setAttribute("aria-label", on ? "停止" : "发送");
+  b.disabled = false;
+}
+
+function finishRun() {
+  busy = false;
+  setRunUI(false);
+  if (typeof abortAgent === "function") abortAgent();
+  renderPersona();
+  const inp = $("#input");
+  if (inp) inp.focus();
+}
+
+/** 一句话摘要（进对话记录用） */
+function replyDigest(runs) {
+  const s = (runs && runs.secs && runs.secs[0]) || null;
+  if (!s) return "（没有结果）";
+  const first = (s.lines || []).filter(function (l) { return String(l).trim(); })[0] || "";
+  return String(s.title || "") + "：" +
+    String(first).replace(/[*`>#|]/g, "").replace(/^-+\s*/, "").slice(0, 60);
+}
 
 function handle(text) {
   if (busy) return;
   const t = String(text || "").trim();
   if (!t) return;
   busy = true;
-  $("#sendBtn").disabled = true;
+  setRunUI(true);
+  if (typeof startAgentRun === "function") startAgentRun();
+  const t0 = Date.now();
   addMe(t);
 
   const ctx = routeCtx();
+  ctx.history = (typeof agentChatHistory === "function") ? agentChatHistory(6) : [];
+  ctx.budgetReport = [];
+  ctx.signal = (typeof agentRunSignal === "function") ? agentRunSignal() : null;
   const route = routeSkills(t, ctx);
   logEl.appendChild(skillChainEl(route));
 
-  // 谁该跑 —— 🔴 实现在 nav.js（`runnableIds`），三个页面共用同一份判断
+  // 谁该跑 —— 🔴 实现在 nav.js（`runnableIds`），两页共用同一份判断
   const ids = runnableIds(route);
   const runChain = route.chain.filter(function (s) { return ids.indexOf(s.id) >= 0; });
 
   // 全关掉了（含系统层）→ 说清楚，不能给一片空白
   if (!ids.length) {
     addMsg("<p>这次<b>一条技能都没挂</b> —— 你把它们都关掉了。在左栏勾上至少一条（或点「恢复默认」），我再试。</p>");
-    busy = false;
-    $("#sendBtn").disabled = false;
+    finishRun();
     return;
   }
   const steps = planFromChain(runChain, { role: "student", chain: runChain });
-  runSteps(steps, function () {
-    // 学生端技能全是只读、执行器也是同步的；这里统一 then 一次，
-    // 与教师端共用同一条管线（万一以后有异步技能也不用再改这里）。
-    Promise.resolve(runSkills(ids, {}, ctx)).then(function (runs) {
+  // 🔴 先跑技能，再落动作链（打勾只认真实结果）
+  const flow = runSteps(steps);
+  Promise.resolve(runSkills(ids, { ask: t }, ctx)).then(function (runs) {
+    flow.settle(runs, function () {
       addResult(runs, null,
         { input: t, fromId: primarySkillId(route, ids), courseId: ctx.courseId });
-      busy = false;
-      $("#sendBtn").disabled = false;
-      renderPersona();
-      $("#input").focus();
+      if (typeof pushAgentChat === "function") {
+        pushAgentChat({
+          ask: t,
+          reply: replyDigest(runs),
+          chain: route.chain.map(function (s) { return s.layer + ":" + s.name; }),
+          executed: runs.executed,
+          failed: runs.failed,
+          aborted: !!runs.aborted,
+          budget: ctx.budgetReport,
+          ms: Date.now() - t0,
+        });
+      }
+      if (runs.aborted) addMsg("<p>这次请求被你停下了 —— 上面是停下前的那部分。</p>");
+      finishRun();
     });
+  }).catch(function (e) {
+    addMsg("<p>这次没跑完：" + escHtml(String((e && e.message) || e)) + "</p>");
+    finishRun();
   });
 }
 
@@ -840,8 +923,43 @@ function renderSkillTree() {
     "<br>勾选＝以后会挂，取消＝关掉；这里<b>没有会改动数据的技能</b>";
 }
 
+/* ---------- 对话记录（本机，最近 60 条；按账号分桶） ---------- */
+function renderChatHistory() {
+  if (typeof loadAgentChat !== "function") return;
+  const list = loadAgentChat();
+  if (!list.length) return;
+  const last = list.slice(-6);
+  const box = el('<details class="skill-chain"><summary class="sc-head" style="cursor:pointer">' +
+    '<b>最近 ' + last.length + ' 轮对话（本机记录）</b>' +
+    '<span>点开看 · 换浏览器或换端口就没了</span></summary></details>');
+  last.forEach(function (r) {
+    box.appendChild(el('<div class="lg"><div class="lg-head" style="display:block">' +
+      '<div><b>' + escHtml(r.ask || "") + '</b> <span class="lg-tag">' +
+      escHtml(agoText(r.at, Date.now())) + "</span></div>" +
+      '<div class="sk-why">→ ' + escHtml(r.reply || "（没有结果）") + "</div>" +
+      '<div class="sk-steps">挂了 ' + ((r.chain || []).length) + " 个技能 · 真跑完 " +
+      ((r.executed || []).length) + " 个" +
+      (r.aborted ? " · 被中途停下" : "") +
+      (r.ms ? " · " + (Math.round(r.ms / 100) / 10) + " 秒" : "") +
+      "</div></div></div>"));
+  });
+  box.appendChild(el('<div class="lg"><div class="lg-head" style="display:block">' +
+    '<a href="#" id="chatClear">清空对话记录</a></div></div>'));
+  logEl.appendChild(box);
+  const a = box.querySelector("#chatClear");
+  if (a) a.addEventListener("click", function (e) {
+    e.preventDefault();
+    if (typeof clearAgentChat !== "function") return;
+    if (!window.confirm("清空本机保存的 AI 对话记录？\n\n只清这份记录 —— 你的行为记录与画像都不动。")) return;
+    clearAgentChat();
+    box.remove();
+    flash("对话记录已清空", "ok");
+  });
+}
+
 /* ---------- 启动 ---------- */
 (function boot() {
+  renderChatHistory();   // 先把本机存着的最近几轮摆出来（没有就不显示）
   const cid = (typeof ENROLLED !== "undefined" && ENROLLED[0]) ? ENROLLED[0].courseId : "";
   if (cid && typeof studentCourseName === "function") {
     $("#crumbText").textContent = studentCourseName(cid) + " · 学习助手";
@@ -852,7 +970,9 @@ function renderSkillTree() {
     "原子层是具体到「定位薄弱」「类比讲解」「生成自测」这样的活 —— 你说一句话，我先路由，命中了什么都摊开给你看。</p>" +
     "<p><b>一份画像</b>：你标过「懂了」的我就当你会了；反复问又没标懂的，我就当还没通。" +
     "于是我能<b>顺着你已经会的东西讲你想会的</b> —— 比如你懂树，我就从树推到图。</p>" +
-    "<p>我不改动你的任何数据，也不替你答题。</p>");
+    "<p>我不改动你的任何数据，也不替你答题。</p>" +
+    "<p>想看图就说「<b>画个图</b>」—— 我用 ECharts 画（没数据时我会直接说没数据，不瞎编）。" +
+    "跑着的时候右边那个 ↑ 会变成 ■，点一下就停。</p>");
 
   renderSkillTree();
   renderPersona();
@@ -893,9 +1013,21 @@ $("#skillResetBtn").addEventListener("click", function () {
 });
 document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeSpMenu(); });
 
-$("#sendBtn").addEventListener("click", function () { const v = $("#input").value; $("#input").value = ""; handle(v); });
+$("#sendBtn").addEventListener("click", function () {
+  // 运行中 = 停止（同一个按钮，两种身份）；否则照常发送
+  if (busy) {
+    if (typeof abortAgent === "function") abortAgent();
+    flash("已停止 —— 等这一轮收尾", "");
+    return;
+  }
+  const v = $("#input").value; $("#input").value = ""; handle(v);
+});
 $("#input").addEventListener("keydown", function (e) {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = $("#input").value; $("#input").value = ""; handle(v); }
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    if (busy) return;                    // 运行中按回车不清空输入框
+    const v = $("#input").value; $("#input").value = ""; handle(v);
+  }
 });
 $("#input").addEventListener("input", function (e) {
   e.target.style.height = "auto";

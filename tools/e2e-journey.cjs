@@ -699,6 +699,67 @@ async function main() {
     p.close();
   }
 
+  /* ============================================================
+     四、第 62 轮的新能力：画图 / 停止 / 对话记录 / 画像跟进
+     ============================================================ */
+  console.log("\n【四】新能力：画图、停止、对话记录、画像跟进");
+
+  step("T17", "画图：不接模型也能按本机记录画（确定性那条路）");
+  {
+    B.login("teacher", "teacher");
+    const p = await B.open("agent.html");
+    p.fill("#input", "画个图看看本机有多少教案和实训");
+    p.click("#sendBtn");
+    let w = 0;
+    while (!p.$("#chatLog .res-card") && w < 8000) { await sleep(80); w += 80; }
+    chk(!!p.$("#chatLog .res-card"), "画图这句出了结果卡", "画图没有结果卡");
+    chk(p.has("#chatLog .res-card .res-chart"), "结果卡里有图表挂载点（ECharts 容器）", "没有图表容器");
+    chk(/课时教案/.test(p.text()), "图的数据点明了口径（课时教案 / 实训…）", "没说明数据从哪来");
+    p.close();
+  }
+
+  step("T18", "运行中：发送按钮变停止，点了真能中断（超时/挂起不再锁死页面）");
+  {
+    B.login("teacher", "teacher");
+    const p = await B.open("agent.html");
+    // 一个永远不返回、但**尊重 abort** 的 fetch —— 模拟"接口卡住"
+    p.w.fetch = function (_url, opt) {
+      return new Promise(function (_res, rej) {
+        const sig = opt && opt.signal;
+        if (sig) sig.addEventListener("abort", function () {
+          const e = new Error("Aborted"); e.name = "AbortError"; rej(e);
+        });
+      });
+    };
+    p.fill("#input", "帮我起草第 7 章的教案");
+    p.click("#sendBtn");
+    let w = 0;
+    while (w < 3000 && !/■/.test(p.$("#sendBtn").textContent)) { await sleep(40); w += 40; }
+    chk(/■/.test(p.$("#sendBtn").textContent), "跑起来之后按钮变成停止（■）", "按钮没变成停止");
+    chk(p.$("#sendBtn").className.indexOf("is-stop") >= 0, "按钮带上 is-stop 态（样式与语义一致）", "缺 is-stop 态");
+    p.click("#sendBtn");     // 停止
+    w = 0;
+    while (w < 4000 && /■/.test(p.$("#sendBtn").textContent)) { await sleep(40); w += 40; }
+    chk(/↑/.test(p.$("#sendBtn").textContent), "停下后按钮恢复成发送（↑）", "停下后按钮没恢复");
+    chk(!p.$("#sendBtn").disabled, "按钮没被 disable 掉（还能再发）", "按钮被 disable，页面锁死");
+    p.close();
+  }
+
+  step("T19", "对话记录 + 画像跟进：一次问答落一条，画像勾着就 100% 跑");
+  {
+    B.login("teacher", "teacher");
+    const p = await B.open("agent.html");
+    p.fill("#input", "你能做什么");
+    p.click("#sendBtn");
+    let w = 0;
+    while (!p.$("#chatLog .res-card") && w < 8000) { await sleep(80); w += 80; }
+    chk(/画像跟进/.test(p.text()), "「画像跟进」这条系统技能每次都跑（勾选 = 100%）", "画像跟进没跑");
+    const raw = p.stored("st_agent_chat:teacher:teacher") || "";
+    chk(/"ask"/.test(raw), "对话记录落进了本机（st_agent_chat:<角色>:<账号>）", "对话记录没落库");
+    chk(/"executed"/.test(raw) && /"chain"/.test(raw), "记录里有技能链与真实执行结果（可事后追溯）", "记录缺关键字段");
+    p.close();
+  }
+
   /* ---------- 汇总 ---------- */
   console.log("\n" + "═".repeat(62));
   console.log("  运行时错误：" + (errors.length ? errors.length + " 个" : "0 个 ✓"));

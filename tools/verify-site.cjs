@@ -4225,6 +4225,48 @@ function verifySkillData() {
   probe("routeSkills('随便说点什么', { role: 'student' }).atomic.length") === 0
     ? pass("原子层只在真命中时才挂（没提到那件活就不挂）") : fail("原子层乱挂");
 
+  /* --- ④b 第 62 轮：画图 / 上下文预算 / 对话记录 / 画像跟进 --- */
+  probe("roleSkills('teacher').some((s) => s.id === 'atom-chart') && roleSkills('student').some((s) => s.id === 'atom-chart')")
+    ? pass("「画图」技能两端都有") : fail("画图技能缺失");
+  /atom-chart/.test(hit("把本机记录画成柱状图", "teacher"))
+    ? pass("「画成柱状图」命中 atom-chart") : fail("画图没命中");
+  probe("(function(){var r=localChartOption('本机有多少教案');return !!r && !!r.chart && Array.isArray(r.chart.series);})()")
+    ? pass("可数的图自己算（确定性，不经过模型）") : fail("localChartOption 没出图");
+  probe("localChartOption('把作业提交率画成柱状图')") === null
+    ? pass("不该接管的说法让给模型（不误判成「数条数」）") : fail("localChartOption 抢了不该抢的活");
+  probe("normalizeChartOption('{\"option\":{\"series\":[{\"type\":\"bar\",\"data\":[1,2]}]}}').ok")
+    ? pass("模型给的合法 option 能过校验") : fail("合法 option 被拒");
+  probe("normalizeChartOption('这不是 JSON').ok") === false
+    ? pass("不合法的 option 被拒（不拿半截去渲染空白图）") : fail("坏 option 被放过");
+  probe("normalizeChartOption('{\"option\":{\"series\":[{\"type\":\"bar\",\"data\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40]}]}}').option.series[0].data.length") <= 30
+    ? pass("数据点被收到 30 个以内（防一张图塞爆）") : fail("数据点没收敛");
+  probe("(function(){var t=fitContext({system:'s',task:new Array(9000).join('x'),history:[{role:'user',content:new Array(5000).join('y')}]});return t.report.length>0 && t.chars < 16000;})()")
+    ? pass("上下文按预算截断，并留下「省略了多少字」的记录") : fail("上下文预算没生效");
+  probe("compactHistory([{role:'user',content:'a'},{role:'assistant',content:'b'},{role:'user',content:'c'}], 2).dropped >= 1")
+    ? pass("历史装不下时丢最老的（不是丢最新的）") : fail("历史裁剪顺序错了");
+  probe("(function(){var t=fitContext({system:'s',task:'x',history:[{role:'user',content:'a'},{role:'assistant',content:'b'}]});return t.messages.length>0;})()")
+    ? pass("装配出的是完整 messages（含历史轮次）") : fail("messages 装配失败");
+  probe("(function(){var r=routeSkills('你能做什么',{role:'teacher'});return runnableIds(r).indexOf('sys-persona-sync')>=0;})()")
+    ? pass("「画像跟进」勾着就 100% 跑（不看关键词）") : fail("画像跟进没进执行列表");
+  probe("(function(){var r=routeSkills('你能做什么',{role:'teacher'});return planFromChain(r.chain,{role:'teacher'}).filter(function(s){return s.skill==='sys-persona-sync';}).length;})()") === 0
+    ? pass("「画像跟进」不进动作链（后台核对不该占一条动作）") : fail("画像跟进挤进了动作链");
+  probe("(function(){var u=currentUserKey();return agentChatStoreKey() === (u ? 'st_agent_chat:' + u : 'st_agent_chat');})()")
+    ? pass("对话记录按账号分桶（st_agent_chat:<角色>:<账号>）") : fail("对话记录键没分桶");
+  probe("(function(){var c=startAgentRun();var s=agentRunSignal();abortAgent();return !!c && !!s && s.aborted;})()")
+    ? pass("中断信号能建能停（停止按钮的底座）") : fail("中断机制没生效");
+  /* 图表底座：本地 echarts 存在且是真的构建 —— 断网 / 内网 / 比赛现场演示的硬前提。
+     只检查「文件在」不够：下到一半的文件同样存在，渲染时才炸。 */
+  (function () {
+    const f = path.join(SITE, "assets", "echarts.min.js");
+    if (!fs.existsSync(f)) { fail("本地 echarts.min.js 缺失（断网演示会画不出图）"); return; }
+    const s = fs.readFileSync(f, "utf8");
+    if (s.length < 500 * 1024) { fail("echarts.min.js 只有 " + Math.round(s.length / 1024) + " KB，像是没下完"); return; }
+    if (!/Licensed to the Apache Software Foundation/.test(s.slice(0, 400)) || !/\.version\s*=\s*["']?5\./.test(s)) { fail("echarts.min.js 不是有效的 5.x 构建产物"); return; }
+    pass("本地 ECharts 已就位（" + Math.round(s.length / 1024) + " KB），断网也能画图");
+  })();
+  /ECHARTS_SRC\s*=\s*"assets\/echarts\.min\.js"/.test(fs.readFileSync(path.join(SITE, "assets", "core.js"), "utf8"))
+    ? pass("ECharts 加载顺序是「本地优先、CDN 兜底」") : fail("ECHARTS_SRC 没指向本地文件（离线会白屏）");
+
   /* --- ⑤ runSkill：能算的当场算（确定性，不假动作） --- */
   /* 🔴 下面这几条验的是「**没接模型**时给结构骨架」。桩化沙箱是共享的，前面的用例可能
      写过 Key —— 修好 readKeyValue（兼容裸串）之后它会**真的被读到**，于是技能转去调模型、
@@ -4258,6 +4300,48 @@ function verifySkillData() {
     ? pass("起草教案如实说明「成文需要 API Key」") : fail("没有 Key 的降级说明缺失");
   probe("runSkill('no-such-skill', {}, { role: 'teacher' }).ok") === false
     ? pass("跑不存在的技能返回 ok:false（不静默失败）") : fail("未知技能没有报错");
+
+  /* --- ⑤b 质量评分（AI 自评）：量表是抄公开研究的，分是模型给的 —— 两头都要能核 --- */
+  probe("LESSON_RUBRIC.length") === 6 && probe("LESSON_RUBRIC.every(function(r){return !!r.id && !!r.name && !!r.hi && !!r.mid;})")
+    ? pass("评分量表 6 项齐全（结构/目标/课时/讲解/练习/事实）") : fail("评分量表不完整");
+  const RV_OK = JSON.stringify({
+    items: [
+      { id: "G0", score: 2, why: "六个小节齐全" },
+      { id: "G1", score: 2, why: "目标用了可观察动词" },
+      { id: "G2", score: 2, why: "45 分钟能讲完" },
+      { id: "G3", score: 1, why: "有步骤但没有示范" },
+      { id: "G4", score: 2, why: "练习附了答案" },
+      { id: "G5", score: 2, why: "引用章节真实存在" },
+    ],
+    top_fix: "补一个讲解示范",
+  });
+  const rvOf = function (json) {
+    const raw = probe("(function(){var r=normalizeReview('" + String(json).replace(/'/g, "") +
+      "');return JSON.stringify({ok:r.ok,sum:r.sum,rated:r.rated,gate:r.gate,verdict:r.verdict,top:r.topFix,first:(r.items&&r.items[0]||{}).score});})()");
+    try { return JSON.parse(raw); } catch (_) { return {}; }
+  };
+  const rvA = rvOf(RV_OK);
+  rvA.sum === 11 && rvA.rated === 6 ? pass("合法评分能算出合计（11/12）") : fail("合计算错：" + JSON.stringify(rvA));
+  rvA.verdict === "可用" && rvA.top === "补一个讲解示范" ? pass("给出结论与「最该改的一处」") : fail("结论/最该改缺失");
+  rvOf(JSON.stringify({ items: [{ id: "G0", score: 0, why: "缺练习小节" }], top_fix: "补练习" })).gate
+    ? pass("结构项 0 分 → 直接判不通过（门禁，不往下算分）") : fail("门禁没生效");
+  rvOf(JSON.stringify({ items: [{ id: "G0", score: 3, why: "看着不错" }] })).first === null
+    ? pass("模型给 3 分 → 记「未评」，不四舍五入成假分数") : fail("超范围的分被收下了");
+  rvOf(JSON.stringify({ items: [{ id: "G0", score: 2, why: "" }] })).first === null
+    ? pass("没给依据 = 没给分（量表要求每项必须说依据）") : fail("无理由的分被收下了");
+  probe("normalizeReview('这不是 JSON').ok") === false
+    ? pass("不合法的评分 JSON 被拒（不拿半截表格糊弄）") : fail("坏 JSON 被放过");
+  const rl = probe("reviewLines(normalizeReview('" + RV_OK + "')).join('\\n')");
+  /\| 维度 \| 分 \| 依据 \|/.test(rl) && /最该改的一处/.test(rl)
+    ? pass("评分渲染成表格 + 「最该改的一处」") : fail("评分表格没渲染出来");
+  probe("reviewSystemPrompt()").indexOf("只输出一个 JSON") >= 0 && ["G0", "G1", "G2", "G3", "G4", "G5"].every((id) => probe("reviewSystemPrompt()").indexOf(id) >= 0)
+    ? pass("提示词写清了输出形状与 6 个分项（模型不会自由发挥）") : fail("提示词缺项");
+  probe("String(runSkill('atom-lesson-check', { text: " + JSON.stringify(LESSON_MD) + " }, { role: 'teacher' }).note || '')").indexOf("接模型") >= 0
+    ? pass("没 Key 时如实说「分数要接模型」，不编分") : fail("无 Key 没交代清楚");
+  probe("runSkill('atom-lesson-check', {}, { role: 'teacher' }).lines.join('')").indexOf("评分做不了") >= 0
+    ? pass("没正文时拒评，并说清怎么给正文") : fail("空正文仍然硬评");
+  /data-act="review"/.test(fs.readFileSync(path.join(SITE, "agent.html"), "utf8"))
+    ? pass("结果卡上有「AI 评分」入口（不用手复制粘贴）") : fail("评分入口没挂上");
 
   /* --- ⑥ 画像：从行为推，且能解释 --- */
   const BEH = [];

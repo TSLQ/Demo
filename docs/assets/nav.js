@@ -3992,6 +3992,39 @@ var SYSTEM_SKILLS = [
       return { ok: true, title: "改前确认", lines: lines };
     },
   },
+  {
+    id: "sys-persona-sync", layer: "system", always: true, alwaysRun: true, chainless: true, kind: "read",
+    role: ["teacher", "student"],
+    name: "画像跟进",
+    desc: "每次对话先看一眼：你的行为有没有变、现在的讲法还合不合适；有变化才改画像，没变化就明说「已是最新」",
+    when: "它不看关键词 —— 只要在左栏勾着，每次对话都会跑一次（勾选 = 100% 触发）",
+    keys: [],
+    steps: [{ name: "比对最新行为与当前画像", arg: "source=st_behavior + st_persona" }],
+    // ⚠️ `chainless: true` = 它**会执行**但不进动作链（见 planFromChain）：
+    //    它产出的是"画像有没有更新"，不是一次要做的事，进链只会每次多一条噪音。
+    run: function (p, ctx) {
+      const before = Number(MY_PERSONA.fittedFrom) || 0;
+      const fit = fitPersona(Date.now());
+      const prof = fit.profile;
+      const lines = [];
+      if (fit.changes.length) {
+        lines.push("**这次对画像动了 " + fit.changes.length + " 处**（依据你本机 " + prof.total + " 条行为记录）：");
+        fit.changes.forEach(function (c) { lines.push("- " + c); });
+      } else {
+        const grew = prof.total - before;
+        lines.push("画像**已经是最新的** —— 依据 " + prof.total + " 条行为记录" +
+          (grew > 0 ? "（比上次核对多了 " + grew + " 条，但没到改讲法的门槛）" : "") + "。");
+        lines.push("门槛是硬的：至少 3 次提问才看偏好比例，标「懂了」的比例过线才调步子 —— 依据不足我不瞎调。");
+      }
+      lines.push("");
+      lines.push("现在这么讲：" + personaFitLine(prof));
+      return {
+        ok: true, title: "画像跟进", lines: lines,
+        note: "它勾着的时候每次对话都跑一次（这就是「勾选 = 100% 触发」）；改了什么都写在这里，右栏的磨合记录里也留一份。" +
+          "只动讲法（开口 / 步子 / 常用 / 避免 / 已知与卡点），**不动技能本身的定义** —— 自动改技能比不改危险。",
+      };
+    },
+  },
 ];
 
 /* ------------------------------------------------------------
@@ -4228,13 +4261,14 @@ var ATOMIC_SKILLS = [
   {
     id: "atom-lesson-check", layer: "atomic", kind: "read", role: ["teacher"],
     name: "教案自查",
-    desc: "课时时长加总对不对、六个小节有没有漏、重点与难点是不是重了",
-    when: "用户说「教案有没有问题」「自查」「帮我看看哪不对」时",
-    keys: ["自查", "教案", "时长", "分钟", "漏", "完整", "检查"],
+    desc: "先查时长加总、六个小节有没有漏、重点与难点是否重复；接上模型再按 6 项量表评分",
+    when: "用户说「教案有没有问题」「自查」「自评」「这份能不能上课」时",
+    keys: ["自查", "教案", "时长", "分钟", "漏", "完整", "检查", "自评", "够不够", "能不能用", "挑毛病"],
     steps: [
       { name: "解析教案六个小节", arg: "source=Markdown 结构" },
       { name: "加总课堂流程时长", arg: "compare=课时长度" },
       { name: "比对重点与难点", arg: "rule=重复即提示" },
+      { name: "按量表评分", arg: "rubric=6 项 × 0/1/2（需接模型）" },
     ],
   },
   {
@@ -4307,6 +4341,19 @@ var ATOMIC_SKILLS = [
     steps: [
       { name: "取教学重点与难点", arg: "source=教案" },
       { name: "排分档维度", arg: "levels=优秀/合格/待改进" },
+    ],
+  },
+  {
+    id: "atom-chart", layer: "atomic", kind: "read", role: ["teacher", "student"],
+    name: "画图",
+    desc: "把一组数据画成图（柱状 / 折线 / 饼 / 散点），用 ECharts 在对话里直接渲染出来",
+    when: "用户说「画个图」「做成图表」「看看趋势」「对比一下」「占比多少」时",
+    keys: ["画图", "画个图", "画一张", "图表", "柱状图", "折线图", "饼图", "饼状图", "散点", "可视化",
+      "趋势", "对比一下", "占比", "分布", "统计一下", "echarts"],
+    steps: [
+      { name: "定数据与口径", arg: "source=你说的话 / 本机记录" },
+      { name: "选图表类型", arg: "rule=时间→折线 · 占比→饼 · 类别对比→柱" },
+      { name: "生成 option 并渲染", arg: "format=echarts option JSON" },
     ],
   },
   {
@@ -4676,7 +4723,279 @@ var AI_SYS = {
     "认不出来的行原样保留，不要猜。",
 };
 
+/* ------------------------------------------------------------
+   画图（第 62 轮）—— ECharts
+   ------------------------------------------------------------
+   分工沿用全项目那一条：**能算的自己算，要成图的交给模型**。
+     · 「本机有多少教案 / 实训 / 课件 / 试卷」→ `localChartOption()` 直接数数组长度，
+       确定性、没 Key 也能画（图上的数就是存档里的数，不是模型编的）
+     · 其它（趋势、占比、对比）→ 模型写 ECharts option，`normalizeChartOption()` 收形状：
+       series ≤ 3 条、每条 ≤ 30 个点、只留白名单字段（JSON 里本来也不该有函数）
+   🔴 校验不过就如实报错，**不拿半截 option 去渲染**（渲染出来是空白图，比报错更难查）。
+   ============================================================ */
+
+var CHART_SYS =
+  "你是数据可视化助手。把我给的要求转成**一个 ECharts option**，用 JSON 输出；不要解释、不要注释、不要函数。" +
+  "形状：{\"title\":\"一句话图题\",\"option\":{...}}。" +
+  "规则：series 结构完整；类别轴写 type:\"category\"；标签用中文；" +
+  "series 最多 3 条、每条 data 最多 30 个点；**不要写 backgroundColor**（页面按主题套）；" +
+  "数据不够就少画两条，绝不要编造数字。";
+
+/** 本机可数的那几类资源（画图用的确定性数据源） */
+var CHART_RES = [
+  { name: "课程", get: function () { return (typeof COURSES !== "undefined" ? COURSES : []); } },
+  { name: "课时教案", get: function () { return (typeof LESSONS !== "undefined" ? LESSONS : []); } },
+  { name: "实训活动", get: function () { return (typeof ACTIVITIES !== "undefined" ? ACTIVITIES : []); } },
+  { name: "课件", get: function () { return (typeof CWS !== "undefined" ? CWS : []); } },
+  { name: "试卷", get: function () { return (typeof EXAMS !== "undefined" ? EXAMS : []); } },
+];
+
+/**
+ * 数一条存档里有几条。
+ * ⚠️ 不能一律用 `.length` —— 各数据层的形状不统一（有的是数组，有的是 id→对象 的字典），
+ *    用 `.length` 读字典会得到 undefined（图上就是一条 0 柱，看着像"没有数据"，其实是读错了）。
+ */
+function countOf(x) {
+  if (!x) return 0;
+  if (Array.isArray(x)) return x.length;
+  if (typeof x === "object") return Object.keys(x).length;
+  return 0;
+}
+
+/**
+ * 能自己数的就别问模型。
+ * 🔴 只在「问数量/分布 + 点到具体资源」时才接管 —— 别的说法一律返回 null 让给模型，
+ *    否则「把作业提交率画成柱状图」会被误判成"数作业条数"，画出来的图是错的。
+ */
+function localChartOption(ask) {
+  const q = String(ask || "");
+  if (!/数量|条数|多少|几个|几份|几张|统计|分布/.test(q)) return null;
+  if (!/教案|课时|实训|课件|试卷|课程|作业/.test(q)) return null;
+  const names = [], vals = [];
+  CHART_RES.forEach(function (r) {
+    let v = 0;
+    try { v = countOf(r.get()); } catch (_) { v = 0; }
+    names.push(r.name); vals.push(v);
+  });
+  const total = vals.reduce(function (a, b) { return a + b; }, 0);
+  return {
+    ok: true, title: "本机记录有多少",
+    lines: total
+      ? [
+        "按**这台浏览器里的真实记录**数的（不是教务系统）：" +
+          names.map(function (n, i) { return n + " " + vals[i]; }).join("、") + "。",
+        "换浏览器或换端口，这些数会变成 0 —— 数据不跟着走。",
+      ]
+      : [
+        "本机这几类记录**现在都是 0** —— 图还是照实画（全 0 也是一张图），但先说清楚：**一个真实数据点都没有**，不是我藏了数据。",
+        "先去建一门课、写一份教案，回头再问一次，柱子就起来了。",
+      ],
+    chart: {
+      title: { text: "本机记录条数", left: "center", textStyle: { fontSize: 13 } },
+      grid: { left: 52, right: 24, top: 46, bottom: 32 },
+      xAxis: { type: "category", data: names },
+      yAxis: { type: "value", minInterval: 1 },
+      series: [{ type: "bar", data: vals, barMaxWidth: 40, label: { show: true, position: "top" } }],
+    },
+    note: total
+      ? "这张图是**确定性统计**（存档里到底有几条），没经过模型 —— 所以没 Key 也能画。"
+      : "全 0 的图也照实画 —— 空状态不该靠一句「暂无数据」糊过去。",
+  };
+}
+
+/** 模型给的 option → 收窄成能渲染的形状；不合法就 `{ok:false,error}`（不塞半截去渲染） */
+function normalizeChartOption(raw) {
+  let s = String(raw == null ? "" : raw).trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  const a = s.indexOf("{"), b = s.lastIndexOf("}");
+  if (a < 0 || b <= a) return { ok: false, error: "模型没有给出 JSON（可能被内容策略拦了，换个说法再试）" };
+  let box;
+  try { box = JSON.parse(s.slice(a, b + 1)); } catch (_) { return { ok: false, error: "模型给的 JSON 解析不了" }; }
+  const opt = (box && box.option && typeof box.option === "object") ? box.option : box;
+  let series = Array.isArray(opt && opt.series) ? opt.series : (opt && opt.series ? [opt.series] : []);
+  series = series.filter(function (x) { return x && typeof x === "object"; }).slice(0, 3).map(function (sr) {
+    const c = {};
+    ["type", "name", "data", "stack", "smooth", "radius", "center", "barMaxWidth",
+      "label", "itemStyle", "areaStyle"].forEach(function (k) { if (sr[k] != null) c[k] = sr[k]; });
+    if (Array.isArray(c.data)) c.data = c.data.slice(0, 30);
+    return c;
+  }).filter(function (sr) { return Array.isArray(sr.data) && sr.data.length; });
+  if (!series.length) return { ok: false, error: "option 里没有可画的 series.data" };
+  const out = { series: series };
+  ["title", "xAxis", "yAxis", "legend", "grid", "tooltip", "color", "dataset"].forEach(function (k) {
+    if (opt[k] != null) out[k] = opt[k];
+  });
+  const n = series.reduce(function (m, sr) { return m + sr.data.length; }, 0);
+  return {
+    ok: true, option: out,
+    note: "图由模型按你给的数据画：**" + series.length + " 条 series、" + n + " 个数据点**。" +
+      "数字对不对请你自己核一眼 —— 我不替你保证。",
+  };
+}
+
+/* ============================================================
+   质量评分（AI 自评）—— 第 63 轮
+   ------------------------------------------------------------
+   量表不是我们编的，是照公开研究压出来的：
+     · Taleemabad 教案量表（C0–C7 / 44 子项 / 188 分）的**门禁设计** ——
+       结构不齐先判不通过，不再往下算分（否则「文笔好但没练习」也会拿高分）
+     · MDPI《Systems》14(7):846 的 Gagné 九事件覆盖 + **三级离散量表**，
+       他们明确说「离散比连续百分比稳」，且每项必须给理由
+     · UNESCO《Generation AI》四准则里的「内容准确性 / 引用可查」
+   压成 6 项、每项 0/1/2、满分 12：一个人 5 分钟打完，模型一次调用打完。
+   🔴 但这是**同一个模型给自己打分** —— 分数只能当改稿线索，不能当「质量合格」的结论。
+      所以措辞用「可用 / 改一改能用 / 不建议直接用」，不用「合格 / 优秀」。
+   ============================================================ */
+
+var LESSON_RUBRIC = [
+  { id: "G0", name: "结构完整", hi: "六个小节齐全，且每节都有实质内容", mid: "节次齐但有占位或空节" },
+  { id: "G1", name: "目标可测", hi: "用可观察的行为动词，写清了怎么验收", mid: "有动词但没写怎么验收" },
+  { id: "G2", name: "课时匹配", hi: "内容量能在一节课内讲完并练完", mid: "明显偏紧或偏松" },
+  { id: "G3", name: "讲解可执行", hi: "有步骤、有示范、点了常见错误", mid: "有步骤但缺示范" },
+  { id: "G4", name: "练习与反馈", hi: "有练习，且给了答案或判分要点", mid: "有练习但没答案" },
+  { id: "G5", name: "事实可查", hi: "知识点准确，引用的章节/材料真实存在", mid: "表述含糊但不误导" },
+];
+
+function reviewSystemPrompt() {
+  return "你是高校教学督导。按下面的分项量表给这份课时教案打分，**只输出一个 JSON，不要任何解释文字**。\n" +
+    "输出形状：{\"items\":[{\"id\":\"G0\",\"score\":2,\"why\":\"不超过 40 字，必须指向教案里的具体内容\"}],\"top_fix\":\"最该改的一处，具体到句子\"}\n" +
+    "规则：\n" +
+    "1) score 只能是 0、1、2 三个整数，不能给小数、区间或文字；\n" +
+    "2) 每一项都必须给 why，看不到相关内容就写「教案里没有这一节」并给 0 分；\n" +
+    "3) 不要因为篇幅长、文笔流畅而加分；\n" +
+    "4) 不要编造教案里没有的内容，也不要替它补写。\n" +
+    "量表（2 分 = 高档，1 分 = 低档，0 分 = 两者都不满足）：\n" +
+    LESSON_RUBRIC.map(function (r) {
+      return "- " + r.id + " " + r.name + "：2 分=" + r.hi + "；1 分=" + r.mid;
+    }).join("\n");
+}
+
+function reviewUserPrompt(text, p) {
+  const t = String(text || "");
+  const cut = t.length > 6000
+    ? t.slice(0, 6000) + "\n\n（后面还有 " + (t.length - 6000) + " 字，因长度限制没发出去）" : t;
+  const head = [
+    (p && p.title) ? "教案标题：" + p.title : "",
+    (p && p.minutes) ? "课时长度：" + p.minutes + " 分钟" : "",
+  ].filter(Boolean).join("\n");
+  return (head ? head + "\n\n" : "") + "教案正文：\n" + cut;
+}
+
+/**
+ * 把模型返回的评分 JSON 收成确定形状。
+ * 🔴 三条不容妥协：
+ *   ① 只认 0/1/2 三个整数 —— 给 3、给 1.5、给「较高」一律算**没给分**，
+ *      绝不四舍五入：那会造出一个模型没说过的分，比不评更糟。
+ *   ② 没写理由 = 没给分（量表要求「每项必须有依据」，抄的是 MDPI 那篇的做法）。
+ *   ③ 缺项不补 0 分 —— 补 0 会让「没评」看起来像「很差」。
+ */
+function normalizeReview(raw) {
+  let s = String(raw == null ? "" : raw).trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  const a = s.indexOf("{"), b = s.lastIndexOf("}");
+  if (a < 0 || b <= a) return { ok: false, error: "模型没有给出 JSON（可能被内容策略拦了，换个说法再试）" };
+  let box;
+  try { box = JSON.parse(s.slice(a, b + 1)); } catch (_) { return { ok: false, error: "模型给的 JSON 解析不了" }; }
+  const rawItems = Array.isArray(box && box.items) ? box.items : [];
+  if (!rawItems.length) return { ok: false, error: "JSON 里没有 items，没法逐项核对" };
+
+  const byId = {};
+  rawItems.forEach(function (it) {
+    if (!it || typeof it !== "object") return;
+    const id = String(it.id || "").toUpperCase().trim();
+    if (id) byId[id] = it;
+  });
+
+  const items = [], missing = [];
+  LESSON_RUBRIC.forEach(function (rb) {
+    const it = byId[rb.id];
+    let score = null, why = "";
+    if (it) {
+      const n = Number(it.score);
+      if (n === 0 || n === 1 || n === 2) score = n;
+      why = String(it.why == null ? "" : it.why).trim().slice(0, 120);
+      if (!why) score = null;
+    }
+    if (score === null) missing.push(rb.name);
+    items.push({ id: rb.id, name: rb.name, score: score, why: why || "（这一项模型没给依据）" });
+  });
+
+  const rated = items.filter(function (i) { return i.score !== null; });
+  const sum = rated.reduce(function (n, i) { return n + i.score; }, 0);
+  const gate = !!(items[0] && items[0].score === 0);
+  let verdict;
+  if (gate) verdict = "不通过 —— 结构不完整，先把六个小节补齐再谈内容";
+  else if (missing.length) verdict = "评分不完整（" + missing.length + " 项没给依据），先看能评的那几项";
+  else if (sum >= 10) verdict = "可用";
+  else if (sum >= 7) verdict = "改一改能用";
+  else verdict = "不建议直接用";
+
+  let topFix = String(box.top_fix == null ? "" : box.top_fix).trim().slice(0, 160);
+  if (!topFix) {
+    const worst = rated.slice().sort(function (x, y) { return x.score - y.score; })[0];
+    topFix = worst ? ("把「" + worst.name + "」补上 —— " + worst.why) : "";
+  }
+  return { ok: true, items: items, sum: sum, rated: rated.length, missing: missing, gate: gate, verdict: verdict, topFix: topFix };
+}
+
+/** 评分表 → Markdown（renderLines 支持表格，所以直接用表） */
+function reviewLines(rv) {
+  const cell = function (x) { return String(x == null ? "" : x).replace(/\|/g, "／").replace(/\n/g, " "); };
+  const lines = [
+    "按 6 项量表打分（每项 0/1/2）—— **" + rv.verdict + "**",
+    "",
+    "| 维度 | 分 | 依据 |",
+    "| --- | --- | --- |",
+  ];
+  rv.items.forEach(function (i) {
+    lines.push("| " + cell(i.name) + " | " + (i.score === null ? "未评" : i.score + "/2") + " | " + cell(i.why) + " |");
+  });
+  lines.push("", "合计 **" + rv.sum + " / " + (rv.rated * 2) + "**" +
+    (rv.rated < LESSON_RUBRIC.length ? "（" + rv.missing.length + " 项没评）" : ""));
+  if (rv.topFix) lines.push("", "**最该改的一处**：" + rv.topFix);
+  return lines;
+}
+
+/** 自评的固定说明 —— 不许省，省了就等于暗示「分数代表质量」 */
+var REVIEW_NOTE = "⚠️ 这是**同一个模型给自己打分**：分数只能当改稿线索，不能当「质量合格」的结论 —— " +
+  "这两件事不是一回事。真要下结论，人挑一份看一眼。";
+
 var SKILL_RUNNERS = {
+  /* ---------- 画图：能数的自己数，要成图的交给模型 ---------- */
+  "atom-chart": function (p, ctx) {
+    const ask = String(p.ask || p.text || "").trim();
+    const local = localChartOption(ask);
+    if (local) return local;
+
+    const userBlock = [
+      "用户的要求：" + (ask || "（没具体说，就按一门课的教学数据画一张示例图）"),
+      "",
+      "只输出一个 JSON：{\"title\":\"…\",\"option\":{…}}。option 必须能被 JSON.parse 直接解析，不能含函数。",
+    ].join("\n");
+    const ai = aiRunner(CHART_SYS, userBlock, function (raw) {
+      const v = normalizeChartOption(raw);
+      if (!v.ok) return { ok: false, error: v.error };
+      return { ok: true, title: "图表", lines: [v.note], chart: v.option };
+    }, { maxTokens: 2000 });
+    if (ai) return ai;
+
+    return {
+      ok: true, title: "画图",
+      lines: [
+        "**要画图，得先接一个模型** —— 图表的 option 是模型按你的数据写出来的，我不在这里替你编数字。",
+        "",
+        "不过有两件事现在就能做：",
+        "- 问「**本机有多少教案 / 实训 / 课件 / 试卷**」这类可数的问题 —— 我按本机记录直接画（不需要 Key）",
+        "- 把数据直接贴给我（例如「周一 12 人、周二 18 人」），接上模型后我照着画",
+        "",
+        "去「设置 → 模型接入」填一个 Key，回来再说一次就行。",
+      ],
+      note: noKeyNote(),
+    };
+  },
+
   /* ---------- 课表：文本转标准格式 ---------- */
   "atom-text-to-table": function (p, ctx) {
     const parsed = parseScheduleText(p.text || "");
@@ -4758,9 +5077,10 @@ var SKILL_RUNNERS = {
     };
   },
 
-  /* ---------- 教案自查 ---------- */
+  /* ---------- 教案自查：规则先查能确定的，量表评分交给模型 ---------- */
   "atom-lesson-check": function (p) {
-    const les = parseLessonText(p.text || "");
+    const text = String(p.text || "").trim();
+    const les = parseLessonText(text);
     const r = lintLesson(les);
     const lines = ["解析出 " + (les.sections.length || 0) + " 个小节：" +
       (les.sections.join(" / ") || "（没识别到 —— 教案正文里应该有 ## 教学目标 这类标题）")];
@@ -4769,7 +5089,37 @@ var SKILL_RUNNERS = {
     if (!r.issues.length) lines.push("逐项查过：时长对得上、六个小节都在、重点与难点没重复。");
     else r.issues.forEach(function (i) { lines.push("- [" + (i.level === "warn" ? "建议改" : "提示") + "] **" + i.where + "**：" + i.text); });
     if (r.minutes) lines.push("", "（课堂流程合计 " + r.sum + " 分钟 / 课时长度 " + r.minutes + " 分钟）");
-    return { ok: true, title: "教案自查", lines: lines };
+    const rule = { ok: true, title: "教案自查", lines: lines };
+
+    // 没有正文 → 只做规则检查，并说清怎么才能评分（不拿一段指令当教案去评）
+    if (!text) {
+      rule.lines.push("", "**评分做不了**：没拿到教案正文。两种给法 —— ① 直接把正文粘贴到输入框；" +
+        "② 在结果卡上点「AI 评分」（它会把这一卡的内容带过来）。");
+      return rule;
+    }
+
+    const ai = aiRunner(reviewSystemPrompt(), reviewUserPrompt(text, p), function (raw) {
+      const rv = normalizeReview(raw);
+      if (!rv.ok) return { ok: false, error: rv.error };
+      return { ok: true, title: "质量评分（AI）", lines: reviewLines(rv), note: REVIEW_NOTE };
+    });
+    if (!ai) {
+      rule.note = "上面全是**规则能确定判断的部分**。要把「能不能上课」评出来，得接模型 —— " +
+        "设置页填一个可用的 Key，我再按 6 项量表打一遍（没 Key 我不编分数）。";
+      return rule;
+    }
+    return ai.then(function (res) {
+      if (!res || !res.ok) {
+        rule.lines.push("", "**评分没跑起来**：" + ((res && res.error) || "未知原因") + " —— 上面的规则检查仍然有效。");
+        return rule;
+      }
+      return {
+        ok: true,
+        title: "教案自查 + 质量评分",
+        lines: rule.lines.concat(["", "---", ""], res.lines),
+        note: res.note,
+      };
+    });
   },
 
   /* ---------- 起草教案：无 Key 给真骨架 ---------- */
@@ -5144,7 +5494,9 @@ function planFromChain(chain, ctx) {
     // 🔴 闸门技能（sys-confirm-gate）自己的步骤**不进动作链** —— 它是"什么时候该插确认"
     //    这条规则本身，不是一次要做的事。它的 steps 只是给人看的说明（技能卡里会展开）。
     //    不排除的话，任何一次对话都会卡在它的「等待确认」上（第 35 轮踩到：解析课表也停在确认）。
-    if (sk.id === "sys-confirm-gate") return;
+    // 🔴 `chainless` 的技能同理：会执行、但不产生动件（如「画像跟进」每次都会跑一次画像核对，
+    //    那是后台核对，不是"要做的一件事"；进链只会每次多一条噪音）。
+    if (sk.id === "sys-confirm-gate" || sk.chainless) return;
     (sk.steps || []).forEach(function (st) {
       steps.push({
         skill: sk.id, layer: sk.layer, kind: sk.kind,
@@ -6187,14 +6539,15 @@ function seedCards(role) {
 /**
  * 从一条技能链里挑出「真该跑」的 id。
  * 🔴 系统层默认只挂不跑（「应用地图 / 数据边界」那几篇说明不该把结果卡撑爆）——
- *    除非它自己被命中，或者这次一条能跑的都没有（那就给一份「我能干什么」当兜底）。
+ *    除非它自己被命中、标了 `alwaysRun`（如「画像跟进」：勾着就是 100% 跑），
+ *    或者这次一条能跑的都没有（那就给一份「我能干什么」当兜底）。
  */
 function runnableIds(route) {
   const runnable = ((route && route.chain) || []).filter(function (s) {
     return typeof s.run === "function" || !!SKILL_RUNNERS[s.id];
   });
   let ids = runnable.filter(function (s) {
-    return s.layer !== "system" || (s.hit || []).length > 0;
+    return s.layer !== "system" || s.alwaysRun || (s.hit || []).length > 0;
   }).map(function (s) { return s.id; });
   if (!ids.length) ids = runnable.map(function (s) { return s.id; });
   return ids;
@@ -6218,21 +6571,241 @@ function primarySkillId(route, ids) {
   return pick ? pick.id : "";
 }
 
-/** 跑一串技能 → `{ secs, notes, executed }`（与页面渲染需要的形状一致） */
+/* ============================================================
+   上下文预算（第 62 轮）—— 把「窗口」当配额管
+   ------------------------------------------------------------
+   为什么要管：接上模型之后，上下文是**唯一会随时间失控的东西**。历史一轮轮变长、
+   检索一多就把历史顶掉，最后模型开始"忘事"—— 这跟换哪个模型无关，是装配层的事。
+
+   优先级从高到低（**后到的先被砍**）：
+     ① system    系统提示 + 画像 —— 不许丢，超了只截断并在报告里挂出来
+     ② task      本轮任务与材料
+     ③ retrieved 检索 / 引用片段
+     ④ history   历史对话 —— **先折叠成一行，再逐条丢最老的**
+
+   计的是**字符数**（中文 1 字≈1 token 偏保守，所以按 1 token≈1.5 字符折算）
+   ============================================================ */
+
+var CTX_BUDGET = {
+  window: 16000,   // ≈10k token 的安全区，给输出留足
+  system: 3000,
+  task: 6000,
+  retrieved: 4000,
+  history: 3000,
+};
+
+var CHAIN_CTX = null;   // 本次技能链的上下文（runSkillChain 写，llmChat 读）
+
+/** 一条历史折叠成一行：只留开头，省上下文但保住"说过什么" */
+function foldTurn(t, max) {
+  const s = String((t && t.content) || "").replace(/\s+/g, " ").trim();
+  const cap = Number(max) || 60;
+  return s.length > cap ? s.slice(0, cap) + "…" : s;
+}
+
+/** 从最新往回装：新的原样留 → 装不下折叠 → 再装不下就丢最老的 */
+function compactHistory(turns, cap) {
+  const list = (Array.isArray(turns) ? turns : []).filter(function (t) {
+    return t && (t.role === "user" || t.role === "assistant") && String(t.content || "").trim();
+  });
+  if (!list.length) return { turns: [], dropped: 0, folded: 0, used: 0 };
+  const budget = Number(cap) || CTX_BUDGET.history;
+  const rev = [];
+  let used = 0, i = list.length - 1, folded = 0;
+  while (i >= 0) {
+    const c = String(list[i].content);
+    if (used + c.length <= budget) {
+      rev.push({ role: list[i].role, content: c }); used += c.length;
+    } else if (used + 80 <= budget) {
+      const f = "（更早）" + foldTurn(list[i], 48);
+      rev.push({ role: list[i].role, content: f }); used += f.length; folded++;
+    } else break;
+    i--;
+  }
+  const dropped = i + 1;
+  rev.reverse();
+  return { turns: rev, dropped: dropped, folded: folded, used: used };
+}
+
+/**
+ * 按预算装配本轮消息。
+ * 返回 `{ messages, report, chars }` —— `report` 是**给人看的**：
+ * 哪一段被截了多少字。上下文被压过这件事，不该只有模型知道。
+ */
+function fitContext(parts) {
+  const o = parts || {};
+  const report = [];
+  const clip = function (name, text, cap) {
+    let s = String(text == null ? "" : text);
+    if (!s) return "";
+    if (s.length > cap) {
+      const cut = s.length - cap;
+      s = s.slice(0, cap) + "\n…（" + name + "超出预算，" + cut + " 字已省略）";
+      report.push(name + " 截断 " + cut + " 字");
+    }
+    return s;
+  };
+  const sys = clip("系统提示", o.system, CTX_BUDGET.system);
+  const task = clip("任务材料", o.task, CTX_BUDGET.task);
+  const retrieved = clip("检索片段", o.retrieved, CTX_BUDGET.retrieved);
+  const hist = compactHistory(o.history, CTX_BUDGET.history);
+  if (hist.folded) report.push("历史折叠 " + hist.folded + " 轮");
+  if (hist.dropped) report.push("历史丢弃 " + hist.dropped + " 轮");
+
+  const messages = [];
+  if (sys) messages.push({ role: "system", content: sys });
+  hist.turns.forEach(function (t) { messages.push(t); });
+  const userBlock = [retrieved ? "【参考片段】\n" + retrieved : "", task].filter(Boolean).join("\n\n");
+  if (userBlock) messages.push({ role: "user", content: userBlock });
+
+  // 合并相邻同角色消息：历史被折叠后可能出现连续 user，部分服务商会直接拒（400）
+  const merged = [];
+  messages.forEach(function (m) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === m.role) last.content += "\n\n" + m.content;
+    else merged.push({ role: m.role, content: m.content });
+  });
+
+  const chars = merged.reduce(function (n, m) { return n + String(m.content).length; }, 0);
+  return { messages: merged, report: report, chars: chars };
+}
+
+/**
+ * 画像进提示词 —— 「讲法由你的画像决定」这句话，得对**模型**也成立。
+ * ⚠️ 以前它只影响本地规则文本与右栏，模型那一路完全没带 —— 接上真模型就露馅。
+ */
+function personaPromptBlock() {
+  let p = null;
+  try { p = (typeof MY_PERSONA !== "undefined") ? MY_PERSONA : null; } catch (_) { return ""; }
+  if (!p) return "";
+  return [
+    "【这个人的讲法偏好（从他自己在本机上的行为统计出来的，不是模型猜的）】",
+    "- 开口：" + p.voice,
+    "- 步子：" + p.step,
+    "- 常用：" + (p.formats || []).join("｜"),
+    "- 避免：" + (p.avoid || []).join("｜"),
+    "- 语言：" + p.lang,
+    (p.known && p.known.length) ? "- 他已经懂的：" + p.known.slice(0, 5).join("、") : "",
+    (p.gaps && p.gaps.length) ? "- 他反复卡住的：" + p.gaps.slice(0, 5).join("、") : "",
+    "按上面的讲法写；内容要准确，不确定的地方写「（待补充）」，不要为了好听编内容。",
+  ].filter(Boolean).join("\n");
+}
+
+/* ============================================================
+   对话记录（第 62 轮）—— 可观测性最小实现
+   ------------------------------------------------------------
+   一次问答落一条：你说了什么 / 挂了哪些技能 / 每个技能成没成 / 写操作结果 / 回复摘要 / 用时。
+   🔴 按账号分桶（键 `<基名>:<角色>:<账号>`），与其它业务数据同一套规矩。
+   ⚠️ 只留最近 60 条：这解决的是「刚才到底发生了什么」，不是做一个聊天存档产品。
+   ============================================================ */
+
+var AGENT_CHAT_KEY = "st_agent_chat";
+
+function agentChatStoreKey() {
+  let u = "";
+  try { u = (typeof currentUserKey === "function") ? currentUserKey() : ""; } catch (_) { u = ""; }
+  return u ? AGENT_CHAT_KEY + ":" + u : AGENT_CHAT_KEY;
+}
+
+function loadAgentChat() {
+  try {
+    const raw = window.localStorage.getItem(agentChatStoreKey());
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter(function (r) { return r && r.ask; }) : [];
+  } catch (_) { return []; }
+}
+
+function saveAgentChat(list) {
+  try { window.localStorage.setItem(agentChatStoreKey(), JSON.stringify((list || []).slice(-60))); }
+  catch (_) { /* 存不下就算了，不影响对话 */ }
+}
+
+function pushAgentChat(rec) {
+  const list = loadAgentChat();
+  list.push(Object.assign({ at: Date.now() }, rec || {}));
+  saveAgentChat(list);
+  return list;
+}
+
+function clearAgentChat() {
+  try { window.localStorage.removeItem(agentChatStoreKey()); } catch (_) { }
+}
+
+/** 给下一次对话当历史（最近 N 条 → 2N 轮） */
+function agentChatHistory(n) {
+  const list = loadAgentChat().slice(-(Number(n) || 6));
+  const out = [];
+  list.forEach(function (r) {
+    out.push({ role: "user", content: String(r.ask || "") });
+    out.push({ role: "assistant", content: String(r.reply || "（给了结果卡）") });
+  });
+  return out;
+}
+
+/* ---------------- 中断（运行中「发送」变「停止」） ---------------- */
+
+var AGENT_RUN = null;
+
+/** 没有 AbortController 的环境（老浏览器 / 桩化沙箱）也要能"停" —— 用一个最小信号壳兜住 */
+function makeAbort() {
+  if (typeof AbortController === "function") return new AbortController();
+  const listeners = [];
+  const ctl = {
+    signal: {
+      aborted: false,
+      addEventListener: function (t, fn) { if (t === "abort" && typeof fn === "function") listeners.push(fn); },
+    },
+    abort: function () {
+      if (ctl.signal.aborted) return;
+      ctl.signal.aborted = true;
+      listeners.forEach(function (fn) { try { fn(); } catch (_) { } });
+    },
+  };
+  return ctl;
+}
+
+function startAgentRun() {
+  abortAgent();
+  AGENT_RUN = makeAbort();
+  return AGENT_RUN;
+}
+function abortAgent() {
+  if (AGENT_RUN && typeof AGENT_RUN.abort === "function") { try { AGENT_RUN.abort(); } catch (_) { } }
+  AGENT_RUN = null;
+}
+function agentRunSignal() { return AGENT_RUN ? AGENT_RUN.signal : null; }
+
+/** 跑一串技能 → `{ secs, notes, executed, failed, aborted }`（与页面渲染需要的形状一致） */
 function runSkillChain(ids, payload, ctx) {
   const o = ctx || {};
-  const secs = [], notes = [], executed = [];
+  const secs = [], notes = [], executed = [], failed = [];
   const items = (ids || []).map(function (id) { return { id: id, sk: skillOf(id, o.role) }; })
     .filter(function (x) { return !!x.sk; });
 
+  // 🔴 把这次的上下文（含对话历史 / 中断信号）挂到模块级：`aiRunner` → `llmChat` 要读它。
+  //    不这么做就得给每个技能函数都加一个参数，四处漏传一处就失效。
+  CHAIN_CTX = o;
+  const sig0 = o.signal || agentRunSignal();
+
+  /** 每一步都要往页面回一次真实结果（`onStep`）—— 页面的 ✓ 只认这里，不再自己 setTimeout */
+  function report(sk, ok, extra) {
+    if (typeof o.onStep !== "function") return;
+    try { o.onStep(Object.assign({ id: sk.id, name: sk.name, layer: sk.layer, ok: ok }, extra || {})); }
+    catch (_) { /* 页面自己报错不能影响跑技能 */ }
+  }
+
   function apply(sk, r) {
     if (!r || !r.ok) {
-      notes.push("「" + sk.name + "」没跑起来：" + ((r && r.error) || "未知原因"));
+      const why = (r && r.error) || "未知原因";
+      failed.push({ id: sk.id, name: sk.name, error: why });
+      notes.push("「" + sk.name + "」没跑起来：" + why);
+      report(sk, false, { error: why });
       return;
     }
     executed.push(sk.name);
-    secs.push({ title: r.title || sk.name, lines: r.lines || [] });
+    secs.push({ title: r.title || sk.name, lines: r.lines || [], chart: r.chart || null });
     if (r.note) notes.push(r.note);
+    report(sk, true, { title: r.title || sk.name });
   }
 
   // ⚠️ 语气按角色分：学生端原来那句更贴（"这件事我会这么走…"），别一律用教师端口吻
@@ -6250,18 +6823,35 @@ function runSkillChain(ids, payload, ctx) {
     if (i >= items.length) return null;
     const sk = items[i].sk, id = items[i].id;
     const canRun = typeof sk.run === "function" || !!SKILL_RUNNERS[id];
-    if (!canRun) { secs.push(stubFlow(sk)); return step(i + 1); }
-    const r = runSkill(id, payload, o);
+    if (!canRun) {
+      secs.push(stubFlow(sk));
+      report(sk, false, { stub: true, error: "这条技能没有执行器，只按流程说明" });
+      return step(i + 1);
+    }
+    let r;
+    try { r = runSkill(id, payload, o); }
+    catch (e) {
+      // 🔴 一个技能炸掉不能把整条链一起带走（后面的技能还有机会给出结果）
+      apply(sk, { ok: false, error: String((e && e.message) || e) });
+      return step(i + 1);
+    }
     if (r && typeof r.then === "function") {
-      return r.then(function (res) { apply(sk, res); }).then(function () { return step(i + 1); });
+      return r.then(function (res) { apply(sk, res); })
+        .catch(function (e) { apply(sk, { ok: false, error: String((e && e.message) || e) }); })
+        .then(function () { return step(i + 1); });
     }
     apply(sk, r);
     return step(i + 1);
   }
 
   const tail = step(0);
-  const out = { secs: secs, notes: notes, executed: executed };
-  return (tail && tail.then) ? tail.then(function () { return out; }) : out;
+  const out = {
+    secs: secs, notes: notes, executed: executed, failed: failed,
+    aborted: !!(sig0 && sig0.aborted),
+  };
+  // 跑完就把链上下文摘掉：别让下一次工作台/出题捡到上一次的对话历史
+  const clear = function () { CHAIN_CTX = null; return out; };
+  return (tail && tail.then) ? tail.then(clear) : clear();
 }
 
 /**
@@ -6726,12 +7316,20 @@ function llmChat(system, user, opt) {
   }
   if (!c.cfg.endpoint) return Promise.resolve({ ok: false, error: "这个服务商没有配置调用地址" });
 
+  // ① 上下文装配（第 62 轮）：这条调用也可能是技能链里发出来的 → 带上链的历史与中断信号
+  var ctx0 = (CHAIN_CTX && typeof CHAIN_CTX === "object") ? CHAIN_CTX : null;
+  var history = (o.history != null) ? o.history : (ctx0 ? ctx0.history : null);
+  var sig = o.signal || agentRunSignal() || (ctx0 && ctx0.signal) || null;
+  var sysText = String(system || "") +
+    (o.persona === false ? "" : ("\n\n" + personaPromptBlock()));
+  var fitted = fitContext({ system: sysText, task: String(user || ""), retrieved: o.retrieved, history: history });
+  if (ctx0 && Array.isArray(ctx0.budgetReport) && fitted.report.length) {
+    fitted.report.forEach(function (r) { ctx0.budgetReport.push(r); });
+  }
+
   var body = {
     model: c.cfg.model,
-    messages: [
-      { role: "system", content: String(system || "") },
-      { role: "user", content: String(user || "") },
-    ],
+    messages: fitted.messages,
     temperature: o.temperature == null ? 0.4 : o.temperature,
     max_tokens: o.maxTokens || 8000,
     stream: false,
@@ -6741,11 +7339,27 @@ function llmChat(system, user, opt) {
   var headers = { "Content-Type": "application/json" };
   if (c.key) headers["Authorization"] = "Bearer " + c.key;
 
+  // ② 超时 + 可中断：没有这两样，请求一挂起整页就永久卡在"运行中"（按钮再也回不来）
+  var ctrl = (typeof AbortController === "function") ? new AbortController() : null;
+  if (ctrl && sig && typeof sig.addEventListener === "function") {
+    if (sig.aborted) { try { ctrl.abort(); } catch (_) { } }
+    else sig.addEventListener("abort", function () { try { ctrl.abort(); } catch (_) { } });
+  }
+  var timedOut = false;
+  var ms = Number(o.timeoutMs) > 0 ? Number(o.timeoutMs) : 45000;
+  var timer = 0;
+  if (ctrl) {
+    timer = setTimeout(function () { timedOut = true; try { ctrl.abort(); } catch (_) { } }, ms);
+  }
+  var stopTimer = function () { if (timer) { clearTimeout(timer); timer = 0; } };
+
   return fetch(c.cfg.endpoint, {
     method: "POST",
     headers: headers,
     body: JSON.stringify(body),
+    signal: ctrl ? ctrl.signal : undefined,
   }).then(function (res) {
+    stopTimer();
     if (!res.ok) {
       return res.text().then(function (t) {
         var msg = "请求被拒（HTTP " + res.status + "）";
@@ -6759,10 +7373,21 @@ function llmChat(system, user, opt) {
       var raw = "";
       try { raw = j.choices[0].message.content || ""; } catch (_) {}
       if (!raw) return { ok: false, error: "返回里没有内容（可能被内容策略拦了，换个说法试试）" };
-      return { ok: true, raw: raw, model: c.cfg.model, provider: c.provider };
+      return { ok: true, raw: raw, model: c.cfg.model, provider: c.provider, report: fitted.report };
     });
   }).catch(function (err) {
+    stopTimer();
     var m = String((err && err.message) || err);
+    if (timedOut) {
+      return {
+        ok: false, timeout: true,
+        error: "等了 " + Math.round(ms / 1000) + " 秒没有响应，已经停止等待",
+        hint: "网络慢或接口卡住了。可以按「停止」后重说一次；如果一直这样，去设置页测一下连接。",
+      };
+    }
+    if (/aborted|AbortError/i.test(m) || (ctrl && ctrl.signal && ctrl.signal.aborted)) {
+      return { ok: false, aborted: true, error: "已停止这次请求" };
+    }
     var hint = /Failed to fetch|NetworkError|load failed/i.test(m)
       ? "这次请求没能发出去。如果是浏览器拦的 CORS，换 DeepSeek / 通义 / 智谱 这类支持直调的厂商，或确认自建接口允许跨域（Access-Control-Allow-Origin）；也确认下网络与地址是否可达。"
       : "";

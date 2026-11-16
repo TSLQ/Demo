@@ -802,6 +802,8 @@ a.btn { text-decoration: none; }
 .send-btn:hover { filter: brightness(1.1); }
 .send-btn:active { transform: scale(.95); }
 .send-btn:disabled { opacity: .4; cursor: not-allowed; }
+/* 运行中：同一个按钮变成「停止」（不是再发一次）—— 第 62 轮 */
+.send-btn.is-stop { background: var(--destructive); color: var(--destructive-foreground); }
 
 .composer-foot {
   display: flex; justify-content: space-between; gap: 10px;

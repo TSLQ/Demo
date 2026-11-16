@@ -84,6 +84,7 @@ const STORE_KEY = {
   apiKey:   "st_api_key",
   readMode: "st_a11y_read_mode",
   agentTask: "st_agent_task",       // 交给 AI 助手的任务（含原文），见 schedule.html 方式三
+  agentChat: "st_agent_chat",       // AI 对话记录（一次问答一条，按账号分桶）——见 nav.js
   customEndpoint: "st_custom_endpoint", // 自定义模型接口地址（OpenAI 兼容）
   customModel:    "st_custom_model",    // 自定义模型名
 };
