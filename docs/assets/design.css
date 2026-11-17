@@ -533,6 +533,20 @@ a.btn { text-decoration: none; }
   background: color-mix(in srgb, var(--primary) 6%, var(--card));
 }
 
+/* 登录页：重新选择显示模式（与首访弹窗同一份存档） */
+.login-a11y-btn {
+  display: inline-flex; align-items: center;
+  margin: 8px 0 0 8px; padding: 6px 11px;
+  border: 1px dashed var(--border); border-radius: 999px;
+  background: transparent; color: var(--muted-foreground);
+  font: inherit; font-size: 11.5px; cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.login-a11y-btn:hover { border-color: var(--muted-foreground); color: var(--foreground); }
+.login-a11y-btn:focus-visible {
+  outline: 3px solid var(--ring); outline-offset: 2px;
+}
+
 .role-card {
   display: flex; align-items: flex-start; gap: 14px;
   padding: 18px; margin-bottom: 12px;
@@ -1190,3 +1204,88 @@ html[data-read-mode] :focus-visible {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ---------------- 无障碍显示模式：首访选择弹窗 ----------------
+   这个弹窗是「最坏情况」的自证：不跟随用户的字号设置，
+   自身就用 17px 起、按钮 44px 高、可 Tab、可朗读 ——
+   看不清或看不见的人，也要能选得了这个模式。
+--------------------------------------------------------------- */
+.a11y-gate-host {
+  position: fixed; inset: 0; z-index: 120;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.a11y-gate-mask { position: absolute; inset: 0; background: var(--overlay); }
+.a11y-gate {
+  position: relative;
+  width: min(600px, 100%);
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow: auto;
+  padding: 26px 26px 20px;
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-raised);
+  font-size: 17px;
+  line-height: 1.65;
+}
+.a11y-gate-kicker {
+  margin: 0 0 6px; font-size: 13px; letter-spacing: .08em;
+  color: var(--muted-foreground);
+}
+.a11y-gate h2 {
+  margin: 0 0 8px;
+  font-size: clamp(22px, 3.2vw, 26px);
+  line-height: 1.35;
+}
+.a11y-gate-desc {
+  margin: 0 0 16px;
+  font-size: 16px;
+  color: var(--muted-foreground);
+}
+.a11y-gate-set { margin: 0; padding: 0; border: 0; }
+.a11y-opt {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 13px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+  cursor: pointer;
+}
+.a11y-opt + .a11y-opt { margin-top: 9px; }
+.a11y-opt:hover { border-color: var(--muted-foreground); }
+.a11y-opt:has(input:checked) {
+  border-color: var(--ring);
+  background: var(--secondary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 24%, transparent);
+}
+.a11y-opt input {
+  flex: 0 0 auto;
+  width: 20px; height: 20px; margin: 3px 0 0;
+  accent-color: var(--primary);
+}
+.a11y-opt-title { display: block; font-size: 18px; font-weight: 650; }
+.a11y-opt-desc {
+  display: block; margin-top: 2px;
+  font-size: 15px; line-height: 1.6;
+  color: var(--muted-foreground);
+}
+.a11y-opt:has(input:checked) .a11y-opt-desc { color: var(--foreground); }
+html[data-contrast] .a11y-opt-desc { color: var(--foreground); }
+.a11y-gate-foot {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  margin-top: 18px;
+}
+.a11y-gate-foot .btn { min-height: 44px; }
+.a11y-gate-note {
+  margin: 12px 0 0;
+  font-size: 13.5px;
+  color: var(--muted-foreground);
+}
+@media (max-width: 520px) {
+  .a11y-gate { padding: 20px 16px 16px; }
+  .a11y-gate-foot .btn { flex: 1 1 100%; }
+}
+

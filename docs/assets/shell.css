@@ -67,6 +67,21 @@ body.shell-body { overflow: hidden; }
   color: var(--primary); white-space: nowrap;
 }
 
+/* 重新选择显示模式：与首访弹窗、设置页共用 st_a11y.profile */
+.shell-a11y-mode {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--card); color: var(--muted-foreground);
+  font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.shell-a11y-mode:hover { border-color: var(--muted-foreground); color: var(--foreground); }
+.shell-a11y-mode:focus-visible {
+  border-color: var(--ring);
+  outline: 3px solid var(--ring); outline-offset: 2px;
+}
+
 /* 无障碍阅读模式勾选（第 57 轮起已实现：排版增强 + 朗读工具条） */
 .shell-a11y-toggle {
   display: flex; align-items: center; gap: 7px;
@@ -409,6 +424,8 @@ body.shell-body { overflow: hidden; }
   .shell-user-name { display: none; }
   .shell-a11y-toggle .a11y-toggle-label { display: none; }
   .shell-a11y-toggle { padding: 5px 8px; }
+  .shell-a11y-mode .a11y-mode-label { display: none; }
+  .shell-a11y-mode { padding: 5px 8px; }
   .shell-side {
     position: absolute; top: 54px; bottom: 0; left: 0; z-index: 26;
     box-shadow: var(--shadow-raised);

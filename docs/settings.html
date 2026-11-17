@@ -200,6 +200,16 @@
 
               <div class="row">
                 <div class="row-body">
+                  <b>显示模式</b>
+                  <span id="a11yModeText">还没选过 —— 点右侧按钮用问答方式选一次</span>
+                </div>
+                <div class="row-ctl">
+                  <button class="btn btn-sm" type="button" id="a11yModeBtn" data-a11y-gate>重新选择…</button>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="row-body">
                   <b>正文字号</b>
                   <span>适合视力较弱或需要更大字体的用户</span>
                 </div>
@@ -587,13 +597,19 @@ function applyA11y() {
   prev.style.setProperty("--prev-ls", ls + "em");
 
   // 作用于「全站根元素」——在壳内时即壳的 <html>，单独打开时即自己的
+  // 🔴 profile 必须原样带上：st_a11y 是**整份覆盖**写入，
+  //    漏掉 profile 会让「已选过模式」变回「没选过」→ 下次打开又弹一次首访选择。
+  const kept = store.get("a11y") || {};
   const cfg = {
     size, lh, ls, rate,
     contrast: !!$("#contrastSw")?.getAttribute("aria-checked")?.match(/^true$/),
     reduceMotion: !!$("#motionSw")?.getAttribute("aria-checked")?.match(/^true$/),
+    profile: kept.profile,
+    profileAt: kept.profileAt,
   };
   applyA11yVars(cfg);
   store.set("a11y", cfg);
+  syncA11yProfileAttr();
 }
 
 ["fontRange", "lhRange", "lsRange", "rateRange"].forEach((id) => {
@@ -1003,6 +1019,33 @@ $$(".set-toc a").forEach((a) => {
   });
 });
 
+/* ---------- 当前显示模式（首访选择 / 重新选择共用同一份存档） ---------- */
+function renderA11yMode() {
+  const box = $("#a11yModeText");
+  if (!box || typeof a11yProfile !== "function") return;
+  const id = a11yProfile();
+  let hit = null;
+  if (typeof A11Y_PROFILES !== "undefined") {
+    hit = A11Y_PROFILES.filter((p) => p.id === id)[0] || null;
+  }
+  box.textContent = hit
+    ? ("当前：" + hit.label + " —— " + hit.desc)
+    : "还没选过 —— 点右侧按钮用问答方式选一次";
+}
+
+/** 弹窗里选完后，把这一页的滑块 / 开关 / 预览一起刷新（否则显示的还是旧值） */
+document.addEventListener("st-a11y-profile-changed", () => {
+  const a11y = store.get("a11y") || {};
+  $("#fontRange").value = a11y.size ?? 15;
+  $("#lhRange").value = (a11y.lh ?? 1.8) * 100;
+  $("#lsRange").value = (a11y.ls ?? 0) * 100;
+  $("#rateRange").value = (a11y.rate ?? 0.95) * 100;
+  $("#contrastSw")?.setAttribute("aria-checked", String(!!a11y.contrast));
+  $("#motionSw")?.setAttribute("aria-checked", String(!!a11y.reduceMotion));
+  applyA11y();          // 顺带刷新数值标签与下方预览
+  renderA11yMode();
+});
+
 /* ---------- 恢复已保存设置 ---------- */
 (function restore() {
   const a11y = store.get("a11y");
@@ -1014,6 +1057,7 @@ $$(".set-toc a").forEach((a) => {
     $("#contrastSw")?.setAttribute("aria-checked", String(!!a11y.contrast));
     $("#motionSw")?.setAttribute("aria-checked", String(!!a11y.reduceMotion));
   }
+  renderA11yMode();
   const density = store.get("density");
   if (density) {
     $$("#densitySeg button").forEach((x) => x.classList.toggle("on", x.dataset.d === density));

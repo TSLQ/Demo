@@ -85,31 +85,142 @@
     margin-top: 12px; padding: 10px 12px; border-radius: 9px; font-size: 13px; line-height: 1.65;
     background: var(--secondary); border: 1px solid var(--border);
   }
+
+  /* ============================================================
+     无障碍：导航层
+     ------------------------------------------------------------
+     不是「另一套界面」，是给同一份 DOM 补一张地图：
+       skip link → 分区标题 → 跳转面板 → 焦点回落
+     ============================================================ */
+  .skip-link {
+    position: fixed; left: 14px; top: -60px; z-index: 95;
+    padding: 9px 14px; border-radius: 9px;
+    background: var(--card); color: var(--foreground);
+    border: 1px solid var(--border); box-shadow: var(--shadow-raised);
+    font-size: 13px; text-decoration: none;
+    transition: top .14s ease-out;
+  }
+  .skip-link:focus { top: 14px; }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  .hw-head-row { display: flex; align-items: flex-start; gap: 16px; }
+  .hw-head-row > div { flex: 1; min-width: 0; }
+  .hw-jump {
+    flex: none; display: inline-flex; align-items: center; gap: 8px;
+    white-space: nowrap; margin-top: 2px;
+  }
+  .hw-kbd {
+    font-size: 11px; padding: 1px 6px; border-radius: 5px;
+    background: var(--secondary); color: var(--muted-foreground);
+    border: 1px solid var(--border); font-variant-numeric: tabular-nums;
+  }
+
+  /* 分区标题：读屏靠它建「标题列表」，看得见的人也靠它扫读 */
+  .hw-sec {
+    margin: 20px 0 9px; font-size: 12.5px; font-weight: 500;
+    color: var(--muted-foreground); letter-spacing: .04em;
+  }
+  #hwMain > .hw-sec:first-child { margin-top: 0; }
+  #hwMain:focus, #hwStats:focus, #hwList:focus { outline: none; }
+
+  /* ---------- 跳转面板 ---------- */
+  #jpHost { position: relative; z-index: 70; }
+  .jp-modal { width: min(480px, calc(100vw - 32px)); }
+  .jp-hint { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--muted-foreground); }
+  .jp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .jp-item {
+    width: 100%; display: flex; align-items: baseline; gap: 10px; text-align: left;
+    padding: 10px 12px; border-radius: 9px; cursor: pointer;
+    background: var(--card); border: 1px solid var(--border);
+    color: var(--foreground); font: inherit; font-size: 13.5px; line-height: 1.5;
+    transition: background .12s, border-color .12s;
+  }
+  .jp-item:hover { background: var(--secondary); border-color: var(--muted-foreground); }
+  .jp-lb { flex: 1; min-width: 0; }
+  .jp-ht { flex: none; font-size: 11.5px; color: var(--muted-foreground); }
+  .jp-foot { align-items: center; justify-content: space-between; gap: 10px; }
+  .jp-echo-lab {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 12px; color: var(--muted-foreground); cursor: pointer;
+  }
+
+  /* 读屏回声条：给人看的观察窗，aria-hidden，不进 Tab 序 */
+  .jp-echo-bar {
+    position: fixed; left: 14px; right: 14px; bottom: 14px; z-index: 92;
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 13px; border-radius: 10px;
+    background: var(--foreground); color: var(--background);
+    font-size: 12.5px; line-height: 1.5; box-shadow: var(--shadow-raised);
+  }
+  .jp-echo-tag {
+    flex: none; font-size: 10.5px; letter-spacing: .08em;
+    padding: 1px 6px; border-radius: 4px;
+    background: color-mix(in srgb, var(--background) 18%, transparent);
+  }
+  #jpEchoTxt { flex: 1; min-width: 0; }
+
+  @media (max-width: 560px) {
+    .hw-head-row { flex-direction: column; gap: 10px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .skip-link { transition: none; }
+  }
 </style>
 </head>
 <body>
 
+<!-- 第一个可聚焦元素：键盘 / 读屏用户按一次 Tab 就能跳过整页导航 -->
+<a class="skip-link" href="#hwMain">跳到主要内容</a>
+
 <div class="page-wrap">
   <div class="page hw-wrap">
-    <div class="page-head">
+    <header class="page-head">
       <div class="crumb" id="hwCrumb">我的作业</div>
-      <h1>我的作业</h1>
-      <p>老师发布的试卷会出现在这里 —— 点开就能作答、提交。</p>
-    </div>
+      <div class="hw-head-row">
+        <div>
+          <h1>我的作业</h1>
+          <p>老师发布的试卷会出现在这里 —— 点开就能作答、提交。</p>
+        </div>
+        <button class="btn btn-sm hw-jump" id="jpOpen" type="button">
+          跳到…<span class="hw-kbd">Alt + J</span>
+        </button>
+      </div>
+    </header>
 
-    <div class="hw-stats" id="hwStats"></div>
-    <div class="hw-grid" id="hwList"></div>
+    <main id="hwMain" tabindex="-1">
+      <h2 class="hw-sec" id="hwStatsTitle">提交进度</h2>
+      <div class="hw-stats" id="hwStats"></div>
 
-    <p class="hw-foot">
-      这里显示的是老师发给你**自己**的卷子（按账号分开存，换个账号看到的是自己的）。
-      <br>客观题（单选 / 多选 / 填空）提交后当场判分，简答题由老师批改 —— 只显示对错，不显示正确答案。
-      <br>⚠️ 纯静态站里答案技术上无法对学生完全隐藏，这里的判分是给你自己看的学习反馈，不是防作弊的考试系统。
-    </p>
+      <h2 class="hw-sec" id="hwListTitle">作业列表</h2>
+      <div class="hw-grid" id="hwList"></div>
+
+      <h2 class="hw-sec" id="hwNoteTitle">评分与说明</h2>
+      <p class="hw-foot">
+        这里显示的是老师发给你**自己**的卷子（按账号分开存，换个账号看到的是自己的）。
+        <br>客观题（单选 / 多选 / 填空）提交后当场判分，简答题由老师批改 —— 只显示对错，不显示正确答案。
+        <br>⚠️ 纯静态站里答案技术上无法对学生完全隐藏，这里的判分是给你自己看的学习反馈，不是防作弊的考试系统。
+      </p>
+    </main>
   </div>
 </div>
 
 <!-- 内容页自己的弹窗宿主（壳的 #modalHost 在 iframe 里取不到） -->
 <div id="modalHost" hidden></div>
+
+<!-- 跳转面板宿主（与看题弹窗分开，避免互相清空） -->
+<div id="jpHost" hidden></div>
+
+<!-- 读屏回声条：只是给看得见的人做观察用的，对读屏隐藏 -->
+<div id="jpEchoBar" class="jp-echo-bar" aria-hidden="true" hidden>
+  <span class="jp-echo-tag">读屏</span><span id="jpEchoTxt"></span>
+</div>
+
+<!-- 异步结果的播报通道：读屏不认「视觉上变了」，只认这里 -->
+<div id="hwLive" class="sr-only" role="status" aria-live="polite"></div>
 
 <script src="assets/nav.js"></script>
 <script src="assets/core.js"></script>
@@ -361,6 +472,9 @@
     for (var i = 0; i < list.length; i++) if (list[i].id === id) ex = list[i];
     if (!ex) { render(); return; }
 
+    // 记住是谁把弹窗叫出来的：关掉之后焦点要还回去
+    var backTo = document.activeElement;
+
     var qs = (ex.questions || []).filter(function (q) { return q.state === "accepted"; });
     var prev = myExamAnsOf(ex.id);
     var host = (typeof pageModalHost === "function") ? pageModalHost() : $("modalHost");
@@ -378,7 +492,7 @@
       : '<div class="hw-empty">这份卷子还没有采纳的题目。</div>';
 
     host.innerHTML =
-      '<div class="modal hw-paper" role="dialog" aria-modal="true" style="max-width:680px">' +
+      '<div class="modal hw-paper" role="dialog" aria-modal="true" aria-label="' + esc(ex.title) + '" style="max-width:680px">' +
         '<div class="modal-head"><b>' + esc(ex.title) + "</b></div>" +
         '<div class="modal-body">' + head + body +
           '<div class="hw-result" data-result' + (prev ? "" : " hidden") + ">" +
@@ -401,6 +515,10 @@
       markResult(host, gradeExamPaper(ex, prev.answers));
     }
 
+    // 弹窗开了就把焦点送进去：否则读屏还停在背后的卡片上，用户以为没反应
+    var firstCtrl = host.querySelector(".modal-body input, .modal-body textarea, .modal-foot .btn");
+    if (firstCtrl) firstCtrl.focus();
+
     function submit() {
       var answers = collectAnswers(host, qs);
       var r = submitExamAnswer(ex, answers);
@@ -414,6 +532,9 @@
       var btn = host.querySelector('[data-mc="submit"]');
       if (btn) btn.textContent = "重新提交";
       host.querySelector(".modal-body").scrollTop = 0;
+      // 🔴 视觉上「上面多了一行」读屏是听不见的 —— 必须显式播报
+      jpAnnounce("已提交。客观题 " + r.grade.objectiveGot + " / " + r.grade.objectiveTotal + " 分" +
+        (r.grade.pending ? "，另有 " + r.grade.pending + " 题简答待老师批改" : ""));
       render();     // 更新列表卡片上的"已交"状态
     }
 
@@ -429,6 +550,8 @@
       document.body.classList.remove("modal-open");
       host.removeEventListener("click", onClick);
       document.removeEventListener("keydown", onKey);
+      // 焦点还给叫出弹窗的那个按钮；节点已经不在页面上了就别硬塞
+      if (backTo && backTo.focus && document.contains(backTo)) backTo.focus();
     }
     function onClick(ev) {
       var b = ev.target.closest ? ev.target.closest("[data-mc]") : null;
@@ -441,6 +564,225 @@
     host.addEventListener("click", onClick);
     document.addEventListener("keydown", onKey);
   }
+
+  /* ============================================================
+     无障碍导航层 —— 一张地图，不是第二套界面
+     ------------------------------------------------------------
+     面板读的是**同一份 DOM / 同一份数据**：任务项点击后直接调用
+     openPaper() 或把焦点送到目标节点，没有平行的一份页面要维护。
+     关闭一律把焦点还给触发它的按钮（焦点丢了 = 用户迷路）。
+     ============================================================ */
+  var jpBox = null;       // 面板宿主
+  var jpItems = null;     // 本次打开的任务闭包
+  var jpReturnTo = null;  // 关掉之后焦点回到谁
+  var jpEcho = false;     // 回声条开关
+
+  /** 播报：写进 aria-live 区，读屏才会念 */
+  function jpAnnounce(msg) {
+    var live = $("hwLive");
+    if (!live) return;
+    live.textContent = "";
+    window.setTimeout(function () { live.textContent = msg; }, 40);
+  }
+
+  /** 把焦点送到一个非交互容器：补 tabindex=-1 才能 focus */
+  function jpFocus(el) {
+    if (!el) return;
+    if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+    try { el.focus({ preventScroll: true }); } catch (_) { el.focus(); }
+    if (el.scrollIntoView) el.scrollIntoView({ block: "center" });
+  }
+
+  /** 这个元素读屏会念成什么 —— 只认常见几类，够用来观察 */
+  function jpName(el) {
+    if (!el || el === document.body || !el.getAttribute) return "";
+    var s = el.getAttribute("aria-label") || "";
+    if (s) return s;
+    var ref = el.getAttribute("aria-labelledby");
+    if (ref) {
+      var n = document.getElementById(ref);
+      if (n) return (n.textContent || "").replace(/\s+/g, " ").trim();
+    }
+    var tag = (el.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") {
+      var lab = null;
+      if (el.id) lab = document.querySelector('label[for="' + el.id + '"]');
+      if (!lab && el.closest) lab = el.closest("label");
+      var lb = lab ? (lab.textContent || "").replace(/\s+/g, " ").trim() : "";
+      if (!lb) lb = el.getAttribute("placeholder") || "";
+      var kind = tag === "textarea" ? "多行文本框"
+        : (el.type === "checkbox" ? "复选框" : (el.type === "radio" ? "单选框" : "输入框"));
+      return (lb ? lb + "，" : "") + kind;
+    }
+    var txt = (el.textContent || "").replace(/\s+/g, " ").trim();
+    return txt.length > 40 ? txt.slice(0, 40) + "…" : txt;
+  }
+
+  /** 任务清单：按「我要做什么」排，不按页面上有什么排 */
+  function jpTaskList() {
+    var out = [];
+    var list = mine();
+    var todo = [], done = [];
+    list.forEach(function (ex) { (myExamAnsOf(ex.id) ? done : todo).push(ex); });
+
+    todo.slice(0, 3).forEach(function (ex) {
+      out.push({
+        lb: "开始作答：" + (ex.title || "未命名试卷"),
+        ht: examStats(ex).accepted + " 题 · 未交",
+        go: function () { openPaper(ex.id); }
+      });
+    });
+    done.slice(0, 2).forEach(function (ex) {
+      var p = myExamAnsOf(ex.id);
+      out.push({
+        lb: "看结果：" + (ex.title || "未命名试卷"),
+        ht: p.pending ? "简答待批改" : ("客观 " + p.objectiveGot + "/" + p.objectiveTotal),
+        go: function () { openPaper(ex.id); }
+      });
+    });
+    out.push({ lb: "看我的提交进度", ht: "共 " + list.length + " 份", go: function () { jpFocus($("hwStats")); } });
+    out.push({ lb: "跳到作业列表", ht: "全部试卷", go: function () { jpFocus($("hwList")); } });
+    out.push({ lb: "看评分说明", ht: "判分边界", go: function () { jpFocus(document.querySelector(".hw-foot")); } });
+    out.push({ lb: "回到课程列表", ht: "换门课", go: function () { if (typeof navigate === "function") navigate("class.html"); } });
+    return out;
+  }
+
+  function jpHostEl() {
+    if (!jpBox) jpBox = $("jpHost");
+    return jpBox;
+  }
+
+  function jpOpen() {
+    if (jpBox && !jpBox.hidden) return;
+    jpReturnTo = document.activeElement;
+    jpItems = jpTaskList();
+
+    var rows = jpItems.map(function (it, i) {
+      return '<li><button class="jp-item" type="button" data-jp="go" data-i="' + i + '">' +
+        '<span class="jp-lb">' + esc(it.lb) + '</span>' +
+        '<span class="jp-ht">' + esc(it.ht) + '</span></button></li>';
+    }).join("");
+
+    var box = jpHostEl();
+    box.innerHTML =
+      '<div class="modal-scrim" data-jp="close"></div>' +
+      '<div class="modal jp-modal" role="dialog" aria-modal="true" aria-labelledby="jpTitle" aria-describedby="jpHint">' +
+        '<div class="modal-head">' +
+          '<h3 id="jpTitle">跳到…</h3>' +
+          '<button class="modal-x" type="button" data-jp="close" aria-label="关闭">✕</button>' +
+        '</div>' +
+        '<div class="modal-body">' +
+          '<p class="jp-hint" id="jpHint">↑ ↓ 选，回车前往，Esc 关掉。清单按「你要做什么」排，不按区块排。</p>' +
+          '<ul class="jp-list" role="list">' + rows + '</ul>' +
+        '</div>' +
+        '<div class="modal-foot jp-foot">' +
+          '<label class="jp-echo-lab"><input type="checkbox" id="jpEcho"' +
+            (jpEcho ? " checked" : "") + '> 显示读屏会念的内容</label>' +
+          '<button class="btn btn-sm btn-ghost" type="button" data-jp="close">关闭</button>' +
+        '</div>' +
+      '</div>';
+
+    box.hidden = false;
+    document.body.classList.add("modal-open");
+    var first = box.querySelector(".jp-item");
+    if (first) first.focus();
+  }
+
+  function jpClose(back) {
+    var box = jpBox;
+    if (!box || box.hidden) return;
+    box.hidden = true;
+    box.innerHTML = "";
+    jpItems = null;
+    document.body.classList.remove("modal-open");
+    if (back !== false && jpReturnTo && jpReturnTo.focus) jpReturnTo.focus();
+  }
+
+  function jpRun(i) {
+    var it = jpItems && jpItems[i];
+    if (!it) return;
+    jpClose(false);
+    window.setTimeout(function () { it.go(); }, 0);
+  }
+
+  function jpFocusables(box) {
+    return Array.prototype.slice.call(
+      box.querySelectorAll(".jp-item, .modal-x, #jpEcho, .jp-foot .btn")
+    );
+  }
+
+  function jpOnKey(ev) {
+    var box = jpBox;
+    if (!box || box.hidden) return;
+
+    if (ev.key === "Escape") { ev.preventDefault(); jpClose(true); return; }
+
+    // 焦点陷阱：Tab 只在面板里转，转到最后一格回到第一格
+    if (ev.key === "Tab") {
+      var f = jpFocusables(box);
+      if (!f.length) return;
+      var at = f.indexOf(document.activeElement);
+      if (ev.shiftKey && at <= 0) { ev.preventDefault(); f[f.length - 1].focus(); }
+      else if (!ev.shiftKey && at === f.length - 1) { ev.preventDefault(); f[0].focus(); }
+      return;
+    }
+
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      var its = Array.prototype.slice.call(box.querySelectorAll(".jp-item"));
+      var cur = its.indexOf(document.activeElement);
+      if (cur < 0) return;
+      ev.preventDefault();
+      var next = ev.key === "ArrowDown" ? Math.min(cur + 1, its.length - 1) : Math.max(cur - 1, 0);
+      its[next].focus();
+    }
+  }
+
+  function jpBind() {
+    var box = jpHostEl();
+    if (!box) return;
+
+    box.addEventListener("keydown", jpOnKey);
+
+    box.addEventListener("click", function (ev) {
+      var el = ev.target.closest ? ev.target.closest("[data-jp]") : null;
+      if (!el) return;
+      var act = el.getAttribute("data-jp");
+      if (act === "close") { jpClose(true); return; }
+      if (act === "go") jpRun(parseInt(el.getAttribute("data-i"), 10));
+    });
+
+    box.addEventListener("change", function (ev) {
+      if (!ev.target || ev.target.id !== "jpEcho") return;
+      jpEcho = !!ev.target.checked;
+      var bar = $("jpEchoBar");
+      if (!bar) return;
+      bar.hidden = !jpEcho;
+      var t = $("jpEchoTxt");
+      if (t) t.textContent = jpEcho ? "（关掉面板后用 Tab 走一遍页面，这里显示读屏会念什么）" : "";
+    });
+
+    var btn = $("jpOpen");
+    if (btn) btn.addEventListener("click", function () { jpOpen(); });
+
+    // Alt + J：随时呼出 / 收起
+    document.addEventListener("keydown", function (ev) {
+      if (!(ev.altKey && (ev.key === "j" || ev.key === "J"))) return;
+      ev.preventDefault();
+      if (jpBox && !jpBox.hidden) { jpClose(true); return; }
+      if (document.body.classList.contains("modal-open")) return;
+      jpOpen();
+    });
+
+    // 回声条跟着焦点走
+    document.addEventListener("focusin", function (ev) {
+      var bar = $("jpEchoBar");
+      if (!bar || bar.hidden) return;
+      var t = $("jpEchoTxt");
+      if (t) t.textContent = jpName(ev.target) || "—";
+    });
+  }
+
+  jpBind();
 
   $("hwList").addEventListener("click", function (ev) {
     var b = ev.target.closest ? ev.target.closest("[data-act]") : null;

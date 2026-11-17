@@ -378,9 +378,9 @@ function mountReaderBar() {
     if (k === "read") {
       if (readerSpeak((readerSource().innerText || readerSource().textContent || ""))) {
         bar.dataset.speaking = "1";
-        flash("开始朗读 —— 想停就说一声，或点「停止」", "");
+        a11yToast("开始朗读 —— 想停就说一声，或点「停止」", "");
       } else {
-        flash("这个浏览器不支持语音朗读，换个浏览器再试", "bad");
+        a11yToast("这个浏览器不支持语音朗读，换个浏览器再试", "bad");
       }
     } else if (k === "stop") {
       readerStopSpeak();
@@ -477,10 +477,9 @@ function speak(text, rate) {
 }
 
 /* ---------------- 无障碍设置 ---------------- */
-/** 把 a11y 设置写进「根元素」（壳内写壳的，独立写自己的） */
-function applyA11yVars(cfg) {
-  const root = rootEl();
-  const c = cfg || LS.get(STORE_KEY.a11y, null) || {};
+/** 把一组 a11y 值画到指定根元素上（本页 / 壳各画一份） */
+function paintA11y(root, c) {
+  if (!root) return;
   const size = c.size ?? 15;
   const lh   = c.lh   ?? 1.8;
   const ls   = c.ls   ?? 0;
@@ -491,19 +490,256 @@ function applyA11yVars(cfg) {
 
   root.toggleAttribute("data-contrast", !!c.contrast);
   root.toggleAttribute("data-reduce-motion", !!c.reduceMotion);
+}
+
+/** 把 a11y 设置写进「根元素」（壳内写壳的，独立写自己的）
+ *  ⚠️ 本页也要画一份：iframe 是独立文档，只写壳的根，中间内容不会跟着变大。
+ *     （第 64 轮：首访选完模式后内容页字号没变，就是漏了这一步） */
+function applyA11yVars(cfg) {
+  const c = cfg || LS.get(STORE_KEY.a11y, null) || {};
+  paintA11y(document.documentElement, c);
+  paintA11y(shellRoot(), c);          // 壳的顶部栏 / 侧栏跟着一起放大
 
   if (inShell()) {
     notifyShell("st-a11y-changed", {
       vars: {
-        "--a11y-font-size": size + "px",
-        "--a11y-line-height": String(lh),
-        "--a11y-letter-spacing": ls + "em",
+        "--a11y-font-size": (c.size ?? 15) + "px",
+        "--a11y-line-height": String(c.lh ?? 1.8),
+        "--a11y-letter-spacing": (c.ls ?? 0) + "em",
       },
       contrast: !!c.contrast,
       reduceMotion: !!c.reduceMotion,
     });
   }
 }
+
+/* ---------------- 无障碍显示模式（首次进入时先问一次） ----------------
+   🔴 为什么要有这一步：
+     无障碍设置存在本机，**第一次打开时它必然是空的** —— 而看不清 / 看不见的人
+     恰恰最需要在一开始就能看清、听到这个选择。所以：
+       没读到模式 → 先问一次；弹窗自身按「最坏情况」渲染
+       （17px 起、可 Tab、可朗读、焦点进得去也出得来）。
+   🔴 选完写进 st_a11y.profile，之后不再打扰；
+     正常用户在弹窗里选「标准显示」，字号 / 动效 / 阅读工具条都回到普通状态。
+   ⚠️ 模式只是「一组预设」：字号、行距、对比、动效仍走 applyA11yVars，
+      不要另建一套变量，否则设置页与阅读工具条会不同步。
+--------------------------------------------------------------- */
+const A11Y_PROFILES = [
+  {
+    id: "reader",
+    label: "朗读优先",
+    desc: "适合用读屏软件，或希望边听边看的人。字更大、行距更宽，进入后右下角有朗读工具条，点正文任意一段就能听。",
+    cfg: { size: 18, lh: 2, ls: 0.01, contrast: false, reduceMotion: true, readMode: true },
+  },
+  {
+    id: "large",
+    label: "大字高对比",
+    desc: "字最大、对比最强，按钮也更大。不需要朗读，只是看起来更清楚。",
+    cfg: { size: 19, lh: 1.9, ls: 0.01, contrast: true, reduceMotion: false, readMode: false },
+  },
+  {
+    id: "calm",
+    label: "减少动效",
+    desc: "关掉过渡与动画，字稍大、行距更宽，适合容易分心或对闪烁敏感的人。",
+    cfg: { size: 16, lh: 1.9, ls: 0, contrast: false, reduceMotion: true, readMode: false },
+  },
+  {
+    id: "standard",
+    label: "标准显示",
+    desc: "保持默认外观，只保留键盘与读屏软件支持。适合大多数人。",
+    cfg: { size: 15, lh: 1.8, ls: 0, contrast: false, reduceMotion: false, readMode: false },
+  },
+];
+
+/** 已选模式 id；**没选过返回空串**（空串才会触发首访弹窗，别拿 "standard" 当缺省） */
+function a11yProfile() {
+  const c = LS.get(STORE_KEY.a11y, null);
+  const id = (c && typeof c === "object") ? String(c.profile || "") : "";
+  for (let i = 0; i < A11Y_PROFILES.length; i++) {
+    if (A11Y_PROFILES[i].id === id) return id;
+  }
+  return "";
+}
+
+/** 把模式挂到本页根元素（只作标记，不改颜色；颜色仍由 applyA11yVars 负责） */
+function syncA11yProfileAttr() {
+  try {
+    const root = document.documentElement;
+    const id = a11yProfile();
+    if (id) root.setAttribute("data-a11y-profile", id);
+    else root.removeAttribute("data-a11y-profile");
+  } catch (_) { /* 异常 DOM 下静默 */ }
+}
+
+/** 应用一个模式：字号 / 行距 / 对比 / 动效 / 阅读模式一次写全 */
+function applyA11yProfile(id) {
+  let p = null;
+  for (let i = 0; i < A11Y_PROFILES.length; i++) {
+    if (A11Y_PROFILES[i].id === id) p = A11Y_PROFILES[i];
+  }
+  if (!p) return false;
+
+  const prev = LS.get(STORE_KEY.a11y, null) || {};
+  const next = Object.assign({}, prev, p.cfg, {
+    profile: p.id,
+    profileAt: Date.now(),
+  });
+  LS.set(STORE_KEY.a11y, next);
+
+  applyA11yVars(next);                       // 字号 / 行距 / 对比 / 动效（含广播）
+  document.documentElement.setAttribute("data-a11y-profile", p.id);
+  setReadMode(!!p.cfg.readMode);             // 阅读工具条 / 点段落朗读（含广播）
+
+  try {
+    document.dispatchEvent(new CustomEvent("st-a11y-profile-changed", { detail: { id: p.id } }));
+  } catch (_) {}
+  return true;
+}
+
+/** 屏幕朗读播报：给异步结果一个「说得出声」的落点（每页只有一个节点） */
+function announce(msg, urgent) {
+  const t = String(msg == null ? "" : msg).trim();
+  if (!t || !document.body) return;
+  let n = document.getElementById("srAnnouncer");
+  if (!n) {
+    n = document.createElement("div");
+    n.id = "srAnnouncer";
+    n.className = "sr-only";
+    n.setAttribute("aria-atomic", "true");
+    n.setAttribute("role", "status");
+    n.setAttribute("aria-live", "polite");
+    document.body.appendChild(n);
+  }
+  n.setAttribute("aria-live", urgent ? "assertive" : "polite");
+  // 先清空再写：同样的句子连续播两次时，读屏才会重新念
+  n.textContent = "";
+  setTimeout(() => { n.textContent = t; }, 30);
+}
+
+/** 弹一条提示：页面自己有 flash 就用页面的，否则退回播报（核心层不依赖页面函数） */
+function a11yToast(msg, tone) {
+  try {
+    if (typeof flash === "function") { flash(msg, tone || ""); return; }
+  } catch (_) { /* flash 在 TDZ / 未定义时继续走播报 */ }
+  announce(msg);
+}
+
+/** 打开「选择显示模式」弹窗；已开着就只把焦点送回去 */
+function openA11yGate() {
+  if (!document.body) return;
+  const opening = document.getElementById("a11yGate");
+  if (opening) {
+    const cur = opening.querySelector('input[name="a11yGateMode"]:checked');
+    if (cur) { try { cur.focus(); } catch (_) {} }
+    return;
+  }
+
+  const current = a11yProfile();
+  const opts = A11Y_PROFILES.map((p) => (
+    '<label class="a11y-opt">' +
+      '<input type="radio" name="a11yGateMode" value="' + p.id + '"' +
+        ((current ? current === p.id : p.id === "reader") ? " checked" : "") + ">" +
+      '<span class="a11y-opt-body">' +
+        '<span class="a11y-opt-title">' + p.label + "</span>" +
+        '<span class="a11y-opt-desc">' + p.desc + "</span>" +
+      "</span>" +
+    "</label>"
+  )).join("");
+
+  const host = el(
+    '<div id="a11yGateHost" class="a11y-gate-host">' +
+      '<div class="a11y-gate-mask" aria-hidden="true"></div>' +
+      '<div class="a11y-gate" id="a11yGate" role="dialog" aria-modal="true" ' +
+        'aria-labelledby="a11yGateTitle" aria-describedby="a11yGateDesc">' +
+        '<p class="a11y-gate-kicker">无障碍显示模式</p>' +
+        '<h2 id="a11yGateTitle">先选一种看着舒服的显示方式</h2>' +
+        '<p class="a11y-gate-desc" id="a11yGateDesc">这一步只问一次。不确定就保持第一项「朗读优先」—— 字更大，进入后可以随时听正文。</p>' +
+        '<fieldset class="a11y-gate-set">' +
+          '<legend class="sr-only">选择一个显示模式，共四项，方向键切换</legend>' +
+          opts +
+        "</fieldset>" +
+        '<div class="a11y-gate-foot">' +
+          '<button class="btn btn-primary" type="button" id="a11yGateOk">用这个模式进入</button>' +
+          '<button class="btn" type="button" id="a11yGateDefault">先用朗读优先</button>' +
+        "</div>" +
+        '<p class="a11y-gate-note">选完会记住，下次不再出现。之后可以在「设置 → 无障碍」里随时改。</p>' +
+      "</div>" +
+    "</div>");
+  if (!host) return;
+
+  document.body.appendChild(host);
+  document.body.classList.add("modal-open");
+
+  const dlg = host.querySelector("#a11yGate");
+  const radios = host.querySelectorAll('input[name="a11yGateMode"]');
+  const btnOk = host.querySelector("#a11yGateOk");
+  const btnDefault = host.querySelector("#a11yGateDefault");
+
+  function close() {
+    document.removeEventListener("keydown", onKey, true);
+    host.remove();
+    document.body.classList.remove("modal-open");
+    syncA11yProfileAttr();
+  }
+
+  function choose(id) {
+    const ok = applyA11yProfile(id);
+    close();
+    if (!ok) return;
+    let p = null;
+    for (let i = 0; i < A11Y_PROFILES.length; i++) {
+      if (A11Y_PROFILES[i].id === id) p = A11Y_PROFILES[i];
+    }
+    const msg = "已切换到「" + p.label + "」" +
+      (p.cfg.readMode ? "。进入后右下角会出现朗读工具条，点正文任意一段就能听。" : "。");
+    a11yToast(msg);
+    announce(msg);
+    // 关闭后焦点落到正文标题，读屏用户从内容开头开始，而不是掉回 body
+    const head = document.querySelector("main h1") || document.querySelector("h1");
+    if (head) {
+      if (!head.hasAttribute("tabindex")) head.setAttribute("tabindex", "-1");
+      try { head.focus(); } catch (_) {}
+    }
+  }
+
+  function onKey(e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      choose("reader");                      // 「取消」= 最坏情况，不留下未选择状态
+      return;
+    }
+    if (e.key !== "Tab") return;
+    // 单选框组只有选中的那一个是 Tab 停靠点，所以首尾按「选中项 + 两个按钮」算
+    const first = dlg.querySelector('input[name="a11yGateMode"]:checked') || radios[0];
+    const list = [first, btnOk, btnDefault].filter(Boolean);
+    if (list.length < 2) return;
+    const firstEl = list[0];
+    const lastEl = list[list.length - 1];
+    if (e.shiftKey && document.activeElement === firstEl) {
+      e.preventDefault(); lastEl.focus();
+    } else if (!e.shiftKey && document.activeElement === lastEl) {
+      e.preventDefault(); firstEl.focus();
+    }
+  }
+
+  btnOk.addEventListener("click", () => {
+    const cur = host.querySelector('input[name="a11yGateMode"]:checked');
+    choose(cur ? cur.value : "reader");
+  });
+  btnDefault.addEventListener("click", () => choose("reader"));
+  document.addEventListener("keydown", onKey, true);
+
+  const start = host.querySelector('input[name="a11yGateMode"]:checked') || radios[0] || btnOk;
+  try { start.focus(); } catch (_) {}
+}
+
+/* 「设置 → 无障碍」里的重新选择入口（事件委托，任何页面加个按钮就能用） */
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest ? e.target.closest("[data-a11y-gate]") : null;
+  if (!b) return;
+  e.preventDefault();
+  openA11yGate();
+});
 
 /* ============================================================
    独立模式：内容页被直接打开时，自我渲染顶部栏 + 左侧栏
@@ -1433,6 +1669,22 @@ document.addEventListener("click", (e) => {
 
 Theme.init();
 applyA11yVars();
+syncA11yProfileAttr();
+
+/* 首访：没读到显示模式就先问一次（弹窗自身按最坏情况渲染） */
+(function initA11yGate() {
+  try {
+    const start = () => {
+      if (a11yProfile()) return;      // 读过 → 直接按模式生效，不再打扰
+      openA11yGate();
+    };
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", start);
+    } else {
+      start();
+    }
+  } catch (_) { /* 异常 DOM 下静默跳过 */ }
+})();
 
 /* 接收壳下发设置变更（壳改了主题/无障碍 → 内容页同步变色） */
 window.addEventListener("message", (e) => {
@@ -1453,6 +1705,11 @@ window.addEventListener("message", (e) => {
   // 壳那边新建了课程 → 本页更新目录（教案页的课程下拉要跟着多一项）
   if (d.type === "st-courses-changed") {
     applyCoursesChanged(d.courses);
+  }
+  // 壳顶栏「显示模式」→ 打开本页的选择弹窗（弹窗只此一份，不复制到壳里）
+  if (d.type === "st-open-a11y-gate") {
+    openA11yGate();
+    notifyShell("st-a11y-gate-opened", {});
   }
   // 无障碍阅读模式：壳改了开关 → 本页立刻跟着切阅读态（视觉 + 工具条）
   if (d.type === "st-a11y-mode") {

@@ -783,6 +783,20 @@ function pushA11yToFrame() {
   });
 }
 
+/* 重新选择显示模式：弹窗只在 core.js 里实现一份，壳发消息让它开。
+   ⚠️ 内容页没接住（还在加载 / 是 app.html 自身）时退化为跳到设置页，
+   别让按钮点下去没反应。 */
+let a11yGatePending = false;
+function openA11yGateFromShell() {
+  a11yGatePending = true;
+  broadcast("st-open-a11y-gate", {});
+  setTimeout(() => {
+    if (!a11yGatePending) return;          // 已收到回执
+    a11yGatePending = false;
+    go("settings.html");
+  }, 400);
+}
+
 function iframeFailed() {
   const bar = document.getElementById("frameError");
   if (bar) bar.hidden = false;
@@ -835,6 +849,9 @@ function boot() {
   document.querySelectorAll("[data-theme-btn]").forEach((b) => {
     b.addEventListener("click", () => Theme.apply(b.dataset.themeBtn));
   });
+
+  // 重新选择显示模式（弹窗在内容页 core.js 里，只此一份）
+  document.getElementById("a11yModeOpen")?.addEventListener("click", openA11yGateFromShell);
 
   // 用户菜单
   const btn = document.getElementById("userBtn");
@@ -928,6 +945,9 @@ function boot() {
       const b = document.getElementById("a11yReadMode");
       if (b) b.checked = on;
       applyShellReadMode(on);
+    }
+    if (d.type === "st-a11y-gate-opened") {
+      a11yGatePending = false;            // 内容页已经开了弹窗，别再退化跳转
     }
     if (d.type === "st-a11y-changed") {
       // a11y 变量写在壳的根元素上（子页面通过 frameElement.ownerDocument 修改）

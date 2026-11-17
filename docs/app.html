@@ -34,6 +34,12 @@
   </div>
 
   <div class="shell-top-right">
+    <!-- 重新选择无障碍显示模式：内容页加载 core.js，弹窗只实现一份，这里发消息让它打开 -->
+    <button class="shell-a11y-mode" id="a11yModeOpen" type="button"
+            aria-label="重新选择无障碍显示模式" title="重新选择无障碍显示模式">
+      <span aria-hidden="true">◑</span><span class="a11y-mode-label">显示模式</span>
+    </button>
+
     <!-- 无障碍阅读模式：默认勾选。开启后正文排版放大、点段落即可朗读，右下角出现阅读工具条 -->
     <label class="shell-a11y-toggle" for="a11yReadMode" title="无障碍阅读模式：放大字号行高、点段落即可朗读">
       <input type="checkbox" id="a11yReadMode" checked
