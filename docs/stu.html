@@ -79,12 +79,12 @@
     <div class="page-head">
       <div class="crumb">学生管理</div>
       <h1>学生管理</h1>
-      <p>以「人」为中心的本机学生总册 —— 学习活跃 + 作业提交，全部来自本机真实记录</p>
+      <p>以「人」为中心的学生总册 —— 学习活跃 + 作业提交，全部来自真实记录</p>
     </div>
 
     <div class="stat-grid">
       <div class="stat-card">
-        <div class="k">本机学生</div>
+        <div class="k">学生账号</div>
         <div class="v"><span id="stTotal">—</span><small> 人</small></div>
       </div>
       <div class="stat-card">
@@ -119,7 +119,7 @@
 
       <div class="table-wrap">
         <table class="data">
-          <caption class="sr-only">本机学生总册</caption>
+          <caption class="sr-only">学生总册</caption>
           <thead>
             <tr>
               <th scope="col">学生</th>
@@ -223,7 +223,7 @@
     if (!list.length) {
       var tr = document.createElement("tr");
       tr.innerHTML = '<td colspan="7" class="muted-note">' +
-        (ALL.length ? "没有符合条件的学生。" : "本机还没有学生账号 —— 学生用邀请码注册进来后，这里就能看到。") +
+        (ALL.length ? "没有符合条件的学生。" : "还没有学生账号 —— 学生用邀请码注册进来后，这里就能看到。") +
         "</td>";
       body.appendChild(tr);
     } else {
@@ -250,7 +250,7 @@
     $("rosterCount").textContent = "显示 " + list.length + " / " + ALL.length + " 人";
     $("rosterNote").innerHTML =
       "「学习活跃」读的是每个学生**自己**的行为日志（与他在「我的学情」看到的是同一份）。" +
-      "本机**没有课堂考勤与成绩数据** —— 所以这里不显示出勤率、不显示分数，也不按班级编人数。";
+      "**没有课堂考勤与成绩数据** —— 所以这里不显示出勤率、不显示分数，也不按班级编人数。";
   }
 
   /* ---------------- 单人详情（跨课档案） ---------------- */

@@ -86,27 +86,6 @@
   .prog-fill { height: 100%; background: var(--success); transition: width .25s; }
   .prog-label { font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
 
-  /* ---------- 骨架步骤 ---------- */
-  .stage { border: 1px solid var(--border); border-radius: 11px; padding: 12px; margin-bottom: 9px; }
-  .stage.done { border-left: 3px solid var(--success); background: color-mix(in srgb, var(--success) 5%, transparent); }
-  .stage.now { border-left: 3px solid var(--primary); background: color-mix(in srgb, var(--primary) 7%, transparent); }
-  .stage-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
-  .stage-no {
-    flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%;
-    display: inline-flex; align-items: center; justify-content: center;
-    font-size: 12px; font-variant-numeric: tabular-nums;
-    background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--foreground);
-  }
-  .stage.done .stage-no { background: var(--success); color: #fff; }
-  .stage-title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 500; }
-  .stage-flag { flex: 0 0 auto; font-size: 11.5px; }
-  .stage-flag.done { color: var(--success); }
-  .stage-flag.now { color: var(--primary); }
-  .stage-f { display: block; margin-top: 8px; }
-  .stage-f > span { display: block; font-size: 11.5px; color: var(--muted-foreground); margin-bottom: 4px; }
-  .stage-f .txt { font-size: 13px; line-height: 1.7; }
-  .stage-act { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
-
   /* ---------- 路线笔记 / 新发现 ---------- */
   .notes { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
   .note { border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; }
@@ -166,13 +145,7 @@
   .collab .tag { font-size: 11.5px; }
 
   /* ---------- 发起弹窗 ---------- */
-  .mk-preview { border: 1px solid var(--border); border-radius: 10px; padding: 11px; margin-top: 4px; }
-  .mk-src { font-size: 12.5px; line-height: 1.7; color: var(--muted-foreground); margin-bottom: 8px; }
-  .mk-src b { color: var(--foreground); font-weight: 500; }
-  .mk-steps { display: flex; flex-direction: column; gap: 6px; }
-  .mk-step { font-size: 12.5px; line-height: 1.6; }
-  .mk-step b { font-weight: 500; }
-  .mk-step span { color: var(--muted-foreground); }
+  .mk-hint { font-size: 12.5px; line-height: 1.75; color: var(--muted-foreground); }
   .pick-list { display: flex; flex-direction: column; gap: 5px; max-height: 160px; overflow-y: auto; }
   .pick-list label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; cursor: pointer; }
   .pick-list input { margin: 0; }
@@ -209,7 +182,7 @@
     <div class="page-head">
       <div class="crumb">学习 · 实训</div>
       <h1>实训</h1>
-      <p>跟着一条「路径」重走一遍人类发现它的过程 —— <b>只给路径，不给答案</b>。老师发布的活动在这里参与，你也可以自己发起一个探究。</p>
+      <p>老师发布探究主题，你用自己的路子往里走 —— <b>只给问题，不给答案</b>。卡住了可以让 AI 陪你验一个猜想，也可以自己发起一个探究。</p>
     </div>
 
     <div class="card train-bar">
@@ -236,10 +209,11 @@
     <div class="notice notice-info">
       <span aria-hidden="true">◎</span>
       <div>
-        <b>为什么是「不给答案，给路径」</b> —— 课程只会讲到结论，但结论是怎么被创造出来的，恰恰是最能学东西的地方。
-        所以每一步只给「往哪想」的问题、可查的线索、和一件能动手做的事，结论留给你自己走到。<br>
-        <b>诚实说明</b>：纯静态站不能真的联网检索，「检索创造史」这一版固化成了本地路径库（命不命中都会如实标注）。
-        协作者与新发现是<b>本机浏览器内</b>的模拟 —— 换一台机器就查不到，正式版由服务端承载。
+        <b>为什么不给答案、也不给步骤清单</b> —— 课程只讲到结论，但结论是怎么被创造出来的，恰恰最能学东西。
+        这里没有"照着做完就行"的步骤：先想什么、先试什么由你定 —— 想到的记成灵感，想通的记成推导，
+        拿不准的让 AI 陪你验一个猜想，结论始终留给你自己走到。<br>
+        <b>诚实说明</b>：AI 验证走你配置的模型；没接模型时给的是内置示例结论，界面上如实标注。
+        你的灵感与推导随时回来都在；标记为「新发现」的会随这次活动一起记录，参与的人都能看到。
       </div>
     </div>
   </div>
@@ -368,7 +342,6 @@
   function actItemHtml(a) {
     var st = stLabel(a);
     var pill = st.tone === "ok" ? "st-ok" : st.tone === "warn" ? "st-warn" : "";
-    var steps = (a.skeleton && a.skeleton.stages) || [];
     var isMine = a.origin === "student" && String(a.createdBy || "").toLowerCase() === (me() || "").toLowerCase();
     return (
       '<button class="act-item' + (a.id === VIEW.currentId ? " on" : "") + '" type="button" data-act-id="' + esc(a.id) +
@@ -380,7 +353,6 @@
         '<span class="ai-meta">' +
           '<span class="tag' + (a.origin === "student" ? " tag-warning" : "") + '">' +
             (isMine ? "我发起的" : activityOrigin(a.origin)) + "</span>" +
-          "<span>" + steps.length + " 步</span>" +
           (a.participants.length ? "<span>" + a.participants.length + " 人</span>" : "") +
         "</span>" +
         '<span class="ai-time">' + agoText(a.updatedAt, Date.now()) +
@@ -403,11 +375,23 @@
   }
 
   /* ---------------- 渲染：右栏（参与视图） ---------------- */
+
+  /**
+   * 「我的」新发现 —— 活动记录里的 findings 是**这次探究共用的**（同学的、预置示例的都在里面），
+   * 所以进度只能算自己标的那几条。🔴 `sample` 是预置示例，绝不能算成"我的成果"。
+   */
+  function myFindingsOf(a) {
+    var me2 = String(myName() || "").trim().toLowerCase();
+    return (a.findings || []).filter(function (f) {
+      return !f.sample && String(f.who || "").trim().toLowerCase() === me2;
+    });
+  }
+
   function progressInfo(a) {
     var p = myProgressOf(a.id);
     var notes = (p && p.notes) || [];
     var ded = (p && p.deductions) || [];
-    var findings = a.findings || [];
+    var findings = myFindingsOf(a);
     var total = notes.length + ded.length + findings.length;
     var pct = Math.min(100, total * 20);          // 5 条成果就满
     var direction = "";
@@ -426,17 +410,18 @@
     var findings = a.findings || [];
     var items = [];
     notes.slice().reverse().forEach(function (n) {
-      items.push({ at: n.at, text: n.text, kind: "idea", who: "", pinned: false });
+      items.push({ at: n.at, text: n.text, kind: "idea", who: "", pinned: false, sample: false });
     });
     findings.slice().reverse().forEach(function (f) {
-      items.push({ at: f.at, text: f.text, kind: "finding", who: f.who, pinned: f.pinned });
+      items.push({ at: f.at, text: f.text, kind: "finding", who: f.who, pinned: f.pinned, sample: !!f.sample });
     });
     items.sort(function (x, y) { return (y.at || 0) - (x.at || 0); });
 
     var list = items.length
       ? '<ul class="notes">' + items.map(function (it) {
           var badge = it.kind === "finding"
-            ? '<span class="tag' + (it.pinned ? " tag-success" : "") + '">新发现' + (it.pinned ? " · 老师推荐" : "") + "</span>"
+            ? '<span class="tag' + (it.pinned ? " tag-success" : "") + '">新发现' + (it.pinned ? " · 老师推荐" : "") + "</span>" +
+              (it.sample ? ' <span class="tag tag-warning">预置示例</span>' : "")
             : '<span class="tag">灵感</span>';
           return '<li class="note">' +
             '<div class="n-top">' + badge + (it.who ? " <b>" + esc(it.who) + "</b>" : "") +
@@ -492,7 +477,7 @@
         '<div class="pane-empty chat-empty">' +
           '<div><h3 style="margin:0 0 8px;font-size:14px;font-weight:500;color:var(--foreground)">还没有选中实训</h3>' +
           "<p>左边列表里还没有可参与的实训。</p>" +
-          "<p>点右上角「＋ 发起实训」，写一句你想探究的目标 —— 系统会先给出一条「引导路径」，你沿着它走，也可以试自己的方向。</p></div>" +
+          "<p>点右上角「＋ 发起实训」，写一句你想探究的目标 —— 之后怎么走由你定：记灵感、记推导，卡住了就让 AI 帮你验一个猜想。</p></div>" +
         "</div>";
       return;
     }
@@ -534,7 +519,7 @@
     var prog =
       '<div class="blk">' +
         '<div class="blk-head"><h3>探究进度</h3>' +
-          '<span class="hint">按你保存的灵感与推导累计</span></div>' +
+          '<span class="hint">按你自己留下的灵感 / 推导 / 新发现累计</span></div>' +
         '<div class="prog-row"><div class="prog-track"><div class="prog-fill" style="width:' + info.pct + '%"></div></div>' +
           '<span class="prog-label">已积累 ' + info.total + ' 条成果</span></div>' +
         '<p class="muted" style="margin:0">' + info.notes.length + ' 个猜想灵感 · ' + info.deductions.length + ' 条推导' +
@@ -554,7 +539,7 @@
     var collab = "";
     if (a.participants.length) {
       collab = '<div class="blk"><div class="blk-head"><h3>一起探究的人</h3>' +
-        '<span class="hint">本机浏览器内模拟的协作</span></div>' +
+        '<span class="hint">一起探究这门课的同学</span></div>' +
         '<div class="collab">' + a.participants.map(function (n) {
           return '<span class="tag">' + esc(n) + "</span>";
         }).join("") + "</div></div>";
@@ -604,13 +589,13 @@
       return;
     }
 
-    // 标记新发现（写回老师桶，老师看得到）
+    // 标记新发现（写回活动记录；老师发布的实训，老师端看得到）
     if (e.target.closest("#findAdd")) {
       var fi = $("ideaInput");
       var r2 = addMyFinding(a.id, fi ? fi.value : "", myName());
       if (!r2.ok) { flash(r2.error, "bad"); return; }
       if (fi) fi.value = "";
-      flash("已标记为新发现 —— 老师会看到", "ok");
+      flash("已标记为新发现", "ok");
       renderAll();
       return;
     }
@@ -653,8 +638,11 @@
   /* ============================================================
      发起实训（内容页弹窗）—— 灵感 02：发起权不只属于教师
      ------------------------------------------------------------
-     学生写一句话目标 → 实时预览「引导路径」→ 选协作者 → 发起（**直接开启**，不等老师确认）。
-     数据层 createStudentActivity()：写学生桶 + 同步本机教师桶。
+     学生写一句话目标 → 选关联课程 / 协作者 → 发起（**直接开启**，不等老师确认）。
+     数据层 createStudentActivity()：只写学生自己桶。
+     🔴 2026-11-17 用户定：学生端**不给骨架**（不预览、不铺步骤）——
+        写清目标之后怎么走由学生自己定，AI 负责跟着他的路子答疑，
+        不是让他照着老师的路径再走一遍。
      ============================================================ */
 
   function courseOptionsHtml() {
@@ -665,39 +653,20 @@
     }).join("");
   }
 
-  /** 协作者候选：本机同学（排除自己）+ 本机老师 */
+  /**
+   * 协作者候选：本机的**同学**（排除自己）。
+   * 🔴 不列老师 —— 学生自发的探究不进教师端（2026-11-17 用户定），
+   *    列个拉不进来的老师等于骗人。
+   */
   function collaboratorOptions() {
     var u = (me() || "").toLowerCase();
     var rows = [];
     var students = (typeof localStudentAccounts === "function") ? localStudentAccounts() : [];
-    var teachers = (typeof localTeacherAccounts === "function") ? localTeacherAccounts() : [];
     students.forEach(function (s) {
       if (s.key.toLowerCase() === u) return;
       rows.push({ key: s.key, label: s.name + "（同学）" });
     });
-    teachers.forEach(function (t) {
-      rows.push({ key: t.key, label: t.name + "（老师）" });
-    });
     return rows;
-  }
-
-  function renderPreview() {
-    var goal = ($("mkGoal").value || "").trim();
-    var box = $("mkSrc");
-    var steps = $("mkStages");
-    if (!box || !steps) return;
-    if (!goal) {
-      box.innerHTML = "在下面写一句目标 —— 这里会立刻给出<b>引导路径</b>的样子（只给路径，不给答案）。";
-      steps.innerHTML = "";
-      return;
-    }
-    var skel = draftSkeleton(goal);
-    box.innerHTML = "来源：<b>" + esc(skeletonSourceText(skel)) + "</b>" +
-      (skel.source === "generic" ? "<br>换个说法试试（带上课程里的具体名词）：圆面积 / 勾股定理 / 瞬时变化" : "");
-    steps.innerHTML = skel.stages.map(function (s, i) {
-      return '<div class="mk-step"><b>' + (i + 1) + ". " + esc(s.title) + "</b><br>" +
-        "<span>" + esc(s.prompt) + "</span></div>";
-    }).join("");
   }
 
   function closeNewAct() { closePageModal(); }
@@ -723,16 +692,14 @@
           "</div>" +
           (collabs.length
             ? '<div class="field">' +
-                "<label>拉上谁一起（可选）</label>" +
+                "<label>拉上同学一起（可选）</label>" +
                 '<div class="pick-list">' + collabs.map(function (c) {
                   return '<label><input type="checkbox" value="' + esc(c.key) + '">' + esc(c.label) + "</label>";
                 }).join("") + "</div>" +
               "</div>"
             : "") +
-          '<div class="mk-preview">' +
-            '<div class="mk-src" id="mkSrc"></div>' +
-            '<div class="mk-steps" id="mkStages"></div>' +
-          "</div>" +
+          '<p class="mk-hint" style="margin:0">发起后就能直接参与：把猜想记成灵感、把想通的事记成推导，' +
+            "卡住了就让 AI 帮你验一个猜想。走哪条路、按什么顺序，由你决定 —— 这里没有要跟着走的步骤。</p>" +
           '<p class="login-error" id="mkErr" role="alert" hidden></p>' +
         "</div>" +
         '<div class="modal-foot">' +
@@ -746,8 +713,6 @@
     host.querySelectorAll("[data-close]").forEach(function (n) { n.addEventListener("click", closeNewAct); });
     document.addEventListener("keydown", pageModalEsc);
 
-    $("mkGoal").addEventListener("input", renderPreview);
-    renderPreview();
     setTimeout(function () { var g = $("mkGoal"); if (g && g.focus) g.focus(); }, 0);
 
     $("mkCreate").addEventListener("click", function () {
@@ -808,7 +773,7 @@
         '<textarea class="textarea" id="chatInput" rows="2" placeholder="说点什么…"></textarea>' +
         '<button class="btn btn-sm btn-primary" type="button" id="chatSend">发送</button>' +
       "</div>" +
-      '<p class="muted" style="margin:6px 0 0">消息写回活动记录（本机浏览器内模拟协作，换台机器查不到）。</p>' +
+      '<p class="muted" style="margin:6px 0 0">消息写回活动记录，教师端也能看到。</p>' +
     "</div>";
   }
 
@@ -849,7 +814,7 @@
 
   function guessSystemPrompt(withSearch) {
     var lines = [
-      "你是一位计算机课程的探究式学习助教。学生在一次「实训」里提出了一个偏离既定引导路径的、自己的猜想或想法。",
+      "你是一位计算机课程的探究式学习助教。学生在一次「实训」里提出了一个自己的猜想或想法（这次探究没有规定路线，他是自己想到这一点的）。",
       "你的任务是：先验证，再判断可行性，最后回答。",
       "",
       "三步走：",

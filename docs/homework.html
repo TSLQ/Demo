@@ -792,6 +792,56 @@
     if (b.getAttribute("data-act") === "open") openPaper(card.getAttribute("data-id"));
   });
 
+  /* ---------- 给 AI 指令条注册这一页能做的事 ----------
+     ⚠️ 只读 / 跳转的直接做；改数据的动作必须带 diff，由 Deck 弹审核。
+        这里三条都不改数据，所以不进审核，只负责「把人送到地方」。 */
+  if (window.Deck && typeof window.Deck.register === "function") {
+    window.Deck.register([
+      {
+        id: "hw.openFirst",
+        label: "开始作答第一份未交的卷子",
+        sample: "开始做作业",
+        risk: "nav",
+        leave: true,
+        match: function (t) {
+          if (!/(开始|做|答|写).*(作业|卷子|试卷)/.test(t)) return null;
+          var all = mine();
+          for (var i = 0; i < all.length; i++) {
+            if (!myExamAnsOf(all[i].id)) return { id: all[i].id };
+          }
+          return { id: "" };
+        },
+        run: function (a) {
+          if (a && a.id) { openPaper(a.id); return; }
+          jpFocus($("hwList"));
+          if (typeof announce === "function") announce("现在没有未交的卷子，下面是全部作业。");
+        }
+      },
+      {
+        id: "hw.progress",
+        label: "看提交进度",
+        sample: "看我交了几份",
+        risk: "read",
+        leave: true,
+        match: function (t) {
+          return /(提交进度|交了几份|做了几份|进度)/.test(t) ? {} : null;
+        },
+        run: function () { jpFocus($("hwStats")); }
+      },
+      {
+        id: "hw.list",
+        label: "跳到作业列表",
+        sample: "列出我的作业",
+        risk: "read",
+        leave: true,
+        match: function (t) {
+          return /(作业列表|列出.*作业|有哪些作业)/.test(t) ? {} : null;
+        },
+        run: function () { jpFocus($("hwList")); }
+      }
+    ]);
+  }
+
   render();
 })();
 </script>

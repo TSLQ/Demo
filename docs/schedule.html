@@ -1024,7 +1024,7 @@ function openConfig() {
     err.hidden = true;
     // 节次数变化时按「保留前 N 行」重排，多余的格子丢掉（提示里已说明）
     const week = kept.map((_, r) => DAYS.map((__, c) => (WEEK[r] && WEEK[r][c]) || null));
-    setState({ weekNo: n, slots: kept, days: DAYS, week }, "本机设置");
+    setState({ weekNo: n, slots: kept, days: DAYS, week }, "你保存的设置");
     closePageModal();
   });
 
@@ -1043,7 +1043,7 @@ $("#configBtn").addEventListener("click", openConfig);
 /* 启动：先读本机保存的课表，没有就用预置课表 */
 {
   const saved = LS.get(SCHEDULE_KEY, null);
-  setState(saved, saved ? "本机保存" : "预置课表");
+  setState(saved, saved ? "你保存的设置" : "预置课表");
 }
 
 /* 高亮是按「当前时间」算的，所以时间往前走要跟着刷新：

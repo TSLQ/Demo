@@ -182,12 +182,14 @@
     <div class="notice notice-info">
       <span aria-hidden="true">◎</span>
       <div>
-        <b>为什么是「不给答案，给路径」</b> —— 课程只会讲到结论，但结论是怎么被创造出来的，
-        恰恰是学生最能学东西的地方。所以这里生成的**不是答案卡，是引导骨架**：
-        每一步只给「往哪想」的问题、可查的线索、以及一件能动手做的事。
+        <b>为什么是「不给答案，也不给步骤清单」</b> —— 课程只讲到结论，但结论是怎么被创造出来的，
+        恰恰是学生最能学东西的地方。所以这里生成的<b>不是答案卡，是备课用的引导骨架</b>：
+        每一步只有「往哪想」的问题、可查的线索、以及一件能动手做的事，结论不写进骨架。
         骨架来自 <code>assets/nav.js</code> 的预置路径库（割圆术 / 勾股定理 / 极限思想），
         没命中关键词就给通用探究骨架。<br>
-        <b>诚实说明</b>：纯静态站不能真的联网检索，「检索创造史」这一步在本版**固化成了本地路径库**，
+        <b>学生端不铺这条路径</b> —— 他自己决定先想什么、先试什么；你在这里看到的是他留下的灵感、
+        推导与新发现，而不是"走到第几步"。<br>
+        <b>诚实说明</b>：纯静态站不能真的联网检索，「检索创造史」这一步在本版固化成了本地路径库，
         界面上会如实标注命中与否；正式版由模型检索。参与人数与学生「新发现」为<b>预置示例数据</b>。
       </div>
     </div>
@@ -374,22 +376,24 @@ function stageHtml(st, i, last) {
  * 学生在这次实训里的真实进度（第 55 轮）。
  * 🔴 数据来自**学生自己的桶**（`st_training_progress`），老师端跨桶读 ——
  *    所以这里能看到"他推导出了什么"，而不只是"他参没参与"。
+ * 🔴 2026-11-17：学生端**不给骨架**（自由探究，不按步骤走）→ 不再显示"走到第几步 / 已走完骨架"，
+ *    改按"留下了多少条记录"来陈述事实 —— 别摆一个永远不会变的状态。
  * ⚠️ `source:"sample"` 的预置示例推导不算学生的成果，过滤掉（别把种子当学生写的）。
  */
 function studentsProgressHtml(a) {
   const list = progressOfActivity(a.id);
   if (!list.length) {
-    return `<p class="muted">本机还没有学生在这条实训里留下记录 —— 学生一进实训页点开步骤、
-      写下推导，这里就会出现。空白就是空白，不拿示例数据填。</p>`;
+    return `<p class="muted">还没有学生在这条实训里留下记录 —— 学生一进实训页记下灵感或推导，
+      这里就会出现。空白就是空白，不拿示例数据填。</p>`;
   }
   return `<ul class="findings">` + list.map((p) => {
     const ded = (p.deductions || []).filter((d) => d.source !== "sample");
     const notes = p.notes || [];
+    const total = notes.length + ded.length;
     return `<li>
       <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
         <b>${escHtml(p.name)}</b>
-        <span class="muted">${p.done ? "已走完骨架" : "进行中"} ·
-          更新于 ${escHtml(agoText(p.updatedAt, Date.now()))}</span>
+        <span class="muted">${total} 条记录 · 更新于 ${escHtml(agoText(p.updatedAt, Date.now()))}</span>
       </div>
       ${ded.length
         ? ded.map((d) => `<p style="margin:6px 0 0">· <span class="muted">${
@@ -444,7 +448,7 @@ function chatHtml(a) {
       <textarea class="textarea" id="chatInput" rows="2" placeholder="说点什么…"></textarea>
       <button class="btn btn-sm btn-primary" type="button" id="chatSend">发送</button>
     </div>
-    <p class="muted" style="margin:6px 0 0">消息写回活动记录（本机浏览器内模拟协作，换台机器查不到）。</p>`;
+    <p class="muted" style="margin:6px 0 0">消息写回活动记录，学生端也能看到。</p>`;
 }
 
 function sendChat() {
@@ -517,7 +521,7 @@ function renderPane() {
     <div class="blk">
       <div class="blk-head">
         <h3>引导骨架 · 共 ${stages.length} 步</h3>
-        <span class="hint">只给路径 —— 每一步「问题 → 线索 → 动手」，结论留给学生自己走到</span>
+        <span class="hint">备课记录 —— 每一步「问题 → 线索 → 动手」，不写结论（学生端不铺步骤，路线由他自己定）</span>
       </div>
       <div class="src-line" id="actSkelSrc">来源：<b>${escHtml(skeletonSourceText(skel))}</b>
         ${skel.goal ? `<br>生成依据（一句话目标）：${escHtml(skel.goal)}` : ""}</div>
@@ -531,12 +535,12 @@ function renderPane() {
     </div>
 
     <div class="blk">
-      <div class="blk-head"><h3>开放性</h3><span class="hint">灵感 02 的要点：允许偏离骨架</span></div>
+      <div class="blk-head"><h3>开放性</h3><span class="hint">允许学生走自己的方向</span></div>
       <label class="switch-row">
         <input type="checkbox" id="actOpenEnded" ${a.openEnded ? "checked" : ""}>
-        <span>允许学生偏离骨架、走自己的方向
-          <span class="sub">开启后学生端会出现「我想试另一条路」，走通的方向可以标记为新发现。
-            关掉就退化成"必须按这条路走完"的普通任务。</span>
+        <span>允许学生标记「这是我的新发现」
+          <span class="sub">开启后学生端有「标记新发现」，他走通的方向会进到你的「学生的新发现」里，你可以标为推荐方向。
+            关掉后学生仍然能自己记灵感、记推导，只是不往活动记录里提交发现。</span>
         </span>
       </label>
     </div>
@@ -552,7 +556,7 @@ function renderPane() {
     <div class="blk">
       <div class="blk-head">
         <h3>学生做到哪了 · ${progressOfActivity(a.id).length} 人</h3>
-        <span class="hint">跨「学生自己的进度记录」读出来的真实情况 —— 谁走到哪一步、推导出了什么</span>
+        <span class="hint">跨「学生自己的进度记录」读出来的真实情况 —— 谁留下了记录、推导出了什么</span>
       </div>
       ${studentsProgressHtml(a)}
     </div>
@@ -746,7 +750,10 @@ $("#actPane").addEventListener("keydown", (e) => {
    ============================================================ */
 
 function courseOptionsHtml() {
-  return COURSES.map((c) => `<option value="${escHtml(c.id)}">${escHtml(c.name)}</option>`).join("");
+  // 与右栏「关联课程」保持一致：第一项永远是「不关联课程」，
+  // 否则发布弹窗等于强制挂一门课（2026-11-17 反馈：没有不关联选项）。
+  return `<option value="">不关联课程</option>` +
+    COURSES.map((c) => `<option value="${escHtml(c.id)}">${escHtml(c.name)}</option>`).join("");
 }
 
 /** 弹窗里的骨架预览（纯本地，即时） */

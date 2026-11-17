@@ -500,8 +500,8 @@ async function main() {
   ck(csa.activity.createdBy === "student:student", "实训：发起人记成自己");
   ck(wS.eval('(localStorage.getItem("st_activities:student:student") || "").indexOf("排序算法")') >= 0,
     "实训：学生发起的落学生自己的桶");
-  ck(wS.eval('(localStorage.getItem("st_activities:teacher:teacher") || "").indexOf("排序算法")') >= 0,
-    "实训：学生发起的同步到本机教师桶");
+  ck(wS.eval('(localStorage.getItem("st_activities:teacher:teacher") || "").indexOf("排序算法")') < 0,
+    "实训：学生发起的**不**往教师桶同步（2026-11-17 定：学生自发的不用给老师看）");
 
   // 进度 / 路线 / 新发现
   ck(wS.eval('markStageDone("act-t1", "s1", false).ok') === true, "实训：学生能推进进度");
@@ -512,7 +512,7 @@ async function main() {
   ck(wS.eval('(localStorage.getItem("st_activities:teacher:teacher") || "").indexOf("割补法")') >= 0,
     "实训：新发现写回了老师桶（老师看得到）");
 
-  // 老师登录本机 → 也能看到学生发起的活动（已经是进行中，无需确认）
+  // 老师登录本机 → **看不到**学生自发的那条（2026-11-17 用户定：学生发起的不用给老师看）
   const domT2 = openPage("training.html", "teacher", "teacher:teacher", {
     st_accounts: JSON.stringify([
       { role: "teacher", user: "teacher", pass: "x", name: "李老师" },
@@ -522,8 +522,8 @@ async function main() {
   });
   await settle(domT2, 300);
   const wT2 = domT2.window;
-  ck(wT2.eval('ACTIVITIES.some(function(a){return a.origin==="student" && a.status==="open" && /排序算法/.test(a.title);})') === true,
-    "实训：老师登录本机也能看到学生发起的活动（直接开启，无需确认）");
+  ck(wT2.eval('ACTIVITIES.some(function(a){return a.origin==="student";})') === false,
+    "实训：学生自发的那条不进教师端列表（教师桶里也不该有学生发起的）");
   ck(wT2.eval('pendingStudentActivities()') === 0, "实训：不再有待确认的学生发起活动（恒 0）");
 
   // 学生重新打开 → 自己发起的直接就是「进行中」
@@ -605,7 +605,7 @@ async function main() {
   const cardsS = gridS.querySelectorAll(".sm-card");
   ck(cardsS.length >= 1, "学生端看到「老师发来的工作台」（种子已转发），实际=" + cardsS.length);
   ck(!gridS.querySelector('[data-a="app-send"]'), "🔴 学生端没有「下发给学生」（那是教师的动作）");
-  ck(!gridS.querySelector('[data-a="app-del"]'), "🔴 学生端没有「删除」（不是他的东西）");
+  ck(!gridS.querySelector('[data-a="app-del"]'), "🔴 学生端没有「删除」老师发来的（不是他的东西）");
 
   // 打开老师发来的那份：记录不在学生桶里 → 必须走跨桶取数
   gridS.querySelector('[data-a="app-open"]').click();

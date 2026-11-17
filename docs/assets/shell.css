@@ -353,10 +353,6 @@ body.shell-body { overflow: hidden; }
   padding: 12px var(--side-pad) 14px;
   border-top: 1px solid var(--border);
 }
-.shell-side .side-foot-note {
-  font-size: 11px; color: var(--muted-foreground);
-  line-height: 1.7; padding: 0 9px;
-}
 
 /* ---- 折叠态 ---- */
 .shell-side.collapsed { --side-pad: 7px; width: 58px; }
@@ -368,7 +364,6 @@ body.shell-body { overflow: hidden; }
 .shell-side.collapsed .side-badge { display: none; }
 .shell-side.collapsed .side-item { justify-content: center; padding: 9px 0; }
 .shell-side.collapsed .side-dot { width: 9px; height: 9px; opacity: 1; }
-.shell-side.collapsed .side-foot-note { display: none; }
 
 /* ---- 内容区 ---- */
 .shell-content {
@@ -576,3 +571,23 @@ body.modal-open { overflow: hidden; }
     flex-direction: column;
   }
 }
+
+/* 壳里的轻提示（AI 指令条没打开时说明原因，别让人以为「按了没反应」） */
+.shell-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  z-index: 400;
+  max-width: min(520px, calc(100vw - 40px));
+  padding: 10px 16px;
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-raised);
+  font-size: 13.5px;
+  line-height: 1.5;
+  text-align: center;
+}
+.shell-hint[hidden] { display: none; }

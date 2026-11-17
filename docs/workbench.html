@@ -147,7 +147,7 @@
       <section class="dk-card app-ask-card">
         <h2>说一句你想要的 <span class="sub">AI 现场给你写一个能用的工作台</span></h2>
         <p class="sm-lead">不用挑模板。说清「管什么、要看到什么」，它会写成一个带数据存储的小工具 ——
-          能加、能勾、能删，刷新不丢。</p>
+          能加、能勾、能删，随时回来都在。</p>
         <textarea id="appAsk" class="app-ask" rows="3" maxlength="500"
                   placeholder="例：我要一个跟踪全班作业提交情况的面板，能勾谁交了、一眼看出还差几个人"></textarea>
         <div class="app-egs" id="appExamples"></div>
@@ -167,8 +167,8 @@
       </section>
 
       <p class="dk-foot">
-        工作台是 AI 按你的描述现写的单文件页面，数据存在它自己的浏览器存储里（不经过任何服务器）。<br>
-        它跑在同源沙箱里，所以能存住数据；但生成前请确认你已经接入了自己的模型 Key。
+        工作台是 AI 按你的描述现写的单文件页面，打开就能用，数据会自己保存。<br>
+        它跑在同源沙箱里，生成前请确认你已经接入了自己的模型 Key。
       </p>
     </div><!-- /#tabApps -->
 
@@ -643,8 +643,10 @@
     var acts = document.createElement("div");
     acts.className = "sm-acts";
     acts.appendChild(simBtn("打开", "app-open", "btn-primary"));
-    if (IS_T) {
-      acts.appendChild(simBtn("下发给学生", "app-send"));
+    if (IS_T) acts.appendChild(simBtn("下发给学生", "app-send"));
+    /* 自己造的就能改名 / 删除 —— 学生自己造的那批也一样。
+       ⚠️ 老师发来的（shared）不给：「不是他的东西」这条不能破。 */
+    if (!shared) {
       acts.appendChild(simBtn("改名", "app-rename"));
       var del = simBtn("删除", "app-del");
       del.className = "btn btn-sm dk-danger";
@@ -666,7 +668,7 @@
         '<div class="modal-head"><b>' + esc(s.title) + '</b></div>' +
         '<div class="modal-body sm-modal">' +
           '<div class="sm-frame-slot"></div>' +
-          '<p class="dk-hint">这是 AI 按你的描述写的页面；数据存在它自己的浏览器存储里，刷新不丢。</p>' +
+          '<p class="dk-hint">这是 AI 按你的描述写的页面；数据会自己保存，刷新也不丢。</p>' +
         '</div>' +
         '<div class="modal-foot">' +
           '<button class="btn" data-app-act="reload" type="button">重载</button>' +

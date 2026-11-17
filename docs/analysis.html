@@ -53,14 +53,14 @@
       <div class="page-head">
         <div class="crumb" id="crumbText">我的学情</div>
         <h1>我的学情</h1>
-        <p id="pageSub">从你在本机的提问、批注与阅读行为统计 —— 不是考试分数，而是学习状态的画像</p>
+        <p id="pageSub">从你在这门课的提问、批注与阅读行为统计 —— 不是考试分数，而是学习状态的画像</p>
       </div>
 
       <div id="emptyBox" hidden>
         <section class="card card-raised" style="padding:22px">
           <h3 style="margin:0 0 6px;font-size:15px;font-weight:500">这个课堂还没有你的学习记录</h3>
           <p style="margin:0 0 14px;font-size:13px;line-height:1.8;color:var(--muted-foreground)">
-            这一页不是一份填好的报告 —— 它统计的是<b>你自己</b>在本机的动作：
+            这一页不是一份填好的报告 —— 它统计的是<b>你自己</b>的真实动作：
             问过什么、批注了什么、读过哪几段、哪些标了「懂了」。<br>
             去答疑页问一句，或者去课件页写一条批注，这里立刻就有内容。
           </p>
@@ -92,7 +92,7 @@
           <!-- 行为类型分布（真实：日志里每类行为的条数） -->
           <section class="card card-raised chart-box">
             <h3>行为类型分布</h3>
-            <p id="kindSub">共 N 条本机记录</p>
+            <p id="kindSub">共 N 条记录</p>
             <div class="donut-wrap">
               <svg class="donut" id="ring" width="146" height="146" viewBox="0 0 146 146" role="img"
                    aria-label="行为类型分布环形图"></svg>
@@ -193,7 +193,7 @@ const RING_COLORS = ["var(--primary)", "var(--success)", "var(--warning)", "var(
     return;
   }
   crumb.textContent = CUR_NAME + " · 我的学情";
-  sub.textContent = "从你在本机对「" + CUR_NAME + "」的提问、批注与阅读行为统计 —— 不是考试分数";
+  sub.textContent = "从你在「" + CUR_NAME + "」的提问、批注与阅读行为统计 —— 不是考试分数";
 })();
 
 /** 空状态里那个链接也要带上当前课堂 */
@@ -240,7 +240,7 @@ function renderRing(sum) {
   $("#ringLegend").innerHTML = items.map((it, i) =>
     `<span><i style="background:${RING_COLORS[i % RING_COLORS.length]}"></i>${escapeHtml(it.label)}` +
     `<b>${it.count} 次 · ${Math.round((it.count / total) * 100)}%</b></span>`).join("");
-  $("#kindSub").textContent = "共 " + sum.total + " 条本机记录，覆盖 " + sum.activeDays + " 天";
+  $("#kindSub").textContent = "共 " + sum.total + " 条记录，覆盖 " + sum.activeDays + " 天";
 }
 
 function renderDays() {
@@ -315,11 +315,11 @@ function renderWeak() {
 function renderSource(sum) {
   const seeds = behaviorSeedCount(LIST);
   $("#srcNote").innerHTML =
-    "<b>这份数据是怎么来的</b> —— 全部是本机浏览器里记下的行为（提问 / 批注 / 阅读 / 重讲 / 标记懂了），" +
-    "没有上传任何服务器；教师端「课程成员」里点开你，看到的是<b>同一份记录</b>。" +
+    "<b>这份数据是怎么来的</b> —— 全部是你在课堂里留下的行为（提问 / 批注 / 阅读 / 重讲 / 标记懂了），" +
+    "不会发送给任何第三方；教师端「课程成员」里点开你，看到的是<b>同一份记录</b>。" +
     (seeds === sum.total ? " 本页记录<b>全部是预置示例记录</b>（预置账号自带的历史，方便一眼看到形状）。"
       : seeds ? " 其中 <b>" + seeds + "</b> 条是预置示例记录。" : "") +
-    (OTHER ? " 本机另有 <b>" + OTHER + "</b> 条记录属于其它课堂，不计入本页。" : "") +
+    (OTHER ? " 另有 <b>" + OTHER + "</b> 条记录属于其它课堂，不计入本页。" : "") +
     " 本版<b>不记录停留时长</b>（没有可靠的测量口径），所以任何依赖它的指标都不会出现。";
 }
 

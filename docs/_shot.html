@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>shot</title>
+<!-- 临时截图辅助页：写入当前账号与无障碍偏好后跳进壳里，用完即删 -->
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var role = q.get("role") || "teacher";
+  var user = role + ":" + (q.get("user") || role);
+  var page = q.get("page") || "training.html";
+  try {
+    localStorage.setItem("st_current_user", JSON.stringify(user));
+    localStorage.setItem("st_a11y", JSON.stringify({
+      size: 15, lh: 1.8, ls: 0, contrast: false, reduceMotion: false,
+      readMode: false, profile: "standard", profileAt: Date.now()
+    }));
+    document.cookie = "st_theme=dark; path=/";
+  } catch (e) { /* ignore */ }
+  location.replace("app.html#" + page);
+})();
+</script>
+</head>
+<body></body>
+</html>

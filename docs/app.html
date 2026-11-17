@@ -40,6 +40,13 @@
       <span aria-hidden="true">◑</span><span class="a11y-mode-label">显示模式</span>
     </button>
 
+    <!-- AI 指令条：说一句话就能跳转或改显示设置；会改东西的先给 diff 审核。
+         界面只在内容页 core.js 里实现一份，这里发消息让它打开（长按 Alt 同效） -->
+    <button class="shell-a11y-mode" id="deckOpen" type="button"
+            aria-label="AI 指令条（长按 Alt）" title="AI 指令条：长按 Alt 或点这里，说一句话就能操作整个应用">
+      <span aria-hidden="true">✦</span><span class="a11y-mode-label">指令</span>
+    </button>
+
     <!-- 无障碍阅读模式：默认勾选。开启后正文排版放大、点段落即可朗读，右下角出现阅读工具条 -->
     <label class="shell-a11y-toggle" for="a11yReadMode" title="无障碍阅读模式：放大字号行高、点段落即可朗读">
       <input type="checkbox" id="a11yReadMode" checked

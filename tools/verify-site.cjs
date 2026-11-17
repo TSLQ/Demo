@@ -1777,7 +1777,7 @@ function verifyShell() {
       const classHtml = fs.readFileSync(path.join(SITE, "class.html"), "utf8");
       /course=\(\[\^&\]\+\)/.test(classHtml) && /function pickCourse/.test(classHtml)
         ? pass("class.html 读取 ?course=xxx（课程视角）") : fail("class.html 未读取 course 参数");
-      /本机还没有学生加入这门课/.test(classHtml)
+      /还没有学生加入这门课/.test(classHtml)
         ? pass("本课还没有学生时给空状态 + 指路邀请码（不拿样本数据冒充）")
         : fail("没有处理「这门课还没有学生」的情形");
       /* 🔴 第 55 轮：课程页只讲"谁在课里"，得有一条路通向这门课的教学内容（教案），
@@ -2478,7 +2478,7 @@ function verifyExam() {
   /不是课堂点名/.test(stuHtml)
     ? pass("🔴 如实说明「学习活跃」**不是课堂点名**（不冒充考勤）") : fail("没写清考勤口径");
   /没有课堂考勤/.test(stuHtml)
-    ? pass("🔴 如实说明本机**没有课堂考勤数据**（无教务系统）") : fail("没说清数据边界");
+    ? pass("🔴 如实说明**没有课堂考勤数据**（无教务系统）") : fail("没说清数据边界");
   /examAnsOfStudent|answers/.test(stuCode)
     ? pass("学生管理页读学生的提交（作业情况有真来源）") : fail("作业情况没有数据来源");
 
@@ -3704,8 +3704,9 @@ function verifyTrainingData() {
    学生端「实训」页（training-student.html）：
      参与老师发布的 open/done 活动（跨账号桶读）、逐步推进、
      记路线、标记新发现、并自己发起（origin:student，**直接开启**）。
-   🔴 与 exam / courseware 同一套跨桶规矩：
-     老师发的记录在老师桶里 → 学生跨桶读；学生发起 → 落学生桶 + 同步本机教师桶。
+     🔴 与 exam / courseware 同一套跨桶规矩：
+       老师发的记录在老师桶里 → 学生跨桶读；学生发起 → **只落学生桶**（2026-11-17 用户定：
+       学生自发的探究不进教师端，别的同学也看不到）。
    ============================================================ */
 function verifyStudentTraining() {
   section("实训 —— 学生端（参与 + 发起）");
@@ -3808,13 +3809,31 @@ function verifyStudentTraining() {
   probe("(function(){ var raw = window.localStorage.getItem('st_activities:student:student'); return raw && raw.indexOf('排序算法') >= 0; })()")
     ? pass("学生发起的写进了学生自己的桶")
     : fail("学生发起的没落学生桶");
-  probe("(function(){ var raw = window.localStorage.getItem('st_activities:teacher:teacher'); return raw && raw.indexOf('排序算法') >= 0; })()")
-    ? pass("学生发起的同步到了本机教师桶（老师也能看到这条）")
-    : fail("学生发起的没同步给老师");
+  probe("(function(){ var raw = window.localStorage.getItem('st_activities:teacher:teacher'); return raw && raw.indexOf('排序算法') >= 0; })()") === false
+    ? pass("学生发起的**不**进本机教师桶（老师看不到学生自发的探究）")
+    : fail("学生发起的同步进了教师桶");
+  c && c.ok && c.activity.id !== "act-x"
+    ? pass("学生发起的 id 与老师那条不同（不再各桶各自从 act-1 编号）")
+    : fail("学生发起的新活动与老师那条撞 id: " + (c && c.activity && c.activity.id));
+
+  /* --- ⑥b 学生自发的是私有跑道：别的同学看不到，本人看得到 --- */
+  probe("(function(){ var acc = JSON.parse(window.localStorage.getItem('st_accounts') || '[]');" +
+    " acc.push({ role: 'student', user: 'zhangsan', pass: 'x', name: '张同学' });" +
+    " window.localStorage.setItem('st_accounts', JSON.stringify(acc));" +
+    " window.localStorage.setItem('st_activities:student:zhangsan', JSON.stringify([" +
+    "  { id: 'act-other', title: '别人的探究', goal: '别人想的问题', origin: 'student'," +
+    "    createdBy: 'student:zhangsan', status: 'open', openEnded: true," +
+    "    skeleton: { source: 'generic', stages: [{ title: 't', prompt: 'p', tryIt: 'x' }] }," +
+    "    participants: [], findings: [], messages: [], createdAt: 1, updatedAt: 1 }])); return true; })()")
+    ? pass("（夹具）登记另一个同学，并放进一条他发起的实训）") : fail("夹具写入失败");
+  probe("activitiesForStudent('student:student').some((a) => a.id === 'act-other')") === false
+    ? pass("别的同学发起的实训不出现（学生自发的探究不串班）")
+    : fail("别的同学发起的实训串到了我的列表");
+  probe("activitiesForStudent('student:zhangsan').some((a) => a.id === 'act-other')") === true
+    ? pass("发起人自己看得到（规则只挡别人，不挡本人）")
+    : fail("发起人自己也看不到，规则挡过头了");
   probe("createStudentActivity({ goal: '' }).ok") === false
     ? pass("学生发起空目标被拦") : fail("空目标也能发起");
-  probe("localTeacherAccounts().length") >= 1
-    ? pass("localTeacherAccounts 由账号库推出教师账号（同步用）") : fail("localTeacherAccounts 失效");
 
   /* --- ⑦ 学生端徽标 = 进行中数量（现算，不写死） --- */
   const badge = probe("(function(){ refreshStudentTrainingNav(); var b = findStudentNavItem('training').badge; return b; })()");
@@ -4230,7 +4249,7 @@ function verifySkillData() {
     ? pass("「画图」技能两端都有") : fail("画图技能缺失");
   /atom-chart/.test(hit("把本机记录画成柱状图", "teacher"))
     ? pass("「画成柱状图」命中 atom-chart") : fail("画图没命中");
-  probe("(function(){var r=localChartOption('本机有多少教案');return !!r && !!r.chart && Array.isArray(r.chart.series);})()")
+  probe("(function(){var r=localChartOption('有多少教案');return !!r && !!r.chart && Array.isArray(r.chart.series);})()")
     ? pass("可数的图自己算（确定性，不经过模型）") : fail("localChartOption 没出图");
   probe("localChartOption('把作业提交率画成柱状图')") === null
     ? pass("不该接管的说法让给模型（不误判成「数条数」）") : fail("localChartOption 抢了不该抢的活");
@@ -5066,7 +5085,7 @@ function verifyWorkbench() {
     ? pass("🔴 未接模型时如实说明 + 指路设置（不塞假工作台）") : fail("没做诚实拒绝");
   /function toast\b/.test(h) ? pass("有操作反馈（toast）") : fail("缺操作反馈");
   /dk-empty/.test(h) ? pass("有空状态引导") : fail("缺空状态");
-  /数据存在它自己的浏览器存储里/.test(h) ? pass("页脚如实说明数据存哪") : fail("没说清数据存哪");
+  /数据会自己保存/.test(h) ? pass("页脚说明数据会自动保存（不再交代存在哪）") : fail("页脚没说明数据会不会保存");
 
   /* --- 🔴 两个页签必须干净移除（用户第 43 轮要求：「我只要工作台」）--- */
   const goneList = [

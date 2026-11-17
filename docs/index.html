@@ -96,7 +96,7 @@
 
         <p class="login-hint" id="loginHint">
           <span class="hint-mark" aria-hidden="true">i</span>
-          <span id="hintText">本机已有预置账号，可直接登录 ——
+          <span id="hintText">已有预置账号，可直接登录 ——
             <code>teacher</code> / <code>cdut@2026</code></span>
         </p>
 
@@ -135,7 +135,7 @@
 
         <p class="login-hint">
           <span class="hint-mark" aria-hidden="true">i</span>
-          <span>账号与密码保存在<b>本机浏览器</b>，不会上传。换台电脑需要重新注册。</span>
+          <span>账号与密码只用于进入本系统，<b>不会发送给任何第三方</b>；公用电脑上用完记得退出。</span>
         </p>
 
         <p class="login-error" id="regError" role="alert" hidden></p>
@@ -213,10 +213,10 @@ function hintFor(next) {
   const list = loadAccounts().filter((a) => a.role === next);
   const who = ROLE_META[next].label;
   if (!list.length) {
-    return `本机还没有${who}账号 —— 切到「注册账号」建一个即可，账号只存在这台电脑上。`;
+    return `还没有${who}账号 —— 切到「注册账号」建一个即可。`;
   }
   const a = list[0];
-  return `本机已有${who}账号 ${list.length} 个 —— 例如 <code>${a.user}</code> / <code>${a.pass}</code>`;
+  return `已有${who}账号 ${list.length} 个 —— 例如 <code>${a.user}</code> / <code>${a.pass}</code>`;
 }
 
 function syncAccountForm(next) {
@@ -280,7 +280,7 @@ function setTab(next) {
   $("#loginTitle").textContent = isLogin ? "选择你的身份" : "注册新账号";
   $("#loginLead").textContent = isLogin
     ? "进入后可在设置中随时切换"
-    : "账号保存在本机浏览器，随时可删";
+    : "注册后即可进入课堂，账号随时可删";
   hideError();
   (isLogin ? $("#account") : $("#regName")).focus?.();
 }
@@ -320,7 +320,7 @@ function verify() {
       showError("#loginError",
         `该账号已注册为${ROLE_META[other].label}，请在上方改选「${ROLE_META[other].label}」后登录`);
     } else {
-      showError("#loginError", "本机没有这个账号，请先点「注册账号」新建一个");
+      showError("#loginError", "没有这个账号，请先点「注册账号」新建一个");
     }
     return false;
   }
@@ -406,7 +406,7 @@ $("#demoBtn").addEventListener("click", () => {
   const hit = findAccount(role, SEED.find((s) => s.role === role)?.user || "")
     || loadAccounts().find((a) => a.role === role);
   if (!hit) {
-    showError("#loginError", "本机还没有账号，请先点「注册账号」新建一个");
+    showError("#loginError", "还没有账号，请先点「注册账号」新建一个");
     setTab("reg");
     return;
   }

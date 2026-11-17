@@ -704,11 +704,11 @@ async function main() {
      ============================================================ */
   console.log("\n【四】新能力：画图、停止、对话记录、画像跟进");
 
-  step("T17", "画图：不接模型也能按本机记录画（确定性那条路）");
+  step("T17", "画图：不接模型也能按已有记录画（确定性那条路）");
   {
     B.login("teacher", "teacher");
     const p = await B.open("agent.html");
-    p.fill("#input", "画个图看看本机有多少教案和实训");
+    p.fill("#input", "画个图看看我有多少教案和实训");
     p.click("#sendBtn");
     let w = 0;
     while (!p.$("#chatLog .res-card") && w < 8000) { await sleep(80); w += 80; }

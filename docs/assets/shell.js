@@ -312,7 +312,6 @@ function mountSide() {
           <span>${((typeof ROLES !== "undefined" && ROLES[r]) || {}).label || ""}身份</span>
         </div>
       </div>
-      <div class="side-foot-note">全部数据保存在本机浏览器</div>
     </div>`;
 
   side.querySelectorAll(".side-item").forEach((b) => {
@@ -669,7 +668,7 @@ function openAddClass() {
 
         <p class="modal-hint">
           <span class="hint-mark" aria-hidden="true">i</span>
-          <span>班级只保存在本机浏览器。保存后可在左侧栏「班级管理」里点击切换。</span>
+          <span>保存后可在左侧栏「班级管理」里点击切换。</span>
         </p>
 
         <p class="login-error" id="classError" role="alert" hidden></p>
@@ -797,6 +796,66 @@ function openA11yGateFromShell() {
   }, 400);
 }
 
+/* ---------------- AI 指令条 ----------------
+   指令条的界面只在内容页的 core.js 里实现一份；壳只负责「在壳的
+   顶栏/侧栏长按 Alt」时把请求转进去，以及在顶栏给一个可见入口。
+   ⚠️ 内容页 iframe 是独立文档 —— 焦点在内容区时 keydown 只到 iframe，
+      壳收不到，那边由 core.js 自己处理；这里只管壳自己的文档。
+--------------------------------------------------------------- */
+let deckPending = false;
+let shellAltTimer = null;
+let shellHintTimer = null;
+
+function deckAltAllowed() {
+  try {
+    const c = LS.get(STORE_KEY.a11y, null) || {};
+    return c.deckAlt !== false;
+  } catch (_) { return true; }
+}
+
+/** 壳里的轻提示：指令条没打开时别让人以为「按了没反应」 */
+function shellHint(msg) {
+  let n = document.getElementById("shellHint");
+  if (!n) {
+    n = document.createElement("div");
+    n.id = "shellHint";
+    n.className = "shell-hint";
+    n.setAttribute("role", "status");
+    document.body.appendChild(n);
+  }
+  n.textContent = String(msg || "");
+  n.hidden = false;
+  window.clearTimeout(shellHintTimer);
+  shellHintTimer = window.setTimeout(() => { n.hidden = true; }, 3600);
+}
+
+function openDeckFromShell() {
+  if (!deckAltAllowed()) return;
+  deckPending = true;
+  broadcast("st-open-deck", {});
+  window.setTimeout(() => {
+    if (!deckPending) return;             // 已收到回执
+    deckPending = false;
+    shellHint("内容区还没准备好 —— 先点一下页面中间，再长按 Alt。");
+  }, 450);
+}
+
+function shellAltCancel() {
+  if (shellAltTimer) {
+    window.clearTimeout(shellAltTimer);
+    shellAltTimer = null;
+  }
+}
+
+function shellAltStart() {
+  if (!deckAltAllowed()) return;
+  if (shellAltTimer) return;
+  shellAltTimer = window.setTimeout(() => {
+    shellAltTimer = null;
+    openDeckFromShell();
+  }, 550);
+}
+
 function iframeFailed() {
   const bar = document.getElementById("frameError");
   if (bar) bar.hidden = false;
@@ -852,6 +911,17 @@ function boot() {
 
   // 重新选择显示模式（弹窗在内容页 core.js 里，只此一份）
   document.getElementById("a11yModeOpen")?.addEventListener("click", openA11yGateFromShell);
+
+  // AI 指令条：顶栏按钮 + 长按 Alt（壳自己的文档；内容区里由 core.js 处理）
+  document.getElementById("deckOpen")?.addEventListener("click", openDeckFromShell);
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Alt") { shellAltCancel(); return; }
+    if (shellAltTimer) { e.preventDefault(); return; }
+    shellAltStart();
+    if (shellAltTimer) e.preventDefault();
+  }, true);
+  document.addEventListener("keyup", (e) => { if (e.key === "Alt") shellAltCancel(); }, true);
+  window.addEventListener("blur", shellAltCancel);
 
   // 用户菜单
   const btn = document.getElementById("userBtn");
@@ -948,6 +1018,9 @@ function boot() {
     }
     if (d.type === "st-a11y-gate-opened") {
       a11yGatePending = false;            // 内容页已经开了弹窗，别再退化跳转
+    }
+    if (d.type === "st-deck-opened") {
+      deckPending = false;                // 指令条已经在内容页打开
     }
     if (d.type === "st-a11y-changed") {
       // a11y 变量写在壳的根元素上（子页面通过 frameElement.ownerDocument 修改）

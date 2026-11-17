@@ -285,7 +285,7 @@
             <div class="mem-item"><span class="mem-ico no">×</span>
               <span>不会直接甩作业答案，先按你已会的推到你想会的</span></div>
             <div class="mem-item"><span class="mem-ico no">×</span>
-              <span>不会把你的记录发给同学或老师，全部留在本机</span></div>
+              <span>不会把你的记录发给同学或老师，只有你自己看得到</span></div>
           </details>
         </aside>
 
@@ -930,8 +930,8 @@ function renderChatHistory() {
   if (!list.length) return;
   const last = list.slice(-6);
   const box = el('<details class="skill-chain"><summary class="sc-head" style="cursor:pointer">' +
-    '<b>最近 ' + last.length + ' 轮对话（本机记录）</b>' +
-    '<span>点开看 · 换浏览器或换端口就没了</span></summary></details>');
+    '<b>最近 ' + last.length + ' 轮对话（历史记录）</b>' +
+    '<span>点开看 · 每次问答挂了哪些技能、哪步真跑完</span></summary></details>');
   last.forEach(function (r) {
     box.appendChild(el('<div class="lg"><div class="lg-head" style="display:block">' +
       '<div><b>' + escHtml(r.ask || "") + '</b> <span class="lg-tag">' +
@@ -950,7 +950,7 @@ function renderChatHistory() {
   if (a) a.addEventListener("click", function (e) {
     e.preventDefault();
     if (typeof clearAgentChat !== "function") return;
-    if (!window.confirm("清空本机保存的 AI 对话记录？\n\n只清这份记录 —— 你的行为记录与画像都不动。")) return;
+    if (!window.confirm("清空 AI 对话记录？\n\n只清这份记录 —— 你的行为记录与画像都不动。")) return;
     clearAgentChat();
     box.remove();
     flash("对话记录已清空", "ok");

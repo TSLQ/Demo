@@ -397,7 +397,9 @@ console.log("\n=== 3a. 侧栏结构：底部用户卡片固定（不被长菜单
 
   foot.querySelector(".side-user-body") ? P("用户卡用 .side-user-body（与 design.css 一致）")
     : F("用户卡类名不对，排版样式会失效");
-  foot.querySelector(".side-foot-note") ? P("底部保留「数据保存在本机」说明") : F("缺底部说明");
+  !/本机浏览器|localStorage|保存在本机|数据存在/.test(foot.textContent)
+    ? P("侧栏底部不显示「数据存放在哪」（2026-11-17 用户要求删掉那行）")
+    : F("侧栏底部又出现了数据存放位置说明");
   dom.window.close();
 }
 
@@ -411,7 +413,48 @@ console.log("\n=== 3a. 侧栏结构：底部用户卡片固定（不被长菜单
   nav && foot && !nav.contains(foot)
     ? P("独立模式侧栏结构同样正确（两处渲染成对维护）")
     : F("独立模式侧栏结构与壳内不一致");
+  !/本机浏览器|保存在本机|数据存在/.test(foot.textContent)
+    ? P("独立模式侧栏底部也不再显示数据存放位置（两份渲染同步删）")
+    : F("独立模式侧栏还留着数据存放说明");
   dom.window.close();
+}
+
+console.log("\n=== 3a-1b. 界面上不提「数据存在哪里」（用户要求：全站可见文本）===");
+{
+  /* 🔴 不能直接读 body.textContent —— 本文件会把页面内联的 <script> 一起解析，
+     源码里的注释、键名会被当成"页面文字"（假失败）。所以克隆一份、剔掉 script/style/template。
+     ⚠️ 只查"存哪/换机器就没了"这类说法；「浏览器不支持语音」这种能力说明不算。 */
+  const RULE = /本机浏览器|localStorage|保存在本机|数据存在|换台电脑|换一台机器|换台机器|不会上传|存在这台/;
+  const TEXT_PAGES = [
+    ["index.html", null],
+    ["app.html", "teacher"],
+    ["homework.html", "student"],
+    ["class.html", "teacher"],
+    ["stu.html", "teacher"],
+    ["analysis.html", "student"],
+    ["training.html", "teacher"],
+    ["training-student.html", "student"],
+    ["chat.html", "student"],
+    ["settings.html", "teacher"],
+    ["workbench.html", "teacher"],
+    ["agent.html", "teacher"],
+    ["agent-student.html", "student"],
+    ["exam.html", "teacher"],
+    ["courseware.html", "teacher"],
+    ["lesson.html", "teacher"],
+    ["schedule.html", "teacher"],
+    ["reader.html", "student"],
+  ];
+  for (const [f, role] of TEXT_PAGES) {
+    const dom = load(f, { role });
+    await settle(dom);
+    const clone = dom.window.document.body.cloneNode(true);
+    clone.querySelectorAll("script,style,template").forEach((n) => n.remove());
+    const txt = (clone.textContent || "").replace(/\s+/g, " ");
+    const hit = txt.match(RULE);
+    hit ? F(f + " 里还在说数据存在哪：「" + hit[0] + "」") : P(f + " 不提数据存放位置");
+    dom.window.close();
+  }
 }
 
 console.log("\n=== 3a-2. 课程项的「⋯」不占行内宽度（胶囊与其它菜单项等宽）===");
@@ -1126,7 +1169,7 @@ console.log("\n=== 3c-4. class.html（课程成员）：真实的「谁在课里
   dom.window.close();
   const empty = await open("?course=cs999");
   const ed = empty.window.document;
-  ed.querySelectorAll("#stuRows tr").length === 1 && /本机还没有学生加入这门课/.test(ed.getElementById("stuRows").textContent)
+  ed.querySelectorAll("#stuRows tr").length === 1 && /还没有学生加入这门课/.test(ed.getElementById("stuRows").textContent)
     ? P("没人加入时给空状态（不拿样本学生冒充）") : F("空状态不对");
   ed.getElementById("stIn").textContent === "0" ? P("在课学生如实为 0") : F("在课学生不是 0");
   empty.window.close();
@@ -1260,7 +1303,7 @@ console.log("\n=== 3c-5. 学情：学生自己看到的 == 老师点开学生看
     .map((x) => x.textContent).join(" ");
   !/掌握度|正确率|平均分|成绩|%/.test(chartText)
     ? P("图表区里没有编造指标（掌握度 / 正确率 / 平均分 / 百分比）") : F("图表区出现了编造指标");
-  /同一份本机记录|同一份数据/.test(mtext)
+  /同一份记录|同一份数据/.test(mtext)
     ? P("弹窗明说「同一份记录」（老师与学生看到的是同一份）") : F("没说明数据同源");
   modal.querySelector("[data-close]").dispatchEvent(new domB.window.Event("click", { bubbles: true }));
   await settle(domB);
@@ -1289,7 +1332,7 @@ console.log("\n=== 3c-5. 学情：学生自己看到的 == 老师点开学生看
     ? P("学生自己的学情只算本课（他在编译原理里的 2 次提问没混进来）")
     : F("跨课堂串数: " + dd.getElementById("stAsk").textContent);
   /另有 2 条记录属于其它课堂/.test(dd.getElementById("srcNote").textContent)
-    ? P("并如实说明「本机另有 N 条记录属于其它课堂」") : F("没有交代被排除的记录");
+    ? P("并如实说明「另有 N 条记录属于其它课堂」") : F("没有交代被排除的记录");
   domD.window.close();
 
   const domE = load("class.html", {
@@ -2675,8 +2718,8 @@ console.log("\n=== 3e. 课表：导入 / 设置（真实 DOM 交互）===");
     ? P("表头教学周更新为 9") : F("教学周未更新: " + d.getElementById("weekNo").textContent);
   /07:50/.test(d.getElementById("weekGrid").innerHTML)
     ? P("节次时间改动反映到课表左列") : F("节次时间未更新");
-  d.getElementById("weekBody").dataset.source === "本机设置"
-    ? P("来源记录变为「本机设置」") : F("来源未更新: " + d.getElementById("weekBody").dataset.source);
+  d.getElementById("weekBody").dataset.source === "你保存的设置"
+    ? P("来源记录变为「你保存的设置」") : F("来源未更新: " + d.getElementById("weekBody").dataset.source);
   JSON.parse(w.localStorage.getItem("st_schedule")).weekNo === 9
     ? P("设置已持久化到 localStorage") : F("设置未持久化");
 
@@ -2771,8 +2814,8 @@ console.log("\n=== 3f. 课表设置的持久化（模拟下次打开）===");
   const d2 = dom2.window.document;
   d2.getElementById("weekNo").textContent === "12"
     ? P("下次打开读回第 12 教学周（未被打回演示数据）") : F("持久化失效: " + d2.getElementById("weekNo").textContent);
-  d2.getElementById("weekBody").dataset.source === "本机保存"
-    ? P("来源记录为「本机保存」") : F("来源记录错误: " + d2.getElementById("weekBody").dataset.source);
+  d2.getElementById("weekBody").dataset.source === "你保存的设置"
+    ? P("来源记录为「你保存的设置」") : F("来源记录错误: " + d2.getElementById("weekBody").dataset.source);
   dom2.window.close();
 
   // 存档损坏时不能白屏
@@ -3643,7 +3686,7 @@ console.log("\n=== 3m. 新建课程：持久化 / 独立模式 / class.html 联�
   /编译原理/.test(crumb) ? P("class.html 页头显示课程名：" + crumb) : F("页头没认课程: " + crumb);
   d3.getElementById("stIn").textContent === "0"
     ? P("刚建的课还没有学生 → 在课学生如实为 0") : F("在课学生不对: " + d3.getElementById("stIn").textContent);
-  /本机还没有学生加入这门课/.test(d3.getElementById("stuRows").innerHTML)
+  /还没有学生加入这门课/.test(d3.getElementById("stuRows").innerHTML)
     ? P("没人加入时给空状态 + 指路邀请码（不拿样本学生冒充）")
     : F("仍在展示伪造的学生名单");
   !/李同学|张同学/.test(d3.getElementById("stuRows").innerHTML)
@@ -3908,6 +3951,12 @@ console.log("\n=== 3n. 实训管理：发布 → 引导骨架 → 发布状态 �
     ? P("弹窗挂在自己的 body 上（内容页不能用壳的 #modalHost）") : F("弹窗挂错地方");
   /一句话目标/.test(host.textContent) ? P("弹窗含「一句话目标」输入") : F("缺目标输入");
 
+  // 发布弹窗的「关联课程」必须留一条「不关联课程」，否则等于强制挂课（2026-11-17 反馈）
+  const mkCourseSel = d.getElementById("mkCourse");
+  const noCourseOpt = mkCourseSel ? Array.from(mkCourseSel.options).find((o) => o.value === "") : null;
+  mkCourseSel && noCourseOpt && /不关联课程/.test(noCourseOpt.textContent)
+    ? P("发布弹窗可选「不关联课程」（不强制挂课）") : F("发布弹窗缺「不关联课程」选项");
+
   const mkGoal = d.getElementById("mkGoal");
   mkGoal.value = "勾股定理是怎么被发现的";
   mkGoal.dispatchEvent(new w.Event("input", { bubbles: true }));
@@ -3937,6 +3986,8 @@ console.log("\n=== 3n. 实训管理：发布 → 引导骨架 → 发布状态 �
   d.getElementById("modalHost").hidden ? P("创建后弹窗自动关闭") : F("弹窗没关");
   w.eval("ACTIVITIES.length") === 3 ? P("新实训进了列表（3 条）") : F("新建失败: " + w.eval("ACTIVITIES.length"));
   w.eval("ACTIVITIES[2].status") === "draft" ? P("新建的是草案（骨架先给教师过一眼）") : F("新建状态不对");
+  w.eval("ACTIVITIES[2].courseId") === ""
+    ? P("默认「不关联课程」也能建出来（courseId 为空）") : F("不关联课程没能建：courseId=" + w.eval("ACTIVITIES[2].courseId"));
   /排序算法/.test(d.getElementById("actTitle").value)
     ? P("创建后自动选中它，接着就能改骨架") : F("没有自动选中新建的实训");
   /排序算法/.test(String(w.localStorage.getItem("st_activities") || ""))
@@ -3983,8 +4034,9 @@ console.log("\n=== 3n. 实训管理：发布 → 引导骨架 → 发布状态 �
 console.log("\n=== 3o. 侧栏「实训管理」：学生发起直接开启 → 不再挂「待确认」徽标 ===");
 {
   /* 学生发起直接 open（不等老师确认）→ pendingStudentActivities 恒 0 →
-     教师端侧栏「实训管理」不再有「待确认」徽标。 */
-  const dom = load("app.html", { role: "teacher" });
+     教师端侧栏「实训管理」不再有「待确认」徽标。
+     🔴 2026-11-17 用户定：学生自发的探究不进教师端 —— 教师桶里一条学生发起的都不该有。 */
+  const dom = load("app.html", { role: "teacher", restore: { ls: { st_current_user: "teacher:teacher" } } });
   await settle(dom);
   const d = dom.window.document, w = dom.window;
 
@@ -3999,12 +4051,12 @@ console.log("\n=== 3o. 侧栏「实训管理」：学生发起直接开启 → �
     ? P("学生发起直接开启 → 教师端不再挂「待确认」徽标")
     : F("不该有「待确认」徽标: " + (it && it.textContent));
 
-  // 种子里的学生发起活动已经是 open（直接开启），不是 draft
+  // 学生自发的活动不进教师端（预置数据里那条也不该出现）
   const acts = JSON.parse(w.eval("JSON.stringify(ACTIVITIES)"));
-  const studentAct = acts.filter((a) => a.origin === "student")[0];
-  studentAct && studentAct.status === "open"
-    ? P("学生发起的活动 status=open（直接开启，不等老师确认）")
-    : F("学生发起的活动状态不对: " + (studentAct && studentAct.status));
+  acts.length && acts.every((a) => a.origin !== "student")
+    ? P("学生自发的活动不出现在教师端（教师桶里没有 origin=student 的活动）")
+    : F("教师端仍混进了学生发起的活动: " +
+        acts.filter((a) => a.origin === "student").map((a) => a.title).join(" / "));
 
   dom.window.close();
 }
@@ -4020,7 +4072,9 @@ console.log("\n=== 3o-b. 学生端实训：跨桶读 → 推进 → 记路线 �
       { id: "s1", title: "先问：凭什么知道它", prompt: "往哪想", clue: "内接正多边形", tryIt: "画个内接正六边形" },
       { id: "s2", title: "让误差看得见", prompt: "边数加倍会怎样", clue: "割圆术", tryIt: "算正十二边形比值" },
     ] },
-    participants: ["李同学"], findings: [],
+    participants: ["李同学"],
+    findings: [{ id: "f-cross", who: "王同学", at: 1500, sample: true, pinned: false,
+      text: "我把圆切成小扇形拼了拼，还是看不出面积该怎么算。" }],
     messages: [
       { id: "m-cross-1", who: "李老师", role: "teacher", at: 1000, text: "先想一想：现在会算哪些图形的面积？" },
     ],
@@ -4064,7 +4118,9 @@ console.log("\n=== 3o-b. 学生端实训：跨桶读 → 推进 → 记路线 �
   !/引导路径|引导问题|往哪想|动手做|内接正多边形|割圆术/.test(pane.textContent + side.textContent)
     ? P("学生端不显示引导骨架（不透露答案）") : F("学生端仍显示了骨架内容");
   /探究进度/.test(side.textContent) && /已积累 0 条成果/.test(side.textContent)
-    ? P("右栏有「探究进度」且从 0 条成果开始") : F("进度初始不对");
+    ? P("右栏有「探究进度」且从 0 条成果开始（别人的发现不算我的成果）") : F("进度初始不对");
+  /预置示例/.test(side.textContent)
+    ? P("预置示例的新发现标了「预置示例」（不假装是同学真写的）") : F("预置示例没标注");
   /保存的猜想灵感/.test(side.textContent)
     ? P("右栏有「保存的猜想灵感」区") : F("猜想灵感区没渲染");
   /目前推导出来有帮助的信息/.test(side.textContent)
@@ -4112,24 +4168,25 @@ console.log("\n=== 3o-b. 学生端实训：跨桶读 → 推进 → 记路线 �
   /卡在第二步/.test(String(w.localStorage.getItem("st_activities:teacher:teacher")))
     ? P("🔴 学生消息写回了老师桶（老师看得到）") : F("学生消息没写回老师桶");
 
-  /* ---------- ⑥ 发起实训：预览 → 创建 → 落学生桶 + 同步教师桶 ---------- */
+  /* ---------- ⑥ 发起实训：只写目标 → 创建 → 落学生桶（不进教师端） ---------- */
   d.getElementById("btnNewAct").dispatchEvent(new w.Event("click", { bubbles: true }));
   await settle(dom);
   const host = d.getElementById("modalHost");
   host && !host.hidden ? P("点「＋ 发起实训」弹出弹窗") : F("弹窗没出现");
+  !d.getElementById("mkStages")
+    ? P("发起弹窗不预览骨架（学生自由探究，不铺步骤）")
+    : F("发起弹窗仍在预览骨架");
   const mkGoal = d.getElementById("mkGoal");
   mkGoal.value = "勾股定理是怎么被发现的";
   mkGoal.dispatchEvent(new w.Event("input", { bubbles: true }));
   await settle(dom);
-  d.getElementById("mkStages").querySelectorAll(".mk-step").length >= 3
-    ? P("写目标时实时给出引导骨架预览") : F("发起预览没生成");
   d.getElementById("mkCreate").dispatchEvent(new w.Event("click", { bubbles: true }));
   await settle(dom);
   w.eval("localStorage.getItem('st_activities:student:student') || ''").indexOf("勾股定理") >= 0
     ? P("🔴 学生发起的写进了学生桶") : F("学生发起的没落学生桶");
-  w.eval("localStorage.getItem('st_activities:teacher:teacher') || ''").indexOf("勾股定理") >= 0
-    ? P("🔴 学生发起的同步到了本机教师桶（老师也能看到这条）")
-    : F("学生发起的没同步给老师");
+  w.eval("localStorage.getItem('st_activities:teacher:teacher') || ''").indexOf("勾股定理") < 0
+    ? P("🔴 学生发起的**不**进教师桶（学生自发的探究不给老师看）")
+    : F("学生发起的仍同步给了老师");
   /进行中/.test(d.getElementById("stList").textContent)
     ? P("发起后列表里出现「进行中」（学生发起直接开启，不等老师确认）") : F("发起后状态不对");
 
@@ -4468,9 +4525,9 @@ console.log("\n=== 3s. 工作台（第 43 轮）：AI 工作台 —— 说需求
   !dS.querySelector('#appGrid [data-a="app-send"]')
     ? P("🔴 学生端卡片没有「下发给学生」（那是教师的动作）") : F("学生端有下发");
   !dS.querySelector('#appGrid [data-a="app-del"]')
-    ? P("🔴 学生端卡片没有「删除」（不是他的东西）") : F("学生端有删除");
+    ? P("🔴 学生端不能删老师发来的（不是他的东西）") : F("学生端有删除");
   !dS.querySelector('#appGrid [data-a="app-rename"]')
-    ? P("🔴 学生端卡片没有「改名」") : F("学生端有改名");
+    ? P("🔴 学生端不能给老师发来的改名") : F("学生端有改名");
   /* 打开「老师发来的」那份：记录不在学生桶里 → 必须走跨桶取数 */
   const openS = dS.querySelector('#appGrid [data-a="app-open"]');
   if (openS) {
@@ -4818,6 +4875,17 @@ console.log("\n=== 4. 内容页独立打开（无壳环境）===");
   items.length >= 6 ? P("独立模式侧栏 " + items.length + " 个菜单项") : F("独立模式侧栏过少: " + items.length);
   d.body.classList.contains("standalone-body") ? P("body 带 .standalone-body") : F("缺 standalone-body");
   d.querySelector(".shell-content .page-wrap") ? P("内容被包进内容区") : F("page-wrap 未包裹");
+  /* 🔴 侧栏 + 正文必须同处 .shell-main（与 app.html 同构）。
+     只 prepend 到 body 的话，body 是竖排 flex → 232px 的侧栏变成顶部一条，
+     顶栏被挤到页面中间，首屏一大片空白（2026-11-18 实测截图发现）。 */
+  const main = d.querySelector(".shell-main.standalone-main");
+  main ? P("独立模式有 .shell-main 容器（与 app.html 同构）") : F("缺 .shell-main —— 侧栏会被挤成顶部一条");
+  main && main.contains(side) ? P("侧栏在 .shell-main 里（左侧竖排）") : F("侧栏不在 .shell-main 里");
+  main && main.contains(d.querySelector(".standalone-content"))
+    ? P("正文在 .shell-main 里（与侧栏同一横排）") : F("正文不在 .shell-main 里");
+  const topBar = d.querySelector(".standalone-top");
+  topBar && main && !main.contains(topBar)
+    ? P("顶栏留在 shell-main 之外（在页面顶端）") : F("顶栏被包进 shell-main 了");
   const labels = [...items].map((b) => (b.querySelector(".side-label") || {}).textContent || "");
   !labels.some((l) => /出题|组卷|班级学情/.test(l)) ? P("独立模式同样无跨端菜单泄漏") : F("独立模式泄漏教师菜单");
   dom.window.close();

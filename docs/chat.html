@@ -52,7 +52,7 @@
             </div>
             <div class="composer-foot">
               <span><span class="kbd">Enter</span> 发送　<span class="kbd">Shift</span>+<span class="kbd">Enter</span> 换行</span>
-              <span>回答来自本机内置示例</span>
+              <span>回答来自内置示例</span>
             </div>
           </div>
         </section>
@@ -254,7 +254,7 @@ function pickReply(text) {
 - 「这个机制的时间复杂度是多少？怎么推导？」
 - 「它和 XXX 的区别是什么？什么场景用哪个？」
 
-💡 回答来自本机内置示例库 —— 试试下方推荐问题。`;
+💡 回答来自内置示例库 —— 试试下方推荐问题。`;
 }
 
 /* ---------- 渲染 ---------- */
@@ -387,8 +387,8 @@ $("#input").addEventListener("input", (e) => {
   e.target.style.height = Math.min(e.target.scrollHeight, 150) + "px";
 });
 $("#resetProfile").addEventListener("click", () => {
-  if (!confirm("清空本机学习记录？\n\n风格画像与「我的学情」是同一份记录，清空后两处都会归零。" +
-    "\n记录只存在这台浏览器里，清掉找不回来。")) return;
+  if (!confirm("清空学习记录？\n\n风格画像与「我的学情」是同一份记录，清空后两处都会归零。" +
+    "\n清掉之后就找不回来了。")) return;
   if (typeof clearBehavior === "function") clearBehavior();
   renderProfile();
 });
@@ -428,10 +428,10 @@ function renderProfile() {
   }).join("");
 
   meta.innerHTML =
-    "这份画像来自 <b>" + sum.total + "</b> 条本机行为记录（提问 " + sum.byKind.ask + " 次、" +
+    "这份画像来自 <b>" + sum.total + "</b> 条行为记录（提问 " + sum.byKind.ask + " 次、" +
     "批注 " + sum.byKind.note + " 条），共 " + sum.activeDays + " 天有记录" +
     (sum.streak > 1 ? "，已连续 " + sum.streak + " 天" : "") + "。<br>" +
-    "是<b>行为比例的统计</b>，不是模型判断；记录只存在这台浏览器里。" +
+    "是<b>行为比例的统计</b>，不是模型判断。" +
     (seeds === sum.total ? "<br>这份历史<b>全部是预置示例记录</b>（预置账号自带）。"
       : seeds ? "<br>其中 <b>" + seeds + "</b> 条是预置示例记录。" : "");
 }

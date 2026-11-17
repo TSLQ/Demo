@@ -929,7 +929,6 @@ function mountStandaloneSide() {
           <span>${(ROLES[role] || {}).label || ""}身份</span>
         </div>
       </div>
-      <div class="side-foot-note">全部数据保存在本机浏览器</div>
     </div>
   </nav>`);
 
@@ -958,7 +957,9 @@ function mountStandaloneSide() {
     });
   });
 
-  document.body.prepend(side);
+  // 独立模式：有 `.shell-main` 就挂进它（与 app.html 同构），否则退回 body
+  const host = document.querySelector(".standalone-main") || document.body;
+  host.prepend(side);
 }
 
 /**
@@ -1219,7 +1220,7 @@ function mountCharts(root) {
         box.innerHTML = "";
         var tip = document.createElement("div");
         tip.className = "chart-fallback";
-        tip.textContent = "图表没画出来：这台机器连不上 ECharts 的 CDN（离线演示时会这样）。数据还在，见下面的原始值。";
+        tip.textContent = "图表没画出来：没能加载图表组件（断网时会这样）。数据还在，见下面的原始值。";
         box.appendChild(tip);
         var pre = document.createElement("pre");
         pre.className = "chart-raw";
@@ -1545,7 +1546,7 @@ function openAddClass() {
 
         <p class="modal-hint">
           <span class="hint-mark" aria-hidden="true">i</span>
-          <span>班级只保存在本机浏览器。保存后可在左侧栏「班级管理」里点击切换。</span>
+          <span>保存后可在左侧栏「班级管理」里点击切换。</span>
         </p>
 
         <p class="login-error" id="classError" role="alert" hidden></p>
@@ -1623,6 +1624,22 @@ function mountStandalone() {
   mountStandaloneTop();
   mountStandaloneSide();
   mountStandaloneContent();
+
+  // 🔴 与 app.html 同构：侧栏 + 正文要放进 `.shell-main`（它是 `display:flex` 的横排容器）。
+  //    只 `prepend(side)` 到 body 的话，body 是**竖排** flex → 232px 宽的侧栏变成顶部一条，
+  //    顶栏被挤到页面中间、下面再跟正文（症状：首屏一大片空白，内容从中线才开始）。
+  //    shell.css 里 `.standalone-body .shell-main{flex-direction:column}` 的窄屏规则也说明
+  //    这个容器本来就该存在，只是之前没人建。
+  let main = document.querySelector(".standalone-main");
+  if (!main) {
+    main = document.createElement("div");
+    main.className = "shell-main standalone-main";
+    document.body.appendChild(main);
+  }
+  const side = document.querySelector(".standalone-side");
+  const content = document.querySelector(".standalone-content");
+  if (side && side.parentElement !== main) main.appendChild(side);
+  if (content && content.parentElement !== main) main.appendChild(content);
 }
 
 /**
@@ -1634,13 +1651,20 @@ function mountStandalone() {
 function tearDownStandalone() {
   if (!document.body.classList.contains("standalone-body")) return;
   document.body.classList.remove("standalone-body");
-  document.querySelectorAll(".standalone-top, .standalone-side").forEach((n) => n.remove());
+  document.querySelectorAll(".standalone-top").forEach((n) => n.remove());
   const holder = document.querySelector(".standalone-content");
+  const main = document.querySelector(".standalone-main");
   if (holder) {
     const wrap = holder.querySelector(".page-wrap");
-    if (wrap && holder.parentNode) holder.parentNode.insertBefore(wrap, holder);
+    if (wrap) {
+      // 正文先搬回 body（不能留在即将删除的 .shell-main 里）
+      if (main && main.parentNode) main.parentNode.insertBefore(wrap, main);
+      else if (holder.parentNode) holder.parentNode.insertBefore(wrap, holder);
+    }
     holder.remove();
   }
+  document.querySelectorAll(".standalone-side").forEach((n) => n.remove());
+  if (main) main.remove();
 }
 
 /* ---------------- 初始化 ---------------- */
@@ -1710,6 +1734,11 @@ window.addEventListener("message", (e) => {
   if (d.type === "st-open-a11y-gate") {
     openA11yGate();
     notifyShell("st-a11y-gate-opened", {});
+  }
+  // 壳顶栏「指令」/ 在壳里长按 Alt → 打开本页的指令条（同样只实现一份）
+  if (d.type === "st-open-deck") {
+    deckOpen();
+    notifyShell("st-deck-opened", {});
   }
   // 无障碍阅读模式：壳改了开关 → 本页立刻跟着切阅读态（视觉 + 工具条）
   if (d.type === "st-a11y-mode") {
@@ -1859,3 +1888,895 @@ function askLeaveCourse(courseId) {
   if (!r.ok) { window.alert(r.error); return; }
   remountStandaloneSide();
 }
+
+/* ============================================================
+   AI 指令条（长按 Alt 呼出）
+   ------------------------------------------------------------
+   要解决的问题：读屏用户找控件靠「翻」，键盘用户找功能靠「记」。
+   指令条把这两件事压成一句话 —— 「把字放大一点」「去我的作业」。
+
+   🔴 三条硬规则（改之前先读）：
+   1) **只读的直接做，会改东西的一定先给 diff**：把「现在 → 将改为」
+      列成表格，点「应用变更」才落库；Esc / 取消一律**不生效**。
+   2) **动作只能来自白名单**（DECK_ACTIONS + 页面注册项）。模型最多
+      挑一个 id，参数一律由本地解析；未知 id 直接拒。绝不执行模型
+      自由生成的代码或参数。
+   3) **没接模型就如实说**：本地规则命中就照做，命中不了就说「没听懂」，
+      不编动作、不假装执行过。
+
+   ⚠️ 语音输入走浏览器自带 SpeechRecognition（Chrome / Edge，需 https
+      或 localhost）。不支持时按钮置灰并说明原因，不做假的「正在听」。
+   ============================================================ */
+
+const DECK_HOLD_MS = 550;
+
+/** 页面级指令（含别名）。判断顺序在全局动作之后，避免「作业」抢走「字号」。 */
+const DECK_PAGES = [
+  { page: "homework.html",  label: "我的作业",     keys: ["交作业", "做作业", "我的作业"] },
+  { page: "courseware.html", label: "发布课件作业", keys: ["发布作业", "布置作业", "发布课件", "发课件"] },
+  { page: "reader.html",    label: "课件阅读",     keys: ["课件阅读", "看课件", "读课件"] },
+  { page: "analysis.html",  label: "我的学情",     keys: ["学情", "成绩", "得分"] },
+  { page: "exam.html",      label: "出题与组卷",   keys: ["出题", "组卷", "试卷"] },
+  { page: "lesson.html",    label: "教案",         keys: ["教案", "备课"] },
+  { page: "schedule.html",  label: "课表与事项",   keys: ["课表", "日程", "事项"] },
+  { page: "stu.html",       label: "学生管理",     keys: ["学生管理", "学生名册"] },
+  { page: "class.html",     label: "课程成员",     keys: ["课程成员", "我的课程", "班级", "成员"] },
+  { page: "training.html",  studentPage: "training-student.html", label: "实训", keys: ["实训"] },
+  { page: "agent.html",     studentPage: "agent-student.html",    label: "AI 助手", keys: ["ai 助手", "助手", "智能体"] },
+  { page: "workbench.html", label: "工作台",       keys: ["工作台"] },
+  { page: "chat.html",      label: "AI 答疑",      keys: ["答疑", "提问"] },
+  { page: "settings.html",  label: "偏好设置",     keys: ["设置", "偏好"] },
+];
+
+/** 读当前无障碍配置（本地存储里的那一份，不做任何推断） */
+function deckA11yCfg() {
+  const c = LS.get(STORE_KEY.a11y, null);
+  return (c && typeof c === "object") ? c : {};
+}
+function deckProfileById(id) {
+  for (let i = 0; i < A11Y_PROFILES.length; i++) {
+    if (A11Y_PROFILES[i].id === id) return A11Y_PROFILES[i];
+  }
+  return null;
+}
+function deckProfileName(id) {
+  const p = deckProfileById(id);
+  return p ? p.label : "";
+}
+function deckThemeName(id) {
+  for (let i = 0; i < THEMES.length; i++) if (THEMES[i].id === id) return THEMES[i].label;
+  return id || "默认";
+}
+function deckOnOff(v) { return v ? "开" : "关"; }
+
+/** 写无障碍配置并立即生效（不换模式时只改一项） */
+function deckPatchA11y(patch) {
+  const prev = LS.get(STORE_KEY.a11y, null) || {};
+  const next = Object.assign({}, prev, patch);
+  LS.set(STORE_KEY.a11y, next);
+  applyA11yVars(next);
+  if (patch.profile) document.documentElement.setAttribute("data-a11y-profile", patch.profile);
+  else syncA11yProfileAttr();
+}
+
+/* ---------------- 动作表（白名单） ----------------
+   每个动作：
+     id / label / sample      —— 给人看
+     risk: "read" | "nav" | "write"
+     match(text)              —— 命中就返回参数对象，不命中返回 null
+     fallbackArgs()           —— 本地没命中、但模型认为该用它时的保守参数
+     diff(args)               —— 仅 write：返回 [{label, from, to}]
+     run(args)                —— 真执行
+--------------------------------------------------- */
+const DECK_ACTIONS = [
+  {
+    id: "help",
+    label: "看它能做什么",
+    sample: "你能做什么",
+    risk: "read",
+    match: function (t) {
+      return /(你能做什么|能做什么|帮助|怎么用|有哪些指令|help)/i.test(t) ? {} : null;
+    },
+    run: function () { deckRenderHelp(true); deckSay("下面列了现在能做的事，点一条就填进输入框。"); },
+  },
+  {
+    id: "read.page",
+    label: "朗读当前页面",
+    sample: "把这一页读给我听",
+    risk: "read",
+    match: function (t) {
+      return /(朗读|念|读给|听).*(这一?页|本页|当前页|全文|正文)/.test(t) ? {} : null;
+    },
+    run: function () { deckReadPage(); },
+  },
+  {
+    id: "a11y.gate",
+    label: "重新选择显示模式",
+    sample: "重新选一下显示模式",
+    risk: "nav",
+    leave: true,                                 // 先收起指令条，别把弹窗压在它下面
+    match: function (t) {
+      return /(重新选|换一个模式|选择显示模式|显示模式选择)/.test(t) ? {} : null;
+    },
+    run: function () { if (typeof openA11yGate === "function") openA11yGate(); },
+  },
+  {
+    id: "a11y.profile",
+    label: "换一种显示模式",
+    sample: "换成大字高对比",
+    risk: "write",
+    match: function (t) {
+      if (!/(朗读优先|大字高对比|大字模式|减少动效|标准显示|显示模式)/.test(t)) return null;
+      if (/朗读/.test(t)) return { profile: "reader" };
+      if (/大字|高对比/.test(t)) return { profile: "large" };
+      if (/动效|动画|闪烁/.test(t)) return { profile: "calm" };
+      if (/标准|普通|正常/.test(t)) return { profile: "standard" };
+      return null;
+    },
+    fallbackArgs: function () { return { profile: "reader" }; },
+    diff: function (a) {
+      const p = deckProfileById(a.profile);
+      const now = deckA11yCfg();
+      if (!p) return [];
+      const rows = [];
+      if (String(now.profile || "") !== p.id) {
+        rows.push({ label: "显示模式", from: deckProfileName(now.profile) || "还没选过", to: p.label });
+      }
+      const nowSize = Number(now.size) || 15;
+      if (nowSize !== p.cfg.size) rows.push({ label: "正文字号", from: nowSize + "px", to: p.cfg.size + "px" });
+      const nowLh = Number(now.lh) || 1.8;
+      if (nowLh !== p.cfg.lh) rows.push({ label: "行距", from: nowLh.toFixed(1), to: p.cfg.lh.toFixed(1) });
+      if (!!now.contrast !== !!p.cfg.contrast) {
+        rows.push({ label: "高对比", from: deckOnOff(now.contrast), to: deckOnOff(p.cfg.contrast) });
+      }
+      if (!!now.reduceMotion !== !!p.cfg.reduceMotion) {
+        rows.push({ label: "减少动效", from: deckOnOff(now.reduceMotion), to: deckOnOff(p.cfg.reduceMotion) });
+      }
+      if ((LS.get(STORE_KEY.readMode, true) !== false) !== !!p.cfg.readMode) {
+        rows.push({ label: "朗读工具条", from: deckOnOff(LS.get(STORE_KEY.readMode, true) !== false), to: deckOnOff(p.cfg.readMode) });
+      }
+      return rows;
+    },
+    run: function (a) { applyA11yProfile(a.profile); },
+  },
+  {
+    id: "a11y.font",
+    label: "调整正文字号",
+    sample: "把字放大一点",
+    risk: "write",
+    match: function (t) {
+      // ⚠️ 口语里是「把字放大一点」，不是「放大字」——别只按书面语写正则
+      if (!/(字号|字体|文字|字)(再|调|放|变|大|小|一点|太小)|看不清|放大|缩小|大字/.test(t)) return null;
+      const now = Number(deckA11yCfg().size) || 15;
+      const num = /(\d{2})\s*(?:px|号)?/.exec(t);
+      if (num) return { size: Math.max(13, Math.min(24, Number(num[1]))) };
+      if (/(最大|放到最大)/.test(t)) return { size: 24 };
+      if (/(小一点|小些|缩小|调小|太大)/.test(t)) return { size: Math.max(13, now - 2) };
+      return { size: Math.min(24, now + 2) };
+    },
+    fallbackArgs: function () {
+      const now = Number(deckA11yCfg().size) || 15;
+      return { size: Math.min(24, now + 2) };
+    },
+    diff: function (a) {
+      const now = Number(deckA11yCfg().size) || 15;
+      if (now === a.size) return [];
+      return [{ label: "正文字号", from: now + "px", to: a.size + "px" }];
+    },
+    run: function (a) { deckPatchA11y({ size: a.size }); },
+  },
+  {
+    id: "a11y.contrast",
+    label: "开关高对比",
+    sample: "把对比度调高",
+    risk: "write",
+    match: function (t) {
+      if (!/(高对比|对比度|颜色太淡|看不清颜色)/.test(t)) return null;
+      const now = !!deckA11yCfg().contrast;
+      if (/(关|不要|取消|关掉)/.test(t)) return { on: false };
+      if (/(开|高一点|加强|调高)/.test(t)) return { on: true };
+      return { on: !now };
+    },
+    fallbackArgs: function () { return { on: true }; },
+    diff: function (a) {
+      const now = !!deckA11yCfg().contrast;
+      if (now === a.on) return [];
+      return [{ label: "高对比", from: deckOnOff(now), to: deckOnOff(a.on) }];
+    },
+    run: function (a) { deckPatchA11y({ contrast: a.on }); },
+  },
+  {
+    id: "a11y.motion",
+    label: "开关减少动效",
+    sample: "把动画关掉",
+    risk: "write",
+    match: function (t) {
+      if (!/(动效|动画|闪烁|晃眼)/.test(t)) return null;
+      const now = !!deckA11yCfg().reduceMotion;
+      if (/(关|不要|取消|停)/.test(t)) return { on: true };   // 「关动画」= 减少动效开
+      if (/(开|打开|恢复)/.test(t)) return { on: false };
+      return { on: !now };
+    },
+    fallbackArgs: function () { return { on: true }; },
+    diff: function (a) {
+      const now = !!deckA11yCfg().reduceMotion;
+      if (now === a.on) return [];
+      return [{ label: "减少动效", from: deckOnOff(now), to: deckOnOff(a.on) }];
+    },
+    run: function (a) { deckPatchA11y({ reduceMotion: a.on }); },
+  },
+  {
+    id: "a11y.readmode",
+    label: "开关朗读工具条",
+    sample: "打开朗读模式",
+    risk: "write",
+    match: function (t) {
+      if (!/(朗读模式|阅读模式|朗读工具条|点段落朗读)/.test(t)) return null;
+      const now = LS.get(STORE_KEY.readMode, true) !== false;
+      if (/(关|不要|取消|停)/.test(t)) return { on: false };
+      if (/(开|打开|启用)/.test(t)) return { on: true };
+      return { on: !now };
+    },
+    fallbackArgs: function () { return { on: true }; },
+    diff: function (a) {
+      const now = LS.get(STORE_KEY.readMode, true) !== false;
+      if (now === a.on) return [];
+      return [{ label: "朗读工具条", from: deckOnOff(now), to: deckOnOff(a.on) }];
+    },
+    run: function (a) { if (typeof setReadMode === "function") setReadMode(a.on); },
+  },
+  {
+    id: "theme.set",
+    label: "换一套配色",
+    sample: "换成浅色主题",
+    risk: "write",
+    match: function (t) {
+      if (!/(主题|配色|深色|浅色|暗色|亮色|cream|snow)/i.test(t)) return null;
+      if (/深色|暗色|暗黑/i.test(t)) return { id: "dark" };
+      if (/浅色|亮色|白底|snow/i.test(t)) return { id: "snow" };
+      if (/cream|米色|奶油/i.test(t)) return { id: "cream" };
+      return null;
+    },
+    diff: function (a) {
+      const now = (typeof Theme !== "undefined" && Theme.current) ? Theme.current() : "";
+      if (now === a.id) return [];
+      return [{ label: "界面主题", from: deckThemeName(now), to: deckThemeName(a.id) }];
+    },
+    run: function (a) { Theme.apply(a.id, true); },
+  },
+  {
+    id: "nav.page",
+    label: "去某个页面",
+    sample: "打开我的作业",
+    risk: "nav",
+    leave: true,
+    match: function (t) { return deckNavMatch(t); },
+    run: function (a) {
+      if (!a || !a.page) return;
+      if (typeof navigate === "function") navigate(a.page);
+      else location.href = a.page;
+    },
+  },
+];
+
+/** 按关键词找页面（学生端的实训 / AI 助手是另一份页面） */
+function deckNavMatch(t) {
+  const low = String(t || "").toLowerCase();
+  let role = "";
+  try { role = (typeof currentRole === "function") ? currentRole() : ""; } catch (_) {}
+  for (let i = 0; i < DECK_PAGES.length; i++) {
+    const it = DECK_PAGES[i];
+    for (let k = 0; k < it.keys.length; k++) {
+      if (low.indexOf(String(it.keys[k]).toLowerCase()) >= 0) {
+        return {
+          page: (role === "student" && it.studentPage) ? it.studentPage : it.page,
+          label: it.label,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+/** 页面注册的指令 + 内置指令（页面优先，避免「开始做作业」被导航抢走） */
+function deckAllActions() {
+  return Deck.pageActions.concat(DECK_ACTIONS);
+}
+
+/* ---------------- 对外开放的注册口 ---------------- */
+const Deck = {
+  pageActions: [],
+  register: function (list) {
+    if (!Array.isArray(list)) return;
+    list.forEach(function (a) {
+      if (!a || !a.id || typeof a.run !== "function") return;
+      if (Deck.pageActions.some(function (x) { return x.id === a.id; })) return;
+      Deck.pageActions.push(a);
+    });
+  },
+  open: function () { deckOpen(); },
+  close: function () { deckClose(true); },
+};
+try { window.Deck = Deck; } catch (_) { /* 异常环境忽略 */ }
+
+/* ---------------- 小工具 ---------------- */
+function deckEsc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function deckAttr(s) {
+  return deckEsc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function deckHostEl() {
+  return document.getElementById("deckHost");
+}
+function deckSay(msg) {
+  const n = document.getElementById("deckStatus");
+  if (n) n.textContent = String(msg == null ? "" : msg);
+}
+function deckFocusInput() {
+  const n = document.getElementById("deckInput");
+  if (!n) return;
+  try { n.focus(); } catch (_) {}
+}
+
+/* ---------------- 界面 ---------------- */
+function deckHTML() {
+  return '<div class="deck-host" id="deckHost">' +
+    '<div class="deck-scrim" data-deck="close" aria-hidden="true"></div>' +
+    '<div class="deck" id="deckPanel" role="dialog" aria-modal="true" ' +
+      'aria-labelledby="deckTitle" aria-describedby="deckDesc">' +
+      '<div class="deck-head">' +
+        '<p class="deck-kicker">AI 指令条 · 长按 Alt</p>' +
+        '<h2 id="deckTitle">说一句，我来做</h2>' +
+        '<button class="deck-x" type="button" data-deck="close" aria-label="关闭指令条">✕</button>' +
+      '</div>' +
+      '<p class="deck-desc" id="deckDesc">说「把字放大一点」「去我的作业」「朗读这一页」。会改设置的动作，先把改动列出来给你确认，确认前什么都没变。</p>' +
+      '<form class="deck-form" id="deckForm">' +
+        '<label class="sr-only" for="deckInput">输入或说出你要做的事</label>' +
+        '<input class="deck-input" id="deckInput" type="text" autocomplete="off" ' +
+          'placeholder="例如：把字放大一点">' +
+        '<button class="deck-mic" type="button" id="deckMic" aria-pressed="false">' +
+          '<span class="deck-mic-dot" aria-hidden="true"></span><span id="deckMicText">语音</span>' +
+        '</button>' +
+        '<button class="btn btn-primary deck-go" type="submit" id="deckGo">执行</button>' +
+      '</form>' +
+      '<p class="deck-status" id="deckStatus" role="status" aria-live="polite"></p>' +
+      '<div class="deck-review" id="deckReview" hidden></div>' +
+      '<div class="deck-undo" id="deckUndoBar" hidden>' +
+        '<span id="deckUndoText">已应用</span>' +
+        '<button class="btn btn-sm" type="button" data-deck="undo" id="deckUndoBtn">撤销这次改动</button>' +
+      '</div>' +
+      '<div class="deck-help" id="deckHelp"></div>' +
+      '<div class="deck-foot">' +
+        '<span class="deck-model" id="deckModel">—</span>' +
+        '<span class="deck-tip">Esc 关闭 · Tab 只在框内走</span>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function deckOpen() {
+  if (!document.body) return;
+  if (deckHostEl()) { deckFocusInput(); return; }
+
+  const host = el(deckHTML());
+  if (!host) return;
+
+  deckReturnTo = document.activeElement;
+  document.body.appendChild(host);
+  document.body.classList.add("modal-open");
+
+  deckBind(host);
+  deckRenderHelp(false);
+  deckRenderModel();
+  deckFocusInput();
+  deckSay("可以说了。想不起来就输入「你能做什么」。");
+  announce("AI 指令条已打开，输入或说出你要做的事。");
+}
+
+let deckReturnTo = null;
+
+function deckClose(restore) {
+  const host = deckHostEl();
+  if (!host) return;
+  deckVoiceStop();
+  host.remove();
+  document.body.classList.remove("modal-open");
+  deckCurrent = null;
+  document.removeEventListener("keydown", deckOnKey, true);
+  const back = deckReturnTo;
+  deckReturnTo = null;
+  if (restore !== false && back && back.focus) {
+    try { back.focus(); } catch (_) {}
+  }
+}
+
+function deckBind(host) {
+  const form = host.querySelector("#deckForm");
+  if (form) {
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      const input = host.querySelector("#deckInput");
+      deckSubmit(input ? input.value : "");
+    });
+  }
+
+  host.addEventListener("click", function (e) {
+    const b = (e.target && e.target.closest) ? e.target.closest("[data-deck]") : null;
+    if (!b || !host.contains(b)) return;
+    const act = b.getAttribute("data-deck");
+    if (act === "close") { e.preventDefault(); deckClose(true); return; }
+    if (act === "apply") { e.preventDefault(); deckApply(); return; }
+    if (act === "cancel") { e.preventDefault(); deckCancel(); return; }
+    if (act === "undo") { e.preventDefault(); deckDoUndo(); return; }
+    if (act === "fill") {
+      e.preventDefault();
+      const input = host.querySelector("#deckInput");
+      if (input) {
+        input.value = b.getAttribute("data-text") || "";
+        input.focus();
+      }
+      return;
+    }
+  });
+
+  const mic = host.querySelector("#deckMic");
+  if (mic) mic.addEventListener("click", deckVoiceToggle);
+
+  document.addEventListener("keydown", deckOnKey, true);
+}
+
+function deckFocusables(host) {
+  const all = host.querySelectorAll("button, input, textarea, select, a[href]");
+  const out = [];
+  for (let i = 0; i < all.length; i++) {
+    const n = all[i];
+    if (n.disabled) continue;
+    if (n.getAttribute("tabindex") === "-1") continue;
+    if (n.closest("[hidden]")) continue;
+    out.push(n);
+  }
+  return out;
+}
+
+function deckOnKey(e) {
+  const host = deckHostEl();
+  if (!host) return;
+
+  if (e.key === "Escape") {
+    e.preventDefault();
+    e.stopPropagation();
+    if (deckCurrent) deckCancel();
+    else deckClose(true);
+    return;
+  }
+  if (e.key !== "Tab") return;
+
+  const list = deckFocusables(host);
+  if (list.length < 2) return;
+  const first = list[0];
+  const last = list[list.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+function deckRenderModel() {
+  const n = document.getElementById("deckModel");
+  if (n) n.textContent = deckModelText();
+}
+
+function deckModelText() {
+  try {
+    if (typeof llmReady !== "function") return "未接模型 · 只按本地规则匹配";
+    if (!llmReady()) return "未接模型 · 只按本地规则匹配（设置 → 模型接入）";
+    const c = llmConfig();
+    const label = (c && c.cfg && (c.cfg.label || c.cfg.model)) || (c && c.provider) || "";
+    return "模型：" + label;
+  } catch (_) {
+    return "未接模型 · 只按本地规则匹配";
+  }
+}
+
+/** 示例清单。expanded = 用户主动问「你能做什么」时展开更多条 */
+function deckRenderHelp(expanded) {
+  const box = document.getElementById("deckHelp");
+  if (!box) return;
+  const all = deckAllActions().filter(function (a) { return a.sample; });
+  const list = expanded ? all : all.slice(0, 4);
+  box.hidden = false;
+  box.innerHTML =
+    '<p class="deck-help-t">' + (expanded ? "现在能做的事" : "试试这些（点一下填进输入框）") + "</p>" +
+    '<ul class="deck-samples">' +
+      list.map(function (a) {
+        return '<li><button class="deck-sample" type="button" data-deck="fill" data-text="' +
+          deckAttr(a.sample) + '">' + deckEsc(a.sample) + "</button>" +
+          '<span class="deck-sample-lb">' + deckEsc(a.label) +
+          (a.risk === "write" ? " · 会先给你看改动" : "") + "</span></li>";
+      }).join("") +
+    "</ul>";
+}
+
+/* ---------------- 解析与执行 ---------------- */
+function deckParse(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  const list = deckAllActions();
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    if (!a.match) continue;
+    let args = null;
+    try { args = a.match(raw); } catch (_) { args = null; }
+    if (args) return { action: a, args: args };
+  }
+  return null;
+}
+
+function deckSubmit(text) {
+  const t = String(text || "").trim();
+  if (!t) { deckSay("先说一句你要做什么。"); return; }
+
+  const hit = deckParse(t);
+  if (hit) { deckRun(hit.action, hit.args); return; }
+
+  deckSay("本地规则没匹配到，正在问模型…");
+  deckAskModel(t).then(function (r) {
+    if (!r) {
+      deckSay("没听懂「" + t + "」。可以说：把字放大一点 / 去我的作业 / 朗读这一页 / 你能做什么。");
+      return;
+    }
+    if (r.none) { deckSay("模型也没把握该做哪一件，换个说法试试。"); return; }
+    deckRun(r.action, r.args);
+  });
+}
+
+function deckRun(action, args) {
+  if (!action) return;
+  const a = args || {};
+
+  if (action.risk === "write") {
+    let rows = [];
+    try { rows = action.diff ? action.diff(a) : []; } catch (_) { rows = []; }
+    if (!rows.length) { deckSay("现在已经是这样了，不用改。"); return; }
+    deckReview(action, a, rows);
+    return;
+  }
+
+  if (action.leave) {
+    deckClose(false);
+    window.setTimeout(function () { action.run(a); }, 60);
+    return;
+  }
+
+  deckSay(action.label + "…");
+  try {
+    action.run(a);
+  } catch (err) {
+    deckSay("这一步没做成：" + ((err && err.message) || "未知错误"));
+  }
+}
+
+/* ---------------- diff 审核 ---------------- */
+let deckCurrent = null;
+let deckUndo = null;
+
+function deckReview(action, args, rows) {
+  const box = document.getElementById("deckReview");
+  if (!box) return;
+  deckCurrent = { action: action, args: args, rows: rows };
+
+  const body = rows.map(function (r) {
+    return '<tr><th scope="row">' + deckEsc(r.label) + "</th>" +
+      '<td class="deck-df">' + deckEsc(r.from) + "</td>" +
+      '<td class="deck-dt">' + deckEsc(r.to) + "</td></tr>";
+  }).join("");
+
+  box.innerHTML =
+    '<h3 id="deckReviewTitle" tabindex="-1">将要改 ' + rows.length + " 项，确认后才会生效</h3>" +
+    '<table class="deck-diff">' +
+      '<caption class="sr-only">改动前后对照</caption>' +
+      '<thead><tr><th scope="col">项目</th><th scope="col">现在</th><th scope="col">将改为</th></tr></thead>' +
+      "<tbody>" + body + "</tbody>" +
+    "</table>" +
+    '<p class="deck-note">只改你自己的显示设置。确认前什么都没动，取消就完全没发生。</p>' +
+    '<div class="deck-review-foot">' +
+      '<button class="btn btn-primary" type="button" data-deck="apply" id="deckApply">应用变更</button>' +
+      '<button class="btn" type="button" data-deck="cancel" id="deckCancel">取消</button>' +
+    "</div>";
+  box.hidden = false;
+
+  const help = document.getElementById("deckHelp");
+  if (help) help.hidden = true;
+
+  deckSay("请核对这三列：项目、现在、将改为。");
+  const title = document.getElementById("deckReviewTitle");
+  if (title) { try { title.focus(); } catch (_) {} }
+}
+
+function deckCloseReview() {
+  const box = document.getElementById("deckReview");
+  if (box) { box.hidden = true; box.innerHTML = ""; }
+  const help = document.getElementById("deckHelp");
+  if (help) help.hidden = false;
+  deckFocusInput();
+}
+
+function deckApply() {
+  const cur = deckCurrent;
+  if (!cur) return;
+
+  const snap = deckSnapshot();
+  let ok = true;
+  try {
+    cur.action.run(cur.args);
+  } catch (err) {
+    ok = false;
+    deckSay("没做成：" + ((err && err.message) || "未知错误"));
+  }
+  deckCurrent = null;
+  deckCloseReview();
+  if (!ok) return;
+
+  deckUndo = snap;
+  const txt = cur.rows.map(function (r) { return r.label + " " + r.from + " → " + r.to; }).join("；");
+  deckSay("已应用：" + txt + "。反悔可以点「撤销这次改动」。");
+
+  const bar = document.getElementById("deckUndoBar");
+  const t = document.getElementById("deckUndoText");
+  if (bar) bar.hidden = false;
+  if (t) t.textContent = "已应用 " + cur.rows.length + " 项";
+}
+
+function deckCancel() {
+  if (!deckCurrent) return;
+  deckCurrent = null;
+  deckCloseReview();
+  deckSay("已取消，什么都没改。");
+}
+
+function deckSnapshot() {
+  let a11y = null, readMode = null, theme = "";
+  try { a11y = window.localStorage.getItem(STORE_KEY.a11y); } catch (_) {}
+  try { readMode = window.localStorage.getItem(STORE_KEY.readMode); } catch (_) {}
+  try { theme = (typeof Theme !== "undefined" && Theme.current) ? Theme.current() : ""; } catch (_) {}
+  return { a11y: a11y, readMode: readMode, theme: theme };
+}
+
+/** 撤销：把三份存档恢复成应用前的原样，再整体重画一次 */
+function deckRestore(snap) {
+  if (!snap) return false;
+  try {
+    if (snap.a11y === null) window.localStorage.removeItem(STORE_KEY.a11y);
+    else window.localStorage.setItem(STORE_KEY.a11y, snap.a11y);
+    if (snap.readMode === null) window.localStorage.removeItem(STORE_KEY.readMode);
+    else window.localStorage.setItem(STORE_KEY.readMode, snap.readMode);
+  } catch (_) { return false; }
+
+  applyA11yVars();
+  syncA11yProfileAttr();
+  const rm = LS.get(STORE_KEY.readMode, true);
+  if (typeof applyReadMode === "function") applyReadMode(rm !== false);
+  if (snap.theme && typeof Theme !== "undefined") Theme.apply(snap.theme, true);
+  return true;
+}
+
+function deckDoUndo() {
+  if (!deckUndo) { deckSay("没有可撤销的改动。"); return; }
+  const ok = deckRestore(deckUndo);
+  deckUndo = null;
+  const bar = document.getElementById("deckUndoBar");
+  if (bar) bar.hidden = true;
+  deckSay(ok ? "已撤销，回到应用之前的样子。" : "撤销失败：当前环境不允许保存设置。");
+}
+
+/* ---------------- 朗读整页 ---------------- */
+function deckReadPage() {
+  const src = (typeof readerSource === "function") ? readerSource() : document.body;
+  const raw = src ? (src.innerText || src.textContent || "") : "";
+  const text = String(raw).replace(/\s+/g, " ").trim();
+  if (!text) { deckSay("这一页没有可朗读的文字。"); return; }
+  if (typeof readerSpeak !== "function" || !readerSpeak(text.slice(0, 3000))) {
+    deckSay("这个浏览器不支持语音朗读，可以先用读屏软件读这一页。");
+    return;
+  }
+  deckSay("正在朗读这一页。想停就用右下角的「停止」。");
+}
+
+/* ---------------- 语音输入（浏览器自带，不接第三方） ---------------- */
+let deckVoice = null;
+let deckVoiceOn = false;
+
+function deckVoiceCtor() {
+  try {
+    return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  } catch (_) { return null; }
+}
+
+function deckVoiceLabel(on) {
+  const t = document.getElementById("deckMicText");
+  const b = document.getElementById("deckMic");
+  if (t) t.textContent = on ? "在听…" : "语音";
+  if (b) b.setAttribute("aria-pressed", String(!!on));
+}
+
+function deckVoiceStop() {
+  if (deckVoice) {
+    try { deckVoice.onresult = null; deckVoice.onerror = null; deckVoice.onend = null; deckVoice.stop(); } catch (_) {}
+  }
+  deckVoice = null;
+  deckVoiceOn = false;
+  deckVoiceLabel(false);
+}
+
+function deckVoiceToggle() {
+  if (deckVoiceOn) { deckVoiceStop(); deckSay("停止收音。"); return; }
+
+  const Ctor = deckVoiceCtor();
+  if (!Ctor) {
+    deckSay("这个浏览器没有语音识别（Chrome / Edge 支持）。直接打字效果一样。");
+    return;
+  }
+  if (location.protocol === "file:") {
+    deckSay("语音输入需要 http(s) 地址，直接双击打开的页面用不了。先打字，或从本地服务打开。");
+    return;
+  }
+
+  let rec = null;
+  try { rec = new Ctor(); } catch (_) {
+    deckSay("语音识别启动不了，直接打字吧。");
+    return;
+  }
+  rec.lang = "zh-CN";
+  rec.interimResults = true;
+  rec.continuous = false;
+  rec.maxAlternatives = 1;
+
+  let finalText = "";
+  rec.onresult = function (ev) {
+    let interim = "";
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const r = ev.results[i];
+      if (r.isFinal) finalText += r[0].transcript;
+      else interim += r[0].transcript;
+    }
+    const input = document.getElementById("deckInput");
+    if (input) input.value = (finalText + interim).trim();
+    if (finalText && ev.results[ev.results.length - 1].isFinal) {
+      deckVoiceStop();
+      deckSay("听到了，正在执行。");
+      deckSubmit(finalText);
+    }
+  };
+  rec.onerror = function (ev) {
+    const code = (ev && ev.error) || "";
+    const map = {
+      "not-allowed": "麦克风被拒绝了：点地址栏右边的麦克风图标，允许这个站点使用麦克风。",
+      "service-not-allowed": "浏览器不让用语音识别服务，只能打字。",
+      "audio-capture": "没找到麦克风，检查一下设备。",
+      "network": "语音识别服务连不上（浏览器的语音识别要联网）。可以直接打字。",
+      "no-speech": "没听到声音，再说一次或直接打字。",
+      "aborted": "已停止收音。",
+    };
+    deckSay(map[code] || ("语音识别出错（" + (code || "未知") + "），直接打字吧。"));
+    deckVoiceStop();
+  };
+  rec.onend = function () {
+    deckVoiceOn = false;
+    deckVoiceLabel(false);
+    deckVoice = null;
+  };
+
+  try { rec.start(); } catch (_) {
+    deckSay("语音识别启动不了，直接打字吧。");
+    return;
+  }
+  deckVoice = rec;
+  deckVoiceOn = true;
+  deckVoiceLabel(true);
+  deckSay("在听，请说一句。说完会自动执行；点按钮或按 Esc 可停。");
+}
+
+/* ---------------- 没命中本地规则时问模型：只让它挑 id ---------------- */
+function deckJson(raw) {
+  let s = String(raw == null ? "" : raw).trim();
+  s = s.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+  const a = s.indexOf("{");
+  const b = s.lastIndexOf("}");
+  if (a < 0 || b <= a) return null;
+  try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; }
+}
+
+function deckAskModel(text) {
+  return new Promise(function (resolve) {
+    let ready = false;
+    try { ready = (typeof llmReady === "function") && llmReady(); } catch (_) {}
+    if (!ready || typeof llmChat !== "function") { resolve(null); return; }
+
+    const catalog = deckAllActions().map(function (a) {
+      return a.id + " = " + a.label + "（例：" + a.sample + "）";
+    }).join("\n");
+
+    const sys = "你是应用内的指令解析器。只能从给定的动作里挑一个，" +
+      "输出一行 JSON：{\"id\":\"动作 id\",\"say\":\"一句 20 字内的确认\"}。" +
+      "没有合适的或不确定，输出 {\"id\":\"none\"}。" +
+      "不要输出解释、不要代码块、不要编造动作 id。";
+
+    llmChat(sys, "可选动作：\n" + catalog + "\n\n用户说：" + text, { maxTokens: 160, temperature: 0 })
+      .then(function (r) {
+        if (!r || !r.ok) { resolve(null); return; }
+        const j = deckJson(r.raw);
+        resolve(deckFromModel(j, text));
+      })
+      .catch(function () { resolve(null); });
+  });
+}
+
+function deckFromModel(obj, text) {
+  if (!obj || !obj.id) return null;
+  if (String(obj.id) === "none") return { none: true };
+
+  const list = deckAllActions();
+  let hit = null;
+  for (let i = 0; i < list.length; i++) if (list[i].id === String(obj.id)) hit = list[i];
+  if (!hit) return null;                       // 未知 id 一律拒
+
+  // 参数不信模型：导航看本地关键词，其余用本地解析或动作自带的保守默认值
+  let args = null;
+  if (hit.id === "nav.page") {
+    args = deckNavMatch(text);
+  } else if (hit.match) {
+    try { args = hit.match(text); } catch (_) { args = null; }
+    if (!args && hit.fallbackArgs) args = hit.fallbackArgs();
+  } else if (hit.fallbackArgs) {
+    args = hit.fallbackArgs();
+  }
+  if (!args) return null;
+  return { action: hit, args: args };
+}
+
+/* ---------------- 长按 Alt ---------------- */
+let deckAltTimer = null;
+
+function deckAltAllowed() {
+  try { return deckA11yCfg().deckAlt !== false; } catch (_) { return true; }
+}
+
+function deckAltStart() {
+  if (!deckAltAllowed()) return;
+  if (deckHostEl()) return;
+  if (deckAltTimer) return;
+  deckAltTimer = window.setTimeout(function () {
+    deckAltTimer = null;
+    deckOpen();
+  }, DECK_HOLD_MS);
+}
+
+function deckAltCancel() {
+  if (deckAltTimer) {
+    window.clearTimeout(deckAltTimer);
+    deckAltTimer = null;
+  }
+}
+
+function deckAltKeyDown(e) {
+  if (e.key !== "Alt") {
+    // Alt + 别的键 = 组合键，别把长按判定留下来
+    deckAltCancel();
+    return;
+  }
+  if (!e.repeat) deckAltStart();
+  if (deckAltTimer) e.preventDefault();        // 别让浏览器把单独的 Alt 当菜单键
+}
+
+function deckAltKeyUp(e) {
+  if (e.key === "Alt") deckAltCancel();
+}
+
+document.addEventListener("keydown", deckAltKeyDown, true);
+document.addEventListener("keyup", deckAltKeyUp, true);
+try { window.addEventListener("blur", deckAltCancel); } catch (_) { /* 忽略 */ }

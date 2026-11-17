@@ -1289,3 +1289,203 @@ html[data-contrast] .a11y-opt-desc { color: var(--foreground); }
   .a11y-gate-foot .btn { flex: 1 1 100%; }
 }
 
+/* ============================================================
+   AI 指令条（长按 Alt）
+   ------------------------------------------------------------
+   贴在底部的命令条：输入框 + 语音 + diff 审核。
+   ⚠️ .deck-review 必须 flex:1 1 auto + min-height:0，否则表格长了
+      会把「应用变更 / 取消」顶出视口（与 .modal-body 同一个坑）。
+   ============================================================ */
+.deck-host {
+  position: fixed; inset: 0; z-index: 125;
+  display: flex; align-items: flex-end; justify-content: center;
+  padding: 20px;
+}
+.deck-scrim { position: absolute; inset: 0; background: var(--overlay); }
+.deck {
+  position: relative;
+  width: min(680px, 100%);
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  display: flex; flex-direction: column;
+  padding: 20px 20px 12px;
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-raised);
+  font-size: 16px;
+  line-height: 1.6;
+  animation: deck-in .16s ease-out;
+}
+@keyframes deck-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: none; }
+}
+.deck-head { position: relative; padding-right: 44px; }
+.deck-kicker {
+  margin: 0 0 4px;
+  font-size: 12.5px; letter-spacing: .08em;
+  color: var(--muted-foreground);
+}
+.deck h2 { margin: 0 0 6px; font-size: clamp(20px, 3vw, 24px); line-height: 1.35; }
+.deck-x {
+  position: absolute; top: -2px; right: -4px;
+  width: 40px; height: 40px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: var(--muted-foreground);
+  font-size: 16px; cursor: pointer;
+}
+.deck-x:hover { background: var(--secondary); color: var(--foreground); }
+.deck-desc {
+  margin: 0 0 14px;
+  font-size: 14.5px; line-height: 1.6;
+  color: var(--muted-foreground);
+}
+.deck-form { display: flex; gap: 8px; align-items: stretch; }
+.deck-input {
+  flex: 1 1 auto; min-width: 0;
+  min-height: 48px;
+  padding: 10px 13px;
+  font-size: 17px; line-height: 1.4;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1.5px solid var(--border);
+  border-radius: 11px;
+}
+.deck-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-color: var(--ring);
+}
+.deck-mic {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 48px; padding: 0 13px;
+  font-size: 14px; font-weight: 600;
+  color: var(--foreground);
+  background: var(--secondary);
+  border: 1.5px solid var(--border);
+  border-radius: 11px;
+  cursor: pointer;
+}
+.deck-mic-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--muted-foreground);
+}
+.deck-mic[aria-pressed="true"] {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, var(--card));
+}
+.deck-mic[aria-pressed="true"] .deck-mic-dot {
+  background: var(--primary);
+  animation: deck-pulse 1s ease-in-out infinite;
+}
+@keyframes deck-pulse { 50% { opacity: .25; } }
+.deck-go { flex: 0 0 auto; min-height: 48px; padding-inline: 18px; }
+.deck-status {
+  min-height: 21px;
+  margin: 9px 2px 0;
+  font-size: 14px;
+  color: var(--muted-foreground);
+}
+.deck-status:empty { min-height: 6px; margin-top: 4px; }
+.deck-review {
+  flex: 1 1 auto; min-height: 0;
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  overflow: auto;
+}
+.deck-review h3 {
+  margin: 0 0 8px;
+  font-size: 16.5px;
+  line-height: 1.45;
+}
+.deck-review h3:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.deck-diff {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+.deck-diff th, .deck-diff td {
+  padding: 7px 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+.deck-diff thead th {
+  font-size: 12.5px; font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--muted-foreground);
+}
+.deck-diff tbody th { font-weight: 600; }
+.deck-df { color: var(--muted-foreground); text-decoration: line-through; }
+.deck-dt { color: var(--primary); font-weight: 650; }
+.deck-note {
+  margin: 9px 0 0;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.deck-review-foot {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  margin-top: 12px;
+}
+.deck-review-foot .btn { min-height: 44px; }
+.deck-undo {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 10px; padding: 8px 10px;
+  font-size: 13.5px;
+  background: var(--secondary);
+  border-radius: 10px;
+}
+.deck-undo .btn { margin-left: auto; min-height: 36px; }
+.deck-help { margin-top: 12px; }
+.deck-help-t {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.deck-samples {
+  list-style: none;
+  display: flex; flex-wrap: wrap; gap: 7px;
+  margin: 0; padding: 0;
+}
+.deck-samples li { display: flex; flex-direction: column; gap: 2px; }
+.deck-sample {
+  display: inline-block;
+  max-width: 100%;
+  padding: 7px 11px;
+  font-size: 14px; font-weight: 500;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  text-align: left;
+}
+.deck-sample:hover { border-style: solid; border-color: var(--ring); }
+.deck-sample-lb {
+  padding-left: 4px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.deck-foot {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  justify-content: space-between;
+  margin-top: 12px; padding-top: 9px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.deck-model { font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) {
+  .deck { padding: 16px 14px 10px; }
+  .deck-form { flex-wrap: wrap; }
+  .deck-input { flex: 1 1 100%; }
+  .deck-mic { flex: 1 1 auto; justify-content: center; }
+  .deck-go { flex: 1 1 auto; }
+  .deck-review-foot .btn { flex: 1 1 100%; }
+}
+

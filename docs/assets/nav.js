@@ -2153,6 +2153,7 @@ function normFinding(f, i) {
     at: Number(o.at) || 0,
     text: text,
     pinned: !!o.pinned,
+    sample: !!o.sample,          // 预置示例（学生端要标出来，别让种子看着像同学真写的）
   };
 }
 
@@ -2233,9 +2234,9 @@ var SEED_ACTIVITIES = [
     skeleton: skeletonFromPath(PATH_LIB[0]),
     participants: ["李同学", "张同学", "王同学", "赵同学"],
     findings: [
-      { id: "f1", who: "王同学", at: 1759400000000, pinned: true,
+      { id: "f1", who: "王同学", at: 1759400000000, pinned: true, sample: true,
         text: "我试了「把圆切成很多小扇形再拼成长方形」，拼出来一看长就是半周长、宽就是半径 —— 和割圆术是两条不同的路。" },
-      { id: "f2", who: "李同学", at: 1759480000000, pinned: false,
+      { id: "f2", who: "李同学", at: 1759480000000, pinned: false, sample: true,
         text: "边数加倍时比值每次只多一点点，我怀疑它一定有个上界，但我还说不清为什么。" },
     ],
     messages: [
@@ -2274,27 +2275,46 @@ var SEED_ACTIVITIES = [
   },
 ];
 
+/** 教师桶里不该有学生自发的实训（老版本会自动同步一份进来）→ 读档时清掉，顺手写回 */
+function dropStudentRunsForTeacher(list, key) {
+  const arr = list || [];
+  const kept = arr.filter(function (a) { return a && a.origin !== "student"; });
+  if (kept.length === arr.length) return list;
+  try { window.localStorage.setItem(key, JSON.stringify(kept)); } catch (_) { /* 写不回就只在内存里清 */ }
+  return kept;
+}
+
 function loadActivities() {
   const key = activityStoreKey();
   const user = currentUserKey();
+  const isTeacher = !!user && user.indexOf("teacher:") === 0;
 
   try {
     const raw = window.localStorage.getItem(key);
     if (raw) {
-      const ok = normalizeActivities(JSON.parse(raw));
-      if (ok) return ok;                 // ⚠️ 空数组也算有效（删光活动不该复活预置数据）
+      let ok = normalizeActivities(JSON.parse(raw));
+      if (ok) {
+        // ⚠️ 空数组也算有效（删光活动不该复活预置数据）
+        if (isTeacher) ok = dropStudentRunsForTeacher(ok, key);
+        return ok;
+      }
     }
   } catch (_) { /* 隐私模式 / file:// —— 退化为内存态 */ }
 
   // 老版本的全局存档：迁给当前账号（只迁一次）
   if (key !== ACTIVITY_KEY) {
     const migrated = migrateLegacyStore(ACTIVITY_KEY, key, normalizeActivities, null);
-    if (migrated) return migrated;
+    if (migrated) return isTeacher ? dropStudentRunsForTeacher(migrated, key) : migrated;
   }
 
   // 预置账号才播种；⚠️ 必须过 normalizeActivities —— 既补齐字段，也拿到**深拷贝**
   // （否则页面里改一步骨架会改到 SEED_ACTIVITIES 上，本次会话里"改不动"）
-  return (!user || isSeedAccount(user)) ? normalizeActivities(SEED_ACTIVITIES) : [];
+  if (user && !isSeedAccount(user)) return [];
+  // 🔴 2026-11-17：学生自发的预置活动也不进教师端（与运行时同一个规矩）
+  const seeds = isTeacher
+    ? SEED_ACTIVITIES.filter(function (a) { return a.origin !== "student"; })
+    : SEED_ACTIVITIES;
+  return normalizeActivities(seeds);
 }
 
 function saveActivities() {
@@ -2309,14 +2329,23 @@ function activityOf(id) {
   return (ACTIVITIES || []).find(function (a) { return a.id === id; }) || null;
 }
 
-/** 生成活动 id：act-1 / act-2 …（数字后缀从现有最大者往后排，不与被删过的撞号） */
+/**
+ * 生成活动 id。
+ * 🔴 不能是「每个桶各自从 act-1 编号」：老师建了 act-1、学生也在自己桶建 act-1 →
+ *    两条不相干的活动**同 id**；新发现 / 群聊按 id 广播到所有桶、删除也按 id 跨桶清，
+ *    结果就是「学生标记的发现写进老师那条」「学生删自己的把老师那条一起删了」（实测）。
+ *    → id 里带时间戳，天然跨账号唯一；seq 只兜「同一毫秒连建两条」。
+ */
+let ACTIVITY_ID_SEQ = 0;
 function nextActivityId() {
-  let max = 0;
-  (ACTIVITIES || []).forEach(function (a) {
-    const m = /^act-(\d+)$/.exec(a.id || "");
-    if (m) max = Math.max(max, Number(m[1]));
-  });
-  return "act-" + (max + 1);
+  const taken = {};
+  (ACTIVITIES || []).forEach(function (a) { if (a && a.id) taken[a.id] = 1; });
+  let id = "";
+  do {
+    ACTIVITY_ID_SEQ += 1;
+    id = "act-" + Date.now().toString(36) + "-" + ACTIVITY_ID_SEQ.toString(36);
+  } while (taken[id]);
+  return id;
 }
 
 /** 新建实训（默认草案，不直接发布 —— 骨架先给教师过一眼） */
@@ -2409,10 +2438,11 @@ function activityAssetCount(id) {
 
 /**
  * 删除一条实训活动（连带它的骨架与参与者记录一起没）。
- * 🔴 第 55 轮修：同一条活动**可能在多个账号桶里各有一份副本** ——
- *    学生发起的会同时落「学生桶」与「教师桶」（见 createStudentActivity）。
- *    只删当前桶 = 学生那边还留着，他刷新后又看到这条已被删掉的实训。
+ * 🔴 第 55 轮修：同一条活动**可能在多个账号桶里各有一份副本**（老版本学生发起会同步）。
+ *    只删当前桶 = 那边还留着，刷新后又看到这条已被删掉的实训。
  *    → 遍历所有桶，把同 id 的副本一并清掉（与 addMyFinding / addChatMessage 同一套广播思路）。
+ *    ⚠️ 这条「按 id 跨桶删」成立的前提是 **id 跨账号唯一**（见 nextActivityId）——
+ *       别再改回"每个桶各自从 act-1 编号"，否则会把别人的活动一起删掉。
  */
 function deleteActivity(id) {
   const i = (ACTIVITIES || []).findIndex(function (a) { return a.id === id; });
@@ -2578,8 +2608,9 @@ refreshActivityNav();
    🔴 存储与跨桶规矩（与 exam / courseware 同一套）：
      · 活动记录按账号分桶（`st_activities:<角色>:<账号>`）。
      · 老师发布的 open/done 活动：学生**跨账号桶**读（记录在老师桶里）。
-     · 学生发起：写**学生自己桶**（`createdBy` 标发起人，**直接开启**）+ **同步一份到本机教师桶**
-       （纯静态单机，学生发起后老师登录本机即见这条活动；见 createStudentActivity）。
+     · 学生发起：**只写学生自己桶**（`createdBy` 标发起人，**直接开启**）。
+       🔴 2026-11-17 用户定：学生自发的探究**不进教师端**，别的同学也看不到 ——
+          那是他自己的一条跑道，不是老师布置的作业。
      · 学生自己的进度 / 路线笔记：存**学生桶** `st_training_progress:<角色>:<账号>`。
      · 「新发现」要写回活动记录本身（老师才看得到）→ 广播到所有含该 id 的桶。
    ============================================================ */
@@ -2775,27 +2806,6 @@ function progressOfActivity(activityId) {
   return out.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
 }
 
-/** 本机账号库里 role=teacher 的账号（学生发起实训时同步给老师用） */
-function localTeacherAccounts() {
-  let list = [];
-  try {
-    const raw = JSON.parse(window.localStorage.getItem(ACCOUNT_KEY) || "[]");
-    list = Array.isArray(raw) ? raw : [];
-  } catch (_) { return []; }
-  return list
-    .filter(function (a) { return a && a.role === "teacher" && String(a.user || "").trim(); })
-    .map(function (a) {
-      const user = String(a.user).trim();
-      return {
-        user: user,
-        name: String(a.name || user).trim(),
-        createdAt: Number(a.createdAt) || 0,
-        key: "teacher:" + user.toLowerCase(),
-      };
-    })
-    .sort(function (a, b) { return a.createdAt - b.createdAt; });
-}
-
 /** 本机各账号的实训桶键（含全局桶与当前账号桶），去重 —— 与 simBucketKeys 同一套路 */
 function activityBucketKeys() {
   return bucketKeys(ACTIVITY_KEY, (typeof activityStoreKey === "function") ? activityStoreKey() : "");
@@ -2813,8 +2823,11 @@ function activityStatusRank(status) {
 
 /**
  * 学生能看到的实训 —— 跨账号桶读 + 按 id 合并。
- * 规则：老师发布的 open/done 活动（公开可参与）+ 自己发起的（createdBy === who，直接开启）。
- * 同 id 出现多份（学生发起会同时落学生桶与教师桶）→ 取状态最靠后、更新时间最新的一份。
+ * 规则：① 老师发布的 open/done 活动（公开可参与）
+ *       ② **自己**发起的（createdBy === who，什么状态都看得见）
+ *       ③ 别人发起的：**只有被拉进 participants 的同学**看得见（发起时勾了「拉上谁一起」）
+ *       ④ 🔴 教师端不读这里 —— 学生自发的探究不进教师桶、不进教师的管理列表。
+ * 同 id 出现多份（老版本学生发起会同步一份到教师桶）→ 取状态最靠后、更新时间最新的一份。
  */
 function activitiesForStudent(who) {
   const w = String(who || "").trim().toLowerCase();
@@ -2835,10 +2848,21 @@ function activitiesForStudent(who) {
   take(ACTIVITIES);                                     // 先看内存里最新的（可能刚改完还没落盘到别的键）
   activityBucketKeys().forEach(function (k) { take(readActivityBucket(k)); });
 
+  const myName = String(accountNameOf(w) || "").trim().toLowerCase();
+  const isMine = function (a) {
+    return a.origin === "student" && String(a.createdBy || "").toLowerCase() === w;
+  };
+  const isInvited = function (a) {
+    if (!myName) return false;
+    return (a.participants || []).some(function (n) {
+      return String(n || "").trim().toLowerCase() === myName;
+    });
+  };
   return Object.keys(merged).map(function (id) { return merged[id]; })
     .filter(function (a) {
-      if (a.status === "open" || a.status === "done") return true;
-      return a.origin === "student" && String(a.createdBy || "").toLowerCase() === w;
+      if (isMine(a)) return true;
+      if (a.origin === "student") return isInvited(a);  // 别人发起的：只给被拉进来的同学看
+      return a.status === "open" || a.status === "done";
     })
     .sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
 }
@@ -2950,7 +2974,9 @@ function addChatMessage(activityId, text, who, role) {
  * 学生发起实训 —— 灵感 02 的落地。
  * ① 写**学生自己桶**（origin:student、createdBy=当前学生）→ 学生端「我发起的」看得到；
  * ② 🔴 **直接开启**（status=open，不等老师确认）—— 用户要求「学生可以自己开启」；
- * ③ **同步一份到本机教师桶**（纯静态单机：老师登录本机即见这条学生发起的活动）；
+ * ③ 🔴 **不往教师桶同步**（2026-11-17 用户定）—— 学生自发的是他自己的探究跑道，
+ *    不变成老师那边的待办，也不进别的同学列表（见 activitiesForStudent）。
+ *    骨架仍照常生成：它是**活动记录的一部分**（老师端 / 存档看得到），不铺给学生跟着走。
  * ④ participants 可带「拉的协作者」（本机账号的显示名，纯本地模拟）。
  */
 function createStudentActivity(data) {
@@ -2971,21 +2997,7 @@ function createStudentActivity(data) {
     saveActivities();
   }
 
-  let synced = 0;
-  localTeacherAccounts().forEach(function (t) {
-    const key = ACTIVITY_KEY + ":" + t.key;
-    try {
-      // 🔴 用 readActivityBucket 读（兼容老档双重编码）—— 手写 JSON.parse 只解一层，
-      //    会把双重编码的存档读成字符串 → 归一化成空 → 覆盖掉老师桶里原有的活动。
-      const list = readActivityBucket(key) || [];
-      if (list.some(function (x) { return x.id === r.activity.id; })) return;
-      list.push(normalizeActivities([r.activity])[0]);
-      window.localStorage.setItem(key, JSON.stringify(list));
-      synced++;
-    } catch (_) { /* 这个教师桶写不进就算了 */ }
-  });
-
-  return { ok: true, activity: r.activity, synced: synced };
+  return { ok: true, activity: r.activity };
 }
 
 /**
@@ -3017,7 +3029,8 @@ function refreshStudentTrainingNav() {
 
    ⚠️ 纯静态站没有服务端，学生的「加入」是在**本机浏览器**里完成的：查的是
       本机所有账号的课程存档（+ 预置课程），相当于"校园内网里的公开课堂目录"。
-      换浏览器 / 换机器就查不到 —— 界面上如实说明，答辩也照这个口径讲。
+      换浏览器 / 换机器就查不到 —— 但**界面上一律不提**（用户 2026-11-17 明确要求：
+      不显示数据存在哪里），别再往页面文案里加「本机浏览器 / 换台机器就没了」。
    ============================================================ */
 
 var ENROLL_KEY = "st_enroll";
@@ -3938,31 +3951,30 @@ var SYSTEM_SKILLS = [
     id: "sys-data-truth", layer: "system", always: true, kind: "read",
     role: ["teacher", "student"],
     name: "数据边界",
-    desc: "哪些数字是真的（本机记录）、哪些是预置示例、存在哪里、什么时候会丢",
-    when: "涉及「这数据哪来的」「准不准」「会不会上传」「怎么没了」时",
+    desc: "哪些数字是真的（真实记录）、哪些是预置示例",
+    when: "涉及「这数据哪来的」「准不准」时",
     keys: ["数据", "真的", "假的", "演示", "来源", "哪来的", "上传", "隐私", "准不准", "丢了", "清空"],
-    steps: [{ name: "读本机存档的实际条数", arg: "source=localStorage" }],
+    steps: [{ name: "读实际记录条数", arg: "source=真实记录" }],
     run: function (p, ctx) {
       const n = function (x) { return typeof x !== "undefined" && x ? x.length : 0; };
       const beh = (typeof BEHAVIOR !== "undefined") ? BEHAVIOR : [];
       const seedN = (typeof behaviorSeedCount === "function") ? behaviorSeedCount(beh) : 0;
       const lines = [
-        "这个应用**没有服务器**，所有数据都在你**这台浏览器**里。所以能不能信，取决于它是怎么来的：",
+        "这份数据能不能信，取决于它是怎么来的：",
         "",
-        "**能信（本机真实记录）**",
+        "**能信（真实记录）**",
         "- 课程 " + n(typeof COURSES !== "undefined" ? COURSES : []) + " 门、班级 " +
-          n(typeof CLASSES !== "undefined" ? CLASSES : []) + " 个（`st_courses` / 内置）",
-        "- 学生选课 " + n(typeof ENROLLED !== "undefined" ? ENROLLED : []) + " 条（`st_enroll`，按账号分桶）",
-        "- 学习行为 " + beh.length + " 条（`st_behavior`，来自页面上的真实动作）",
+          n(typeof CLASSES !== "undefined" ? CLASSES : []) + " 个",
+        "- 学生选课 " + n(typeof ENROLLED !== "undefined" ? ENROLLED : []) + " 条（按账号分开算）",
+        "- 学习行为 " + beh.length + " 条（来自页面上的真实动作）",
         n(typeof LESSONS !== "undefined" ? LESSONS : []) ? "- 课时教案 " + n(LESSONS) + " 份、实训活动 " +
           n(ACTIVITIES || []) + " 条" : "- 实训活动 " + n(typeof ACTIVITIES !== "undefined" ? ACTIVITIES : []) + " 条",
         "",
         "**是预置的（不是真发生的）**",
-        seedN ? "- 学习行为里有 " + seedN + " 条是预置示例记录" : "- 你这台机器上目前没有预置示例记录",
+        seedN ? "- 学习行为里有 " + seedN + " 条是预置示例记录" : "- 目前没有预置示例记录",
         "- 课表、待办、班级成绩这类没接教务系统的页面，内容也是示例",
         "",
-        "**会丢的情况**：换浏览器 / 换端口 / 换机器 → 数据不跟着走；隐私模式、或「设置 → 清空本机数据」都会清掉。",
-        "展示时请固定用同一个地址打开（例如 `http://127.0.0.1:8123/`），换端口等于换了个浏览器。",
+        "**口径**：上面的数只算当前账号在课堂里留下的记录，换一门课会分开统计。",
       ];
       return { ok: true, title: "数据边界", lines: lines };
     },
@@ -4008,7 +4020,7 @@ var SYSTEM_SKILLS = [
       const prof = fit.profile;
       const lines = [];
       if (fit.changes.length) {
-        lines.push("**这次对画像动了 " + fit.changes.length + " 处**（依据你本机 " + prof.total + " 条行为记录）：");
+        lines.push("**这次对画像动了 " + fit.changes.length + " 处**（依据你 " + prof.total + " 条行为记录）：");
         fit.changes.forEach(function (c) { lines.push("- " + c); });
       } else {
         const grew = prof.total - before;
@@ -4065,11 +4077,11 @@ var GROUP_SCENES = [
   {
     id: "grp-at-risk", layer: "group", kind: "read", role: ["teacher"],
     name: "学困生跟进",
-    desc: "从本机行为记录里找出「反复问却一直没过」的人，给他排一条补的路线",
+    desc: "从行为记录里找出「反复问却一直没过」的人，给他排一条补的路线",
     when: "用户说「补差」「谁跟不上」「个别辅导」「跟进」时",
     keys: ["补差", "学困", "落后", "跟不上", "跟进", "个别", "辅导", "谁最弱"],
     steps: [
-      { name: "读本机学生名单", arg: "source=localStudentAccounts" },
+      { name: "读学生名单", arg: "source=localStudentAccounts" },
       { name: "读各自的行为记录", arg: "source=st_behavior:student:*" },
       { name: "定位反复受阻的话题", arg: "rule=反复问且没标懂了" },
       { name: "排版补的路线", arg: "mode=path" },
@@ -4145,7 +4157,7 @@ function groupSkills(role) {
         keys: [c.label, c.id, c.label.replace(/\s/g, "")],
         steps: [
           { name: "读这个班的关联课程", arg: "course=" + c.course },
-          { name: "读本机在课学生", arg: "rule=本机账号 × 各自选课" },
+          { name: "读在课学生", arg: "rule=账号 × 各自选课" },
           { name: "汇总这个班的薄弱话题", arg: "rule=反复问且没标懂了" },
         ],
         run: function (p, ctx) {
@@ -4156,13 +4168,13 @@ function groupSkills(role) {
           const localAll = typeof localStudentAccounts === "function" ? localStudentAccounts() : [];
           const lines = [
             "**" + c.label + "**（" + c.major + " · " + c.grade + "）",
-            "- 关联课程：" + (course ? course.name + "（" + (course.code || course.id) + "）" : c.course + "（本机还没建这门课）"),
-            "- 本机在这门课里的学生：**" + inCourse.length + "** 人" +
+            "- 关联课程：" + (course ? course.name + "（" + (course.code || course.id) + "）" : c.course + "（还没建这门课）"),
+            "- 在这门课里的学生：**" + inCourse.length + "** 人" +
               (inCourse.length ? "（" + inCourse.slice(0, 5).map(function (s) { return s.name; }).join("、") +
                 (inCourse.length > 5 ? " 等" : "") + "）" : ""),
-            "- 本机学生账号合计：" + localAll.length + " 个",
+            "- 学生账号合计：" + localAll.length + " 个",
             "",
-            "⚠️ 班级的**在册名单与成绩**需要教务系统，本版没有这个来源 —— 所以上面只列「本机真能查到的」人数，不按班级编数字。",
+            "⚠️ 班级的**在册名单与成绩**需要教务系统，本版没有这个来源 —— 所以上面只列「真能查到的」人数，不按班级编数字。",
           ];
           return { ok: true, title: c.label, lines: lines };
         },
@@ -4178,7 +4190,7 @@ function groupSkills(role) {
         keys: [c.name, c.code || "", c.id],
         steps: [
           { name: "读这门课的大纲与课时教案", arg: "course=" + c.id },
-          { name: "读在课学生与他们的行为记录", arg: "rule=本机 × 选课" },
+          { name: "读在课学生与他们的行为记录", arg: "rule=选课" },
         ],
         run: function (p, ctx) {
           const inCourse = typeof enrolledStudentsOf === "function" ? enrolledStudentsOf(c.id) : [];
@@ -4188,7 +4200,7 @@ function groupSkills(role) {
             "**" + c.name + "**" + (c.term ? "（" + c.term + "）" : ""),
             "- 邀请码：`" + (typeof joinCodeOf === "function" ? joinCodeOf(c) : "—") + "`",
             "- 大纲章节：" + (chapters.length ? chapters.length + " 章（" + chapters.map(function (x) { return x.title; }).join("、") + "）" : "还没写大纲"),
-            "- 在课学生：" + inCourse.length + " 人（本机真实记录）",
+            "- 在课学生：" + inCourse.length + " 人（真实记录）",
           ];
           return { ok: true, title: c.name, lines: lines };
         },
@@ -4351,7 +4363,7 @@ var ATOMIC_SKILLS = [
     keys: ["画图", "画个图", "画一张", "图表", "柱状图", "折线图", "饼图", "饼状图", "散点", "可视化",
       "趋势", "对比一下", "占比", "分布", "统计一下", "echarts"],
     steps: [
-      { name: "定数据与口径", arg: "source=你说的话 / 本机记录" },
+      { name: "定数据与口径", arg: "source=你说的话 / 真实记录" },
       { name: "选图表类型", arg: "rule=时间→折线 · 占比→饼 · 类别对比→柱" },
       { name: "生成 option 并渲染", arg: "format=echarts option JSON" },
     ],
@@ -4359,7 +4371,7 @@ var ATOMIC_SKILLS = [
   {
     id: "atom-diagnose", layer: "atomic", kind: "read", role: ["student"],
     name: "定位薄弱",
-    desc: "从你本机的提问与批注里，找出反复卡住的话题",
+    desc: "从你的提问与批注里，找出反复卡住的话题",
     when: "用户说「我哪块最弱」「哪里不行」时",
     keys: ["最弱", "薄弱", "不行", "哪里不会", "卡住", "学不懂"],
     steps: [
@@ -4779,26 +4791,26 @@ function localChartOption(ask) {
   });
   const total = vals.reduce(function (a, b) { return a + b; }, 0);
   return {
-    ok: true, title: "本机记录有多少",
+    ok: true, title: "各类记录有多少",
     lines: total
       ? [
-        "按**这台浏览器里的真实记录**数的（不是教务系统）：" +
+        "按**你已有的真实记录**数的（不是教务系统）：" +
           names.map(function (n, i) { return n + " " + vals[i]; }).join("、") + "。",
-        "换浏览器或换端口，这些数会变成 0 —— 数据不跟着走。",
+        "这些数会随着备课与上课一起长起来。",
       ]
       : [
-        "本机这几类记录**现在都是 0** —— 图还是照实画（全 0 也是一张图），但先说清楚：**一个真实数据点都没有**，不是我藏了数据。",
+        "这几类记录**现在都是 0** —— 图还是照实画（全 0 也是一张图），但先说清楚：**一个真实数据点都没有**，不是我藏了数据。",
         "先去建一门课、写一份教案，回头再问一次，柱子就起来了。",
       ],
     chart: {
-      title: { text: "本机记录条数", left: "center", textStyle: { fontSize: 13 } },
+      title: { text: "记录条数", left: "center", textStyle: { fontSize: 13 } },
       grid: { left: 52, right: 24, top: 46, bottom: 32 },
       xAxis: { type: "category", data: names },
       yAxis: { type: "value", minInterval: 1 },
       series: [{ type: "bar", data: vals, barMaxWidth: 40, label: { show: true, position: "top" } }],
     },
     note: total
-      ? "这张图是**确定性统计**（存档里到底有几条），没经过模型 —— 所以没 Key 也能画。"
+      ? "这张图是**确定性统计**（记录里到底有几条），没经过模型 —— 所以没 Key 也能画。"
       : "全 0 的图也照实画 —— 空状态不该靠一句「暂无数据」糊过去。",
   };
 }
@@ -4987,7 +4999,7 @@ var SKILL_RUNNERS = {
         "**要画图，得先接一个模型** —— 图表的 option 是模型按你的数据写出来的，我不在这里替你编数字。",
         "",
         "不过有两件事现在就能做：",
-        "- 问「**本机有多少教案 / 实训 / 课件 / 试卷**」这类可数的问题 —— 我按本机记录直接画（不需要 Key）",
+        "- 问「**有多少教案 / 实训 / 课件 / 试卷**」这类可数的问题 —— 我按真实记录直接画（不需要 Key）",
         "- 把数据直接贴给我（例如「周一 12 人、周二 18 人」），接上模型后我照着画",
         "",
         "去「设置 → 模型接入」填一个 Key，回来再说一次就行。",
@@ -5427,9 +5439,9 @@ var SKILL_RUNNERS = {
   "grp-at-risk": function (p, ctx) {
     const local = (typeof localStudentAccounts === "function") ? localStudentAccounts() : [];
     if (!local.length) {
-      return { ok: true, title: "学困生跟进", lines: ["本机还没有学生账号 —— 学生用邀请码加入课堂后，我才能看到他们的学习记录。"] };
+      return { ok: true, title: "学困生跟进", lines: ["还没有学生账号 —— 学生用邀请码加入课堂后，我才能看到他们的学习记录。"] };
     }
-    const lines = ["本机共 " + local.length + " 个学生账号，逐个看他们的行为记录：", ""];
+    const lines = ["共 " + local.length + " 个学生账号，逐个看他们的行为记录：", ""];
     const rows = local.map(function (s) {
       const beh = (typeof behaviorOf === "function") ? behaviorOf(s.key) : [];
       const prof = behaviorProfile(beh, Date.now());
@@ -5452,13 +5464,13 @@ var SKILL_RUNNERS = {
     const c = (typeof COURSES !== "undefined" ? COURSES : []).filter(function (x) {
       return x.id === (p.courseId || ctx.courseId) ;
     })[0] || (typeof COURSES !== "undefined" ? COURSES[0] : null);
-    if (!c) return { ok: true, title: "班级日常", lines: ["本机还没有课程 —— 先在左栏「我的课程 ＋」建一门。"] };
+    if (!c) return { ok: true, title: "班级日常", lines: ["还没有课程 —— 先在左栏「我的课程 ＋」建一门。"] };
     const inCourse = (typeof enrolledStudentsOf === "function") ? enrolledStudentsOf(c.id) : [];
     const not = (typeof studentsNotInCourse === "function") ? studentsNotInCourse(c.id) : [];
     const lines = [
       "**" + c.name + "**",
       "- 邀请码：`" + ((typeof joinCodeOf === "function") ? joinCodeOf(c) : "—") + "`（学生端「我的课程 ＋」输入就能进）",
-      "- 已加入（本机真实记录）：" + inCourse.length + " 人" +
+      "- 已加入（真实记录）：" + inCourse.length + " 人" +
         (inCourse.length ? " —— " + inCourse.map(function (s) { return s.name; }).join("、") : ""),
       "- 还没加入：" + (not.length ? not.map(function (s) { return s.name; }).join("、") + "（把码发给他们）" : "没有"),
     ];
@@ -5554,7 +5566,7 @@ function runAgentStep(step, ctx) {
       return {
         ok: false,
         reason: hasPublished
-          ? "本机组好的卷子都已经发过了 —— 要再发一次，去「出题与组卷」页重新选班级"
+          ? "组好的卷子都已经发过了 —— 要再发一次，去「出题与组卷」页重新选班级"
           : "还没有组好的卷子（至少要有一道「已采纳」的题）—— 先去出题页组卷",
         goto: "exam.html",
       };
@@ -6679,7 +6691,7 @@ function personaPromptBlock() {
   try { p = (typeof MY_PERSONA !== "undefined") ? MY_PERSONA : null; } catch (_) { return ""; }
   if (!p) return "";
   return [
-    "【这个人的讲法偏好（从他自己在本机上的行为统计出来的，不是模型猜的）】",
+    "【这个人的讲法偏好（从他自己的行为记录统计出来的，不是模型猜的）】",
     "- 开口：" + p.voice,
     "- 步子：" + p.step,
     "- 常用：" + (p.formats || []).join("｜"),
@@ -7501,7 +7513,7 @@ var SEED_WORKBENCH_HW = {
     '.empty{text-align:center;color:var(--mut);font-size:13px;padding:26px;border:1px dashed var(--bd);border-radius:11px}',
     '@media(max-width:520px){.stats{grid-template-columns:repeat(2,1fr)}}',
     '</style></head><body>',
-    '<h1>作业提交跟踪</h1><div class="sub">勾一下就记下谁交了 —— 数据存在本机，刷新不丢。</div>',
+    '<h1>作业提交跟踪</h1><div class="sub">勾一下就记下谁交了 —— 随时回来都能看到。</div>',
     '<div class="stats"><div class="st"><div class="n" id="sAll">0</div><div class="l">总人数</div></div>',
     '<div class="st"><div class="n" id="sDone">0</div><div class="l">已交</div></div>',
     '<div class="st"><div class="n" id="sLeft">0</div><div class="l">未交</div></div>',
@@ -7564,6 +7576,26 @@ function seedApps() {
  * （第 38 轮起就这么坏着，一直没被发现，因为没人测过"存过之后再打开"）。
  * 一律直接用 `window.localStorage`，并自己处理编码（见 `readSimBucket`）。
  */
+/**
+ * 老师的模拟桶里是否已经**明确删掉了**预置示例。
+ * 🔴 学生端会为了「打开就有东西看」在本地补一份种子，但老师删掉示例后，
+ *    学生刷新仍然看到它 —— 看起来像「删除没生效」。桶存在且没有 wb-seed-1 时就别再补。
+ * ⚠️ 老师桶根本不存在（没在同一浏览器用过教师端）→ 返回 false，照常给种子。
+ */
+function teacherSeedRemoved() {
+  let seen = false, hasSeed = false;
+  bucketKeys(SIM_KEY, "").forEach(function (k) {
+    if (!/^st_sim:teacher:/.test(k)) return;
+    let raw = null;
+    try { raw = window.localStorage.getItem(k); } catch (_) {}
+    if (raw == null) return;
+    seen = true;
+    const list = readSimBucket(k) || [];
+    if (list.some(function (s) { return s && s.id === "wb-seed-1"; })) hasSeed = true;
+  });
+  return seen && !hasSeed;
+}
+
 function loadSims() {
   const key = simStoreKey();
   const user = (typeof currentUserKey === "function") ? currentUserKey() : "";
@@ -7572,7 +7604,12 @@ function loadSims() {
   if (saved) return saved;               // ⚠️ 空数组也算有效（删光模拟不该复活预置数据）
 
   // 预置账号给一个真能玩的模拟；自注册账号从**空的**开始
-  return (!user || isSeedAccount(user)) ? normalizeSims(seedApps()) : [];
+  if (!user || isSeedAccount(user)) {
+    // 学生端：老师的桶里已经明确没有预置示例（被删了）→ 别再补一份，否则「删除」看起来没生效
+    if (user && currentRoleOf() === "student" && teacherSeedRemoved()) return [];
+    return normalizeSims(seedApps());
+  }
+  return [];
 }
 
 function saveSims() {
@@ -7601,9 +7638,9 @@ function appsOfKind(list, kind) {
 function createSim(data) {
   var d = data || {};
   var title = String(d.title || d.goal || "").trim();
-  if (!title) return { ok: false, error: "给这个模拟起个名字（或者写清楚要模拟什么）" };
+  if (!title) return { ok: false, error: "给这个工作台起个名字（或者写清楚它要管什么）" };
   if (SIMS.length >= SIM_MAX) {
-    return { ok: false, error: "模拟器到上限了（" + SIM_MAX + " 个）。先删掉几个 —— 我不会替你丢东西。" };
+    return { ok: false, error: "工作台到上限了（" + SIM_MAX + " 个）。先删掉几个 —— 我不会替你丢东西。" };
   }
   var html = String(d.html || "");
   var v = validateSimHtml(html);
@@ -7632,7 +7669,7 @@ function createSim(data) {
 
 function updateSim(id, patch) {
   var s = simOf(id);
-  if (!s) return { ok: false, error: "找不到这个模拟" };
+  if (!s) return { ok: false, error: "找不到这个工作台" };
   if (patch && patch.title != null) {
     var t = String(patch.title).trim();
     if (!t) return { ok: false, error: "名字不能空着" };
@@ -7645,7 +7682,7 @@ function updateSim(id, patch) {
 function deleteSim(id) {
   var i = -1;
   for (var k = 0; k < SIMS.length; k++) if (SIMS[k].id === id) { i = k; break; }
-  if (i < 0) return { ok: false, error: "找不到这个模拟" };
+  if (i < 0) return { ok: false, error: "找不到这个工作台" };
   var s = SIMS[i];
   var sent = s.sentTo.length;
   SIMS.splice(i, 1);
@@ -7656,7 +7693,7 @@ function deleteSim(id) {
 /** 删之前先把影响数清楚（和删课程、删活动同一个道理） */
 function simAssetCount(id) {
   var s = simOf(id);
-  if (!s) return "这个模拟已经不在了";
+  if (!s) return "这个工作台已经不在了";
   var parts = [];
   if (s.sentTo.length) parts.push("已经发给 " + s.sentTo.length + " 位学生");
   if (s.feedback.length) parts.push("收到 " + s.feedback.length + " 条使用反馈");
@@ -7671,7 +7708,7 @@ function simAssetCount(id) {
  */
 function sendSimTo(id, whoList) {
   var s = simOf(id);
-  if (!s) return { ok: false, error: "找不到这个模拟" };
+  if (!s) return { ok: false, error: "找不到这个工作台" };
   var list = (whoList || []).map(function (w) { return String(w || "").trim(); }).filter(Boolean);
   if (!list.length) return { ok: false, error: "先选要发给谁" };
   var now = Date.now(), added = 0, updated = 0;
@@ -7805,7 +7842,7 @@ function simWriteTo(id, fn) {
     try { window.localStorage.setItem(k, JSON.stringify(list)); } catch (_) { /* 写不进去就算了，调用方如实报错 */ }
     return { ok: true };
   }
-  return { ok: false, error: "找不到这个模拟" };
+  return { ok: false, error: "找不到这个工作台" };
 }
 
 /* ============================================================

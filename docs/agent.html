@@ -331,7 +331,7 @@
           <div class="card card-raised side-card rail-body">
             <h3>我的画像</h3>
             <div class="rail-scroll">
-              <p>讲法不是猜的 —— 它统计的是<b>本机这个账号的行为记录</b>：你在本页每问一句都会记进去；
+              <p>讲法不是猜的 —— 它统计的是<b>你这个账号的行为记录</b>：你在本页每问一句都会记进去；
                 预置账号自带一段历史（界面上会标明条数）</p>
               <p class="pf-line" id="personaFit">正在读你的行为记录…</p>
               <dl class="pf-kv" id="personaBase"></dl>
@@ -422,7 +422,7 @@
 
 const SUGGESTS = [
   "你能做什么",
-  "画个图看看本机有多少教案和实训",
+  "画个图看看我有多少教案和实训",
   "把第 7 章课件发给计科 2301 班",
   "圈第 6、7 章出 8 道题",
   "帮我看谁反复卡住",
@@ -932,7 +932,7 @@ function renderPersona() {
     "<dt>常用</dt><dd>" + escHtml(p.formats.join("｜")) + "</dd>" +
     "<dt>避免</dt><dd>" + escHtml(p.avoid.join("｜")) + "</dd>" +
     "<dt>语言</dt><dd>" + escHtml(p.lang) + "</dd>" +
-    "<dt>依据</dt><dd>" + prof.total + " 条本机行为记录" + (prof.seedCount ? "（含 " + prof.seedCount + " 条预置示例）" : "") + "</dd>";
+    "<dt>依据</dt><dd>" + prof.total + " 条行为记录" + (prof.seedCount ? "（含 " + prof.seedCount + " 条预置示例）" : "") + "</dd>";
 
   $("#personaKnown").innerHTML = prof.known.length
     ? prof.known.slice(0, 6).map(function (k) { return chip(k.topic + " · " + k.got, "ok"); }).join("")
@@ -968,8 +968,8 @@ function renderChatHistory() {
   if (!list.length) return;
   const last = list.slice(-6);
   const box = el('<details class="skill-chain"><summary class="sc-head" style="cursor:pointer">' +
-    '<b>最近 ' + last.length + ' 轮对话（本机记录）</b>' +
-    '<span>点开看 · 换浏览器或换端口就没了</span></summary></details>');
+    '<b>最近 ' + last.length + ' 轮对话（历史记录）</b>' +
+    '<span>点开看 · 每次问答挂了哪些技能、哪步真跑完</span></summary></details>');
   last.forEach(function (r) {
     box.appendChild(el('<div class="lg"><div class="lg-head" style="display:block">' +
       '<div><b>' + escHtml(r.ask || "") + '</b> <span class="lg-tag">' +
@@ -988,7 +988,7 @@ function renderChatHistory() {
   if (a) a.addEventListener("click", function (e) {
     e.preventDefault();
     if (typeof clearAgentChat !== "function") return;
-    if (!window.confirm("清空本机保存的 AI 对话记录？\n\n只清这份记录 —— 课程、教案、技能开关都不动。")) return;
+    if (!window.confirm("清空 AI 对话记录？\n\n只清这份记录 —— 课程、教案、技能开关都不动。")) return;
     clearAgentChat();
     box.remove();
     flash("对话记录已清空", "ok");
@@ -1297,9 +1297,9 @@ function renderSkillTree() {
     "<p>涉及发布、删除的动作，我一定先停下来问一次。</p>" +
     "<p><b>左边的技能库是我现在挂着的技能</b>：可以逐条勾选或关掉，也可以新建分组把常用的收在一起 —— " +
     "改动立刻生效，下次对话就按新的来。</p>" +
-    "<p>想看图就直接说「<b>画个图</b>」—— 我用 ECharts 在这里画出来。能自己数的（本机有多少教案、实训、课件）" +
+    "<p>想看图就直接说「<b>画个图</b>」—— 我用 ECharts 在这里画出来。能自己数的（你有多少教案、实训、课件）" +
     "我直接数，不麻烦模型；要成图的趋势/占比才交给模型写。</p>" +
-    "<p>每次问答都会在本机留一条记录（挂了哪些技能、哪步真跑完），出问题查得到；跑着的时候右边那个 ↑ 会变成 ■，点一下就停。</p>");
+    "<p>每次问答都会留一条记录（挂了哪些技能、哪步真跑完），出问题查得到；跑着的时候右边那个 ↑ 会变成 ■，点一下就停。</p>");
 
   const task = readHandoff();
   if (task) renderTaskBar(task);

@@ -80,7 +80,7 @@
     <div class="page-head">
       <div class="crumb" id="crumbText">课程成员</div>
       <h1 id="pageTitle">课程成员</h1>
-      <p id="pageSub">谁加入了这门课 —— 全部来自本机的真实记录</p>
+      <p id="pageSub">谁加入了这门课 —— 全部来自真实的选课记录</p>
     </div>
 
     <div class="stat-grid">
@@ -89,7 +89,7 @@
         <div class="v"><span id="stIn">—</span><small> 人</small></div>
       </div>
       <div class="stat-card">
-        <div class="k">本机学生账号</div>
+        <div class="k">学生账号</div>
         <div class="v"><span id="stTotal">—</span><small> 个</small></div>
       </div>
       <div class="stat-card">
@@ -110,7 +110,7 @@
 
       <div class="table-wrap">
         <table class="data">
-          <caption class="sr-only">本机已加入这门课的学生名单</caption>
+          <caption class="sr-only">已加入这门课的学生名单</caption>
           <thead>
             <tr>
               <th scope="col">学生</th>
@@ -233,19 +233,19 @@ function renderHead() {
     crumb.textContent = PICK_CLASS.label + " · " + PICK_CLASS.major + " · " + PICK_CLASS.grade;
     title.textContent = "课程成员";
     sub.textContent = COURSE
-      ? "这个班关联「" + COURSE.name + "」—— 下面列的是真实加入了这门课的本机学生"
-      : "这个班关联的课程在本机不存在（可能还没建课）—— 先去「我的课程」把课建起来";
+      ? "这个班关联「" + COURSE.name + "」—— 下面列的是真实加入了这门课的学生"
+      : "这个班关联的课程还不存在（可能还没建课）—— 先去「我的课程」把课建起来";
     return;
   }
   if (COURSE) {
     crumb.textContent = COURSE.name + (COURSE.code ? " · " + COURSE.code : "") +
       (COURSE.term ? " · " + COURSE.term : "");
     title.textContent = "课程成员";
-    sub.textContent = "谁加入了这门课 —— 数据来自本机的学生账号与他们的选课记录";
+    sub.textContent = "谁加入了这门课 —— 数据来自学生账号与他们的选课记录";
   } else {
     crumb.textContent = "还没有课程";
     title.textContent = "课程成员";
-    sub.textContent = "本机还没有任何课程 —— 先去左侧「我的课程 ＋」建一门课";
+    sub.textContent = "还没有任何课程 —— 先去左侧「我的课程 ＋」建一门课";
   }
 }
 
@@ -274,14 +274,14 @@ function renderRoster(students) {
 
   count.textContent = "共 " + students.length + " 人";
   note.textContent =
-    "本页只列本机能查到的真实记录：本机注册过的学生账号 × 他们自己的选课记录。" +
+    "本页只列真能查到的记录：已注册的学生账号 × 他们自己的选课记录。" +
     "「近期活跃」读的是该学生自己的行为日志（与他自己打开「我的学情」看到的是同一份）；" +
     "点姓名能看他在「我的学情」里看到的内容。" +
     "成绩 / 掌握度 / 作业提交率需要服务端与多用户数据，本版没有真实来源，因此不显示。";
 
   if (!students.length) {
     rows.innerHTML = `<tr><td colspan="6" class="muted-note">` +
-      "本机还没有学生加入这门课 —— 把下面的邀请码发给同学，" +
+      "还没有学生加入这门课 —— 把下面的邀请码发给同学，" +
       "他们在学生端「我的课程 ＋」里输入就能进来。</td></tr>";
     return;
   }
@@ -319,15 +319,15 @@ function renderInvite(all, missing) {
   const box = $("#missingBox");
   if (!all.length) {
     box.innerHTML = `<p class="muted-note">` +
-      "本机还没有学生账号。用学生身份在登录页注册一个、再输入上面的邀请码，" +
+      "还没有学生账号。用学生身份在登录页注册一个、再输入上面的邀请码，" +
       "这里就会出现他的加入记录。</p>";
     return;
   }
   if (!missing.length) {
-    box.innerHTML = `<p class="muted-note">本机的 ` + all.length + " 个学生账号都在这门课里了。</p>";
+    box.innerHTML = `<p class="muted-note">` + all.length + " 个学生账号都在这门课里了。</p>";
     return;
   }
-  box.innerHTML = `<h4 style="margin:14px 0 0;font-size:13px;font-weight:500">还没进来（本机还有 ` +
+  box.innerHTML = `<h4 style="margin:14px 0 0;font-size:13px;font-weight:500">还没进来（还有 ` +
     missing.length + " 个学生账号）</h4><ul class=\"miss-list\">" +
     missing.map((s) => `<li><span class="who">${escHtml(s.name)}</span>` +
       `<span class="acct">${escHtml(s.user)}</span></li>`).join("") + `</ul>
@@ -348,7 +348,7 @@ function renderClassCard() {
     "<div><b>" + escHtml(PICK_CLASS.course || "—") + "</b><span>关联课程</span></div>";
   $("#classNote").textContent =
     "班级在册名单与在册人数需要教务系统 —— 本版没有这个来源，所以不列、也不编。" +
-    "上方「在课学生」是真实的：本机学生账号里，谁加入了这门课谁就会出现。";
+    "上方「在课学生」是真实的：学生账号里，谁加入了这门课谁就会出现。";
 }
 
 /**
@@ -531,12 +531,12 @@ function openStudent(user) {
         ${block || `<div class="stu-section">
           <h4>他在「我的学情」里看到的 <span>本课记录 · 同一份数据</span></h4>
           <div class="stu-empty">
-            这个学生在本机还没有任何学习行为记录 —— 他每问一句、每写一条批注，
+            这个学生还没有任何学习行为记录 —— 他每问一句、每写一条批注，
             这里就会跟着出现。现在空着就是空着，不拿示例数据填。
           </div>
         </div>`}
         <p class="field-hint" style="margin-top:14px">
-          上面每一块都来自本机的真实记录：选课用邀请码加入，行为日志由学生自己的
+          上面每一块都来自真实记录：选课用邀请码加入，行为日志由学生自己的
           答疑页 / 课件页写入。他在自己那边的「我的学情」看到的是<b>同一份数据</b>。
           成绩 / 掌握度 / 作业提交率需要服务端与多用户数据，本版没有真实来源，因此不显示。
         </p>
