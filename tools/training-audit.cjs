@@ -155,6 +155,29 @@ let createdId = "";
   stAct === 0 ? P("A3 草案对学生不可见（未发布不进学生列表）") : F("A3 草案漏给学生了");
 }
 
+/* ---- A3b 空目标点创建：当场说清，不许「点了没反应」 ---- */
+{
+  click(w, d.getElementById("btnNewAct"));
+  await settle(dom);
+  const host3 = d.getElementById("modalHost");
+  const g3 = d.getElementById("mkGoal");
+  g3.value = "";
+  click(w, d.getElementById("mkCreate"));
+  await settle(dom);
+  const err3 = d.getElementById("mkErr");
+  !!err3 && !err3.hidden ? P("A3b 没写目标就创建 → 当场报错") : F("A3b 空目标没提示（看着像按钮坏了）");
+  host3 && !host3.hidden ? P("A3b 报错后弹窗不关（还能接着写）") : F("A3b 报错把弹窗关了");
+  g3.classList.contains("input-err") ? P("A3b 输入框标红") : F("A3b 输入框没标红");
+  const wrap3 = g3.closest(".field");
+  !!wrap3 && wrap3.contains(err3) ? P("A3b 提示贴着输入框（不会被预览块挤到看不见）") : F("A3b 提示在弹窗最底部");
+  g3.value = "随便写一句";
+  input(w, g3);
+  await settle(dom);
+  err3.hidden ? P("A3b 一输入提示就消失") : F("A3b 提示不消失");
+  click(w, d.querySelector('#modalHost [data-close]'));
+  await settle(dom);
+}
+
 /* ---- A4 基本信息编辑 ---- */
 {
   const t = d.getElementById("actTitle");
@@ -539,6 +562,30 @@ w.confirm = () => true;
   const mineChip = [...d.querySelectorAll("#stFilters .chip")].find((c) => /我发起的/.test(c.textContent));
   /2/.test(mineChip.textContent)
     ? P("B10「我发起的」筛选计数跟着涨（预置 1 + 新建 1）") : F("B10 筛选计数没更新: " + mineChip.textContent);
+}
+
+/* ---- B10b 空目标发起：当场说清，不许「点了没反应」 ---- */
+{
+  click(w, d.getElementById("btnNewAct"));
+  await settle(dom);
+  const host2 = d.getElementById("modalHost");
+  const g2 = d.getElementById("mkGoal");
+  g2.value = "";
+  click(w, d.getElementById("mkCreate"));
+  await settle(dom);
+  const err = d.getElementById("mkErr");
+  !!err && !err.hidden ? P("B10b 没写目标就发起 → 当场报错") : F("B10b 空目标没提示（按钮看着像死的）");
+  /写一句/.test(err ? err.textContent : "") ? P("B10b 提示说清该做什么") : F("B10b 提示文案不清楚: " + (err ? err.textContent : ""));
+  host2 && !host2.hidden ? P("B10b 报错后弹窗不关（还能接着写）") : F("B10b 报错把弹窗关了");
+  g2.classList.contains("input-err") ? P("B10b 输入框也标红（视线在按钮上也看得见）") : F("B10b 输入框没标红");
+  const wrap = g2.closest(".field");
+  !!wrap && wrap.contains(err) ? P("B10b 提示贴着输入框（窗口矮也不会滚出视野）") : F("B10b 提示放在弹窗底部，容易被漏看");
+  g2.value = "补一句目标";
+  input(w, g2);
+  await settle(dom);
+  err.hidden ? P("B10b 一开始输入错误提示就消失") : F("B10b 提示不消失");
+  click(w, d.querySelector('#modalHost [data-close]'));
+  await settle(dom);
 }
 
 /* ---- B11 学生端侧栏徽标（进行中数） ---- */

@@ -5223,10 +5223,12 @@ console.log("\n=== 4y. 课件「AI 重讲」：接了模型就现场重讲（真
   dom.window.close();
 }
 
-console.log("\n=== 4z. AI 指令条（长按 Alt）：真的会做，没接模型不乱说 ===");
-/* 这一段之前完全没有覆盖 —— Alt 那条链路断了，前六步照样全绿。
-   验四件事：① 长按能开、轻点不开 ② 改设置先出 diff、取消真不生效
-             ③ 应用 → 落库 → 撤销回原样 ④ 没接模型时不假装问过模型 */
+console.log("\n=== 4z. AI 指令条（长按 Alt）：说话必过模型，没接模型不假装 ===");
+/* 这条链路以前在 tools/ 里一条断言都没有 —— 断了也全绿。
+   验：① 轻点不误触、长按才开 ② 没接模型时打字如实拒绝、点命令仍可执行
+       ③ 接了模型后**每句话都先发请求**（本地正则不再抢答）
+       ④ 模型给的参数被采纳、非法参数与未知动作被拒、跨端页面被拒
+       ⑤ diff → 取消不生效 → 应用落库 → 撤销 ⑥ Esc / 壳消息 */
 {
   const dom = load("homework.html", {
     role: "student",
@@ -5245,7 +5247,6 @@ console.log("\n=== 4z. AI 指令条（长按 Alt）：真的会做，没接模�
   if (typeof w.deckOpen !== "function") {
     F("页面里没有 deckOpen —— 指令条没加载");
   } else {
-    // ① 轻点（<550ms）不开；长按才开
     await hold(120);
     d.getElementById("deckHost") ? F("只按一下就弹出来了（应该是长按）") : P("轻点 Alt 不会误触（要按住 550ms）");
 
@@ -5255,65 +5256,154 @@ console.log("\n=== 4z. AI 指令条（长按 Alt）：真的会做，没接模�
 
     if (host) {
       const say = () => (d.getElementById("deckStatus") || {}).textContent || "";
-      /未接模型/.test((d.getElementById("deckModel") || {}).textContent || "")
-        ? P("底栏如实写「未接模型 · 只按本地规则匹配」") : F("底栏没交代模型状态");
-
       const submit = async (text) => {
         d.getElementById("deckInput").value = text;
         d.getElementById("deckForm").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
         await new Promise((r) => setTimeout(r, 80));
       };
+      const pick = async (id) => {
+        const b = d.querySelector('#deckHelp .deck-sample[data-act="' + id + '"]');
+        if (!b) { F("示例里找不到动作 " + id); return false; }
+        b.click();
+        await new Promise((r) => setTimeout(r, 80));
+        return true;
+      };
 
-      // ② 写操作：先出 diff，取消＝什么都没改
+      /未接模型/.test((d.getElementById("deckModel") || {}).textContent || "")
+        ? P("底栏如实写「未接模型」") : F("底栏没交代模型状态");
+
+      /* ---------- ① 没接模型：打字必须被拒，且一个请求都不发 ---------- */
+      let fetched = 0;
+      w.fetch = () => { fetched++; return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }); };
       await submit("把字放大一点");
+      /没有接入模型/.test(say())
+        ? P("没接模型时打字被如实拒绝（不偷偷本地执行）") : F("没接模型时说了什么: " + say());
+      !/正在问模型/.test(say()) ? P("没接模型不会假装「正在问模型」") : F("没接模型却报「正在问模型」");
+      fetched === 0 ? P("没接模型一个请求都没发") : F("没接模型却发了 " + fetched + " 个请求");
+      a11y().size === undefined ? P("拒绝时没有偷偷改存档") : F("被拒绝却改了设置");
+      d.querySelectorAll("#deckHelp .deck-sample").length >= 4
+        ? P("拒绝后展开「点一条直接执行」的命令清单") : F("拒绝后没给出可点的命令");
+
+      /* ---------- ② 点命令（等于点菜单）：本地直接执行，写操作仍先出 diff ---------- */
+      await pick("a11y.font");
       const review = d.getElementById("deckReview");
       const diffText = review ? review.textContent : "";
       !review.hidden && /正文字号/.test(diffText) && /15px/.test(diffText) && /17px/.test(diffText)
-        ? P("「把字放大一点」先列出「项目 / 现在 / 将改为」三列") : F("改动预览不对: " + diffText.slice(0, 80));
-      a11y().size === undefined
-        ? P("出 diff 的时候还没落库（确认前什么都没变）") : F("还没确认就改了存档: " + a11y().size);
+        ? P("点「把字放大一点」先列出「项目 / 现在 / 将改为」三列") : F("改动预览不对: " + diffText.slice(0, 90));
+      a11y().size === undefined ? P("出 diff 时还没落库") : F("还没确认就改了存档: " + a11y().size);
 
       d.getElementById("deckCancel").click();
       await new Promise((r) => setTimeout(r, 60));
       a11y().size === undefined && review.hidden === true
         ? P("点「取消」之后设置原样没变") : F("取消之后设置被改了 / 预览没收起");
 
-      // ③ 应用 → 落库 → 撤销
-      await submit("把字放大一点");
+      await pick("a11y.font");
       d.getElementById("deckApply").click();
       await new Promise((r) => setTimeout(r, 80));
-      a11y().size === 17
-        ? P("点「应用变更」才真的写进存档（15 → 17）") : F("应用后存档不对: " + JSON.stringify(a11y()));
+      a11y().size === 17 ? P("点「应用变更」才真的写进存档（15 → 17）") : F("应用后存档不对: " + JSON.stringify(a11y()));
       const undoBar = d.getElementById("deckUndoBar");
       undoBar && !undoBar.hidden ? P("应用后出现「撤销这次改动」") : F("没有撤销入口");
 
       d.getElementById("deckUndoBtn").click();
       await new Promise((r) => setTimeout(r, 80));
-      a11y().size === undefined
-        ? P("撤销把设置恢复到应用之前") : F("撤销没生效: " + JSON.stringify(a11y()));
+      a11y().size === undefined ? P("撤销把设置恢复到应用之前") : F("撤销没生效: " + JSON.stringify(a11y()));
 
-      // ④ 没接模型：不假装「在问模型」，如实说 + 展开能做的事
-      let fetched = 0;
-      w.fetch = () => { fetched++; return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }); };
-      await submit("帮我写一份三千字的课程论文");
-      /没有接入模型/.test(say())
-        ? P("接不了的说法如实说「没有接入模型」，不编动作") : F("没接模型时说了什么: " + say());
-      !/正在问模型/.test(say())
-        ? P("没接模型时不会假装「正在问模型」") : F("没接模型却报「正在问模型」");
-      fetched === 0
-        ? P("没接模型时一个请求都没发") : F("没接模型却发了 " + fetched + " 个请求");
-      d.getElementById("deckReview").hidden === true
-        ? P("没听懂时不乱执行动作") : F("没听懂却弹出了改动预览");
+      /* ---------- ③ 接上模型：每句话都先发请求，本地正则不再抢答 ---------- */
+      w.localStorage.setItem("st_provider", "custom");
+      w.localStorage.setItem("st_custom_endpoint", "https://llm.example.com/v1");
+      w.localStorage.setItem("st_custom_model", "deck-model");
+      await new Promise((r) => setTimeout(r, 60));
+      w.llmReady && w.llmReady() ? P("改成自定义接口后，指令条认出「模型已接」") : F("指令条没认出刚配的模型");
 
-      // ⑤ Esc 收起
+      let seen = [];
+      let reply = '{"id":"a11y.font","args":{"size":22}}';
+      let release = null;
+      // 第一次故意「卡住」不返回：验请求挂起期间按钮与输入框的状态
+      w.fetch = (url, opt) => {
+        seen.push({ url: String(url), body: String((opt && opt.body) || "") });
+        return new Promise((res) => {
+          release = () => res({ ok: true, json: () => Promise.resolve({ choices: [{ message: { content: reply } }] }) });
+        });
+      };
+
+      // 「把字放大一点」本来能被本地正则命中 —— 接了模型就必须先发请求
+      await submit("把字放大一点");
+      for (let i = 0; i < 80 && !seen.length; i++) await new Promise((r) => setTimeout(r, 20));
+      seen.length === 1
+        ? P("接了模型后，本地能命中的话也先交给模型（不再抢答）") : F("接了模型却没发请求（本地抢先执行了）");
+      /解析中/.test(d.getElementById("deckGo").textContent) && d.getElementById("deckInput").disabled
+        ? P("等模型期间按钮变「解析中…」、输入框锁住（不会连发两条）") : F("等模型时没有忙碌态");
+      release && release();
+      await new Promise((r) => setTimeout(r, 120));
+      /执行/.test(d.getElementById("deckGo").textContent) && !d.getElementById("deckInput").disabled
+        ? P("模型回来后按钮与输入框复位") : F("模型回来后忙碌态没复位");
+
+      // 后面的用例改成「立刻返回」，免得每个请求都等 release
+      w.fetch = (url, opt) => {
+        seen.push({ url: String(url), body: String((opt && opt.body) || "") });
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ choices: [{ message: { content: reply } }] }) });
+      };
+      seen[0] && seen[0].url === "https://llm.example.com/v1/chat/completions"
+        ? P("请求打到当前配置的接口") : F("请求地址不对: " + (seen[0] && seen[0].url));
+      seen[0] && /a11y\.font/.test(seen[0].body) && /可选动作/.test(seen[0].body)
+        ? P("请求体里带上了白名单动作清单") : F("请求体里没有动作清单");
+
+      await new Promise((r) => setTimeout(r, 120));
+      const rv2 = d.getElementById("deckReview");
+      /22px/.test(rv2 ? rv2.textContent : "")
+        ? P("模型给的参数被采纳（字号 15 → 22，而不是本地 +2）") : F("模型参数没生效: " + (rv2 ? rv2.textContent.slice(0, 80) : ""));
+      d.getElementById("deckCancel") && d.getElementById("deckCancel").click();
+      await new Promise((r) => setTimeout(r, 60));
+
+      // 模型编了个不存在的动作 → 拒
+      reply = '{"id":"run.shell","args":{"cmd":"rm -rf /"}}';
+      await submit("把系统清一下");
+      for (let i = 0; i < 80 && !/白名单/.test(say()); i++) await new Promise((r) => setTimeout(r, 20));
+      /白名单/.test(say()) ? P("模型编出来的动作被拒（不在白名单）") : F("未知动作没被拒: " + say());
+      a11y().size === undefined ? P("被拒的动作没有执行") : F("未知动作竟然执行了");
+
+      // 参数越界 → 拒，不拿 fallback 偷偷改
+      reply = '{"id":"a11y.font","args":{"size":999}}';
+      await submit("把字放大到九百九十九");
+      for (let i = 0; i < 80 && !/参数不合法/.test(say()); i++) await new Promise((r) => setTimeout(r, 20));
+      /参数不合法/.test(say()) ? P("超出范围的参数被拒（不会悄悄夹到 24 就执行）") : F("越界参数没被拒: " + say());
+      !d.getElementById("deckReview") || d.getElementById("deckReview").hidden
+        ? P("参数不合法时不出改动预览") : F("参数不合法却弹了预览");
+
+      // 学生端要被导到教师页 → 拒
+      reply = '{"id":"nav.page","args":{"page":"exam.html"}}';
+      await submit("打开出题页");
+      for (let i = 0; i < 80 && !/打不开|参数不合法/.test(say()); i++) await new Promise((r) => setTimeout(r, 20));
+      /打不开|参数不合法/.test(say())
+        ? P("学生端不会被指令条带去教师页（越权被拦）") : F("越权导航没被拦: " + say());
+
+      // 接口报错 → 如实报错，不执行
+      reply = "";
+      w.fetch = () => Promise.resolve({ ok: false, status: 401, text: () => Promise.resolve("bad key") });
+      await submit("把字放大一点");
+      for (let i = 0; i < 80 && !/模型没答上来|401/.test(say()); i++) await new Promise((r) => setTimeout(r, 20));
+      /模型没答上来/.test(say()) && /401|Key/.test(say())
+        ? P("接口报错时如实转述原因（不说成「没听懂」）") : F("接口报错说成了什么: " + say());
+
+      // 模型说做不了 → 明说，不乱动
+      w.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ choices: [{ message: { content: '{"id":"none"}' } }] }) });
+      await submit("帮我订一份午饭");
+      for (let i = 0; i < 80 && !/它做不了|换个说法/.test(say()); i++) await new Promise((r) => setTimeout(r, 20));
+      /做不了|换个说法/.test(say()) ? P("模型说做不到时如实转述，不编动作") : F("模型说做不到时说了什么: " + say());
+
+      /* ---------- ④ Esc：先撤预览，再关面板 ---------- */
       d.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
       await new Promise((r) => setTimeout(r, 60));
-      !d.getElementById("deckHost")
-        ? P("Esc 能收起指令条") : F("Esc 收不起来");
+      if (d.getElementById("deckHost")) {
+        // 有没关掉的改动预览时，第一次 Esc 只撤预览（设计如此），第二次才关面板
+        d.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        await new Promise((r) => setTimeout(r, 60));
+      }
+      !d.getElementById("deckHost") ? P("Esc 能收起指令条（有预览时先撤预览）") : F("Esc 收不起来");
     }
   }
 
-  // ⑥ 壳发消息（顶栏「指令」/ 壳内长按）→ 内容页打开同一份
+  // 壳发消息（顶栏「指令」/ 壳内长按）→ 内容页打开同一份
   w.postMessage({ type: "st-open-deck" }, "*");
   await new Promise((r) => setTimeout(r, 80));
   d.getElementById("deckHost")

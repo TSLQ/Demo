@@ -146,6 +146,11 @@
 
   /* ---------- 发起弹窗 ---------- */
   .mk-hint { font-size: 12.5px; line-height: 1.75; color: var(--muted-foreground); }
+  /* 校验没过时把输入框也标出来（光有文字提示，视线在按钮上时容易漏看） */
+  .textarea.input-err {
+    border-color: var(--destructive);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--destructive) 16%, transparent);
+  }
   .pick-list { display: flex; flex-direction: column; gap: 5px; max-height: 160px; overflow-y: auto; }
   .pick-list label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; cursor: pointer; }
   .pick-list input { margin: 0; }
@@ -674,6 +679,9 @@
           '<div class="field">' +
             '<label for="mkGoal">一句话目标 <span class="req">*</span></label>' +
             '<textarea class="textarea" id="mkGoal" rows="3" placeholder="例：既然有快排了，为什么还要学冒泡、归并？"></textarea>' +
+            /* 错误提示**贴着输入框**放：放弹窗底部的话，窗口一矮就被挤到滚动区外，
+               用户只会觉得「点了没反应」 */
+            '<p class="login-error" id="mkErr" role="alert" hidden></p>' +
           "</div>" +
           '<div class="field">' +
             '<label for="mkCourse">关联课程</label>' +
@@ -689,7 +697,6 @@
             : "") +
           '<p class="mk-hint" style="margin:0">发起后就能直接参与：把猜想记成灵感、把想通的事记成推导，' +
             "卡住了就让 AI 帮你验一个猜想。走哪条路、按什么顺序，由你决定 —— 这里没有要跟着走的步骤。</p>" +
-          '<p class="login-error" id="mkErr" role="alert" hidden></p>' +
         "</div>" +
         '<div class="modal-foot">' +
           '<button class="btn" type="button" data-close="1">取消</button>' +
@@ -704,40 +711,78 @@
 
     setTimeout(function () { var g = $("mkGoal"); if (g && g.focus) g.focus(); }, 0);
 
-    $("mkCreate").addEventListener("click", function () {
-      var goal = ($("mkGoal").value || "").trim();
-      var err = $("mkErr");
-
-      var picked = [];
-      var names = [];
-      var checked = host.querySelectorAll(".pick-list input:checked");
-      Array.prototype.forEach.call(checked, function (c) {
-        var key = c.value;
-        picked.push(key);
-        names.push((typeof accountDisplayName === "function") ? accountDisplayName(key) : key.split(":")[1]);
-      });
-
-      var r = createStudentActivity({
-        goal: goal,
-        courseId: $("mkCourse").value,
-        participants: names.filter(function (n, i) { return n && names.indexOf(n) === i; }),
-      });
-      if (!r.ok) {
-        err.textContent = r.error;
-        err.hidden = false;
-        var g2 = $("mkGoal"); if (g2 && g2.focus) g2.focus();
-        return;
+    /* 错误一律**当场说出来**（贴着输入框 + 红框 + 滚进视野），
+       不允许出现「点了没反应」的死按钮。 */
+    function showErr(msg) {
+      var err = $("mkErr"), goal = $("mkGoal");
+      if (err) { err.textContent = msg; err.hidden = false; }
+      if (goal) {
+        goal.classList.add("input-err");
+        if (goal.focus) goal.focus();
       }
-      err.hidden = true;
-      closeNewAct();
-      VIEW.filter = "mine";
-      VIEW.currentId = r.activity.id;
-      renderAll();
-      flash("已发起，现在就能参与", "ok");
+      try { if (err && err.scrollIntoView) err.scrollIntoView({ block: "nearest" }); } catch (_) {}
+    }
+    function clearErr() {
+      var err = $("mkErr"), goal = $("mkGoal");
+      if (err) { err.hidden = true; err.textContent = ""; }
+      if (goal) goal.classList.remove("input-err");
+    }
+
+    var goalBox = $("mkGoal");
+    if (goalBox) {
+      goalBox.addEventListener("input", clearErr);
+      goalBox.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("mkCreate").click();
+      });
+    }
+
+    $("mkCreate").addEventListener("click", function () {
+      try {
+        var goal = ($("mkGoal").value || "").trim();
+        if (!goal) {
+          showErr("先写一句你想探究的目标 —— 比如「既然有快排了，为什么还要学冒泡和归并」");
+          return;
+        }
+
+        var picked = [];
+        var names = [];
+        var checked = host.querySelectorAll(".pick-list input:checked");
+        Array.prototype.forEach.call(checked, function (c) {
+          var key = c.value;
+          picked.push(key);
+          names.push((typeof accountDisplayName === "function") ? accountDisplayName(key) : key.split(":")[1]);
+        });
+
+        var r = createStudentActivity({
+          goal: goal,
+          courseId: $("mkCourse").value,
+          participants: names.filter(function (n, i) { return n && names.indexOf(n) === i; }),
+        });
+        if (!r.ok) { showErr(r.error); return; }
+
+        clearErr();
+        closeNewAct();
+        VIEW.filter = "mine";
+        VIEW.currentId = r.activity.id;
+        renderAll();
+        flash("已发起，现在就能参与", "ok");
+      } catch (e) {
+        // 🔴 绝不静默：异常也要让人看见（否则按钮看着就是死的）
+        showErr("发起时出了点问题：" + ((e && e.message) || "未知错误") + "。刷新页面再试一次。");
+        if (window.console && console.error) console.error(e);
+      }
     });
   }
 
-  $("btnNewAct").addEventListener("click", openNewAct);
+  /* 打不开弹窗也要说清原因，别让按钮变成哑巴 */
+  $("btnNewAct").addEventListener("click", function () {
+    try {
+      openNewAct();
+    } catch (e) {
+      flash("「发起实训」打不开：" + ((e && e.message) || "未知错误"), "bad");
+      if (window.console && console.error) console.error(e);
+    }
+  });
 
   /* ---------------- 讨论区（群聊） ---------------- */
   function chatHtml(a) {

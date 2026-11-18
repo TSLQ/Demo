@@ -2231,7 +2231,7 @@ function deckHTML() {
         '<h2 id="deckTitle">说一句，我来做</h2>' +
         '<button class="deck-x" type="button" data-deck="close" aria-label="关闭指令条">✕</button>' +
       '</div>' +
-      '<p class="deck-desc" id="deckDesc">说「把字放大一点」「去我的作业」「朗读这一页」。会改设置的动作，先把改动列出来给你确认，确认前什么都没变。</p>' +
+      '<p class="deck-desc" id="deckDesc">说一句就行：先交给模型解析成具体动作，再在本地执行。会改设置的动作，先把「现在 → 将改为」列出来给你确认，确认前什么都没变。</p>' +
       '<form class="deck-form" id="deckForm">' +
         '<label class="sr-only" for="deckInput">输入或说出你要做的事</label>' +
         '<input class="deck-input" id="deckInput" type="text" autocomplete="off" ' +
@@ -2268,11 +2268,16 @@ function deckOpen() {
   document.body.classList.add("modal-open");
 
   deckBind(host);
-  deckRenderHelp(false);
   deckRenderModel();
+  deckRenderHelp(false);
   deckFocusInput();
-  deckSay("可以说了。想不起来就输入「你能做什么」。");
-  announce("AI 指令条已打开，输入或说出你要做的事。");
+  const ready = deckModelReady();
+  deckSay(ready
+    ? "可以说了。想不起来就输入「你能做什么」。"
+    : "还没有接入模型：打字不会被解析，只能点下面列出的命令。接上模型就能说人话了（设置 → 模型接入）。");
+  announce(ready
+    ? "AI 指令条已打开，输入或说出你要做的事。"
+    : "AI 指令条已打开，但还没有接入模型，只能点列表里的命令。");
 }
 
 let deckReturnTo = null;
@@ -2280,6 +2285,9 @@ let deckReturnTo = null;
 function deckClose(restore) {
   const host = deckHostEl();
   if (!host) return;
+  // 关掉面板 = 不再需要这次解析结果：把还在跑的请求一起中止，别让它回来改界面
+  if (deckAbort) { try { deckAbort.abort(); } catch (_) {} deckAbort = null; }
+  deckBusy = false;
   deckVoiceStop();
   host.remove();
   document.body.classList.remove("modal-open");
@@ -2317,6 +2325,19 @@ function deckBind(host) {
         input.value = b.getAttribute("data-text") || "";
         input.focus();
       }
+      return;
+    }
+    /* 点示例 = 明确挑了一条命令（等于点菜单，不是「让 AI 猜」）：
+       直接执行，不必再绕一次模型 —— 否则没接模型时会出现
+       「点了示例 → 填进输入框 → 执行 → 又被拒」的死循环。 */
+    if (act === "pick") {
+      e.preventDefault();
+      const hit = deckFindAction(b.getAttribute("data-act"));
+      if (!hit) return;
+      const args = deckArgsFor(hit, null, b.getAttribute("data-text") || "");
+      if (!args) { deckSay("这条现在执行不了 —— 直接在输入框里说你想改什么。"); return; }
+      if (deckBusy) { deckSay("上一条还在解析，等它出来再点。"); return; }
+      deckRun(hit, args);
       return;
     }
   });
@@ -2373,13 +2394,13 @@ function deckRenderModel() {
 
 function deckModelText() {
   try {
-    if (typeof llmReady !== "function") return "未接模型 · 只按本地规则匹配";
-    if (!llmReady()) return "未接模型 · 只按本地规则匹配（设置 → 模型接入）";
+    if (typeof llmReady !== "function") return "未接模型 · 只能点下面的命令";
+    if (!llmReady()) return "未接模型 · 只能点下面的命令（设置 → 模型接入）";
     const c = llmConfig();
     const label = (c && c.cfg && (c.cfg.label || c.cfg.model)) || (c && c.provider) || "";
-    return "模型：" + label;
+    return "模型：" + label + " · 每句话先交给它解析";
   } catch (_) {
-    return "未接模型 · 只按本地规则匹配";
+    return "未接模型 · 只能点下面的命令";
   }
 }
 
@@ -2387,70 +2408,100 @@ function deckModelText() {
 function deckRenderHelp(expanded) {
   const box = document.getElementById("deckHelp");
   if (!box) return;
+  const noModel = !deckModelReady();
   const all = deckAllActions().filter(function (a) { return a.sample; });
   const list = expanded ? all : all.slice(0, 4);
+  const head = noModel
+    ? "没有接入模型 —— 下面这些命令可以直接点着执行（不经过模型）"
+    : (expanded ? "现在能做的事（点一条直接执行）" : "也可以直接点一条（不用打字）");
   box.hidden = false;
   box.innerHTML =
-    '<p class="deck-help-t">' + (expanded ? "现在能做的事" : "试试这些（点一下填进输入框）") + "</p>" +
+    '<p class="deck-help-t">' + head + "</p>" +
     '<ul class="deck-samples">' +
       list.map(function (a) {
-        return '<li><button class="deck-sample" type="button" data-deck="fill" data-text="' +
-          deckAttr(a.sample) + '">' + deckEsc(a.sample) + "</button>" +
+        return '<li><button class="deck-sample" type="button" data-deck="pick" data-act="' +
+          deckAttr(a.id) + '" data-text="' + deckAttr(a.sample) + '">' +
+          deckEsc(a.sample) + "</button>" +
           '<span class="deck-sample-lb">' + deckEsc(a.label) +
           (a.risk === "write" ? " · 会先给你看改动" : "") + "</span></li>";
       }).join("") +
     "</ul>";
 }
 
-/* ---------------- 解析与执行 ---------------- */
-function deckParse(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return null;
-  const list = deckAllActions();
-  for (let i = 0; i < list.length; i++) {
-    const a = list[i];
-    if (!a.match) continue;
-    let args = null;
-    try { args = a.match(raw); } catch (_) { args = null; }
-    if (args) return { action: a, args: args };
-  }
-  return null;
-}
-
 function deckModelReady() {
   try { return (typeof llmReady === "function") && llmReady(); } catch (_) { return false; }
 }
 
+let deckBusy = false;
+let deckAbort = null;
+
+function deckSetBusy(on) {
+  const go = document.getElementById("deckGo");
+  const input = document.getElementById("deckInput");
+  if (go) { go.disabled = !!on; go.textContent = on ? "解析中…" : "执行"; }
+  if (input) input.disabled = !!on;
+}
+
+/* ---------------- 解析与执行 ---------------- */
 function deckSubmit(text) {
   const t = String(text || "").trim();
   if (!t) { deckSay("先说一句你要做什么。"); return; }
 
-  const hit = deckParse(t);
-  if (hit) { deckRun(hit.action, hit.args); return; }
-
-  /* 🔴 没接模型就如实说（和答疑页同一条红线）：别先报「正在问模型」——
-     根本没问；也别回「没听懂」——那听着像它听懂了但做不到，实际是没人接话。 */
+  /* 🔴 第 67 轮起（用户要求「就是要经过模型」）：
+     · 接了模型 → **每一句都先交给模型解析**，本地正则不再抢答 ——
+       否则会出现「挂着 AI 的名字，实际按关键词直接执行」。
+     · 没接模型 → 如实拒绝，不假装懂、也不偷偷本地执行；
+       想用可以直接点下面的命令条（那是点菜单，不是让 AI 猜）。 */
   if (!deckModelReady()) {
     deckRenderHelp(true);
-    deckSay("这句本地规则认不出来，而现在没有接入模型，所以只能认下面列的这几句。" +
-      "接上模型才能听懂更多说法：设置 → 模型接入。");
+    deckSay("没有接入模型，这句话没法解析。下面这些命令可以直接点着执行；" +
+      "接上模型（设置 → 模型接入）就能听懂任意说法。");
     return;
   }
 
-  deckSay("本地规则没匹配到，正在问模型…");
+  if (deckBusy) { deckSay("上一条还在解析 —— 等它出来再试。"); return; }
+  deckBusy = true;
+  deckSetBusy(true);
+  deckSay("正在问模型…");
+
   deckAskModel(t).then(function (r) {
-    if (!r) {
-      deckSay("模型没给出能执行的动作 —— 换个说法，或点下面一条现成的试试。");
+    deckBusy = false;
+    if (!deckHostEl()) return;                   // 期间被关掉了 → 不再动界面
+    deckSetBusy(false);
+
+    if (r.kind === "ok") { deckRun(r.action, r.args); return; }
+    if (r.kind === "none") {
+      deckRenderHelp(true);
+      deckSay("模型说这句它做不了 —— 换个说法，或点下面一条现成的。");
       return;
     }
-    if (r.none) { deckSay("模型也没把握该做哪一件，换个说法试试。"); return; }
-    deckRun(r.action, r.args);
+    if (r.kind === "unknown") {
+      deckRenderHelp(true);
+      deckSay("模型给的动作「" + r.id + "」不在白名单里，已拒绝执行。");
+      return;
+    }
+    if (r.kind === "badargs") {
+      deckSay("模型选的参数不合法（超出范围，或不是允许的取值），已拒绝执行。换个说法试试。");
+      return;
+    }
+    if (r.kind === "badjson") {
+      deckSay("模型没按约定格式回答，这句没有执行。再说一次试试。");
+      return;
+    }
+    if (r.kind === "aborted") { deckSay("已停止这次解析。"); return; }
+    deckSay("模型没答上来：" + (r.error || "未知原因") + (r.hint ? " " + r.hint : ""));
   });
 }
 
 function deckRun(action, args) {
   if (!action) return;
   const a = args || {};
+
+  // 导航到当前身份打不开的页面：留在原地并说清原因，别让它静默跳回首页
+  if (action.id === "nav.page" && a.page && !deckPageAllowed(a.page)) {
+    deckSay("当前身份打不开「" + (a.label || a.page) + "」这一页。");
+    return;
+  }
 
   if (action.risk === "write") {
     let rows = [];
@@ -2694,7 +2745,24 @@ function deckVoiceToggle() {
   deckSay("在听，请说一句。说完会自动执行；点按钮或按 Esc 可停。");
 }
 
-/* ---------------- 没命中本地规则时问模型：只让它挑 id ---------------- */
+/* ---------------- 问模型：让它挑动作 + 给参数 ----------------
+   🔴 第 67 轮起**每次说话都先过模型**（用户要求「就是要经过模型」）。
+      模型只负责两件事：挑白名单里的一个 id、给出该动作声明的参数；
+      本地负责校验（范围 / 枚举 / 角色可见性）与执行 —— 模型永远不能
+      执行表以外的动作，也不能塞进来一段代码。
+--------------------------------------------------------------- */
+
+/** 各动作允许模型填的参数：类型 + 范围。没写在这里的 id 一律不接受模型参数。 */
+const DECK_ARG_RULES = {
+  "a11y.profile": { profile: { kind: "enum", values: ["reader", "large", "calm", "standard"] } },
+  "a11y.font":    { size: { kind: "int", min: 13, max: 24 } },
+  "a11y.contrast":{ on: { kind: "bool" } },
+  "a11y.motion":  { on: { kind: "bool" } },
+  "a11y.readmode":{ on: { kind: "bool" } },
+  "theme.set":    { id: { kind: "enum", values: ["cream", "snow", "dark"] } },
+  "nav.page":     { page: { kind: "page" } },
+};
+
 function deckJson(raw) {
   let s = String(raw == null ? "" : raw).trim();
   s = s.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
@@ -2704,52 +2772,167 @@ function deckJson(raw) {
   try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; }
 }
 
+function deckFindAction(id) {
+  const list = deckAllActions();
+  for (let i = 0; i < list.length; i++) if (list[i].id === String(id)) return list[i];
+  return null;
+}
+
+/** 当前身份能去的页面（模型给的 page 必须落在这里面） */
+function deckPagesForRole() {
+  let role = "teacher";
+  try { role = (typeof currentRole === "function") ? currentRole() : "teacher"; } catch (_) {}
+  const out = [];
+  for (let i = 0; i < DECK_PAGES.length; i++) {
+    const it = DECK_PAGES[i];
+    const target = (role === "student" && it.studentPage) ? it.studentPage : it.page;
+    const owner = (typeof PAGE_ROLE !== "undefined") && PAGE_ROLE[target];
+    if (owner && owner !== "both" && owner !== "login" && owner !== role) continue;
+    out.push({ page: target, label: it.label, keys: it.keys });
+  }
+  return out;
+}
+
+function deckPageAllowed(page) {
+  const owner = (typeof PAGE_ROLE !== "undefined") && PAGE_ROLE[page];
+  let role = "teacher";
+  try { role = (typeof currentRole === "function") ? currentRole() : "teacher"; } catch (_) {}
+  return !owner || owner === "both" || owner === "login" || owner === role;
+}
+
+/** 严格校验一个参数值；不合法返回 null（调用方据此拒绝，绝不「猜一个」或用夹逼值顶替） */
+function deckArgValue(rule, v) {
+  if (rule.kind === "int") {
+    const n = Number(String(v).replace(/[^\d.-]/g, ""));
+    if (!isFinite(n)) return null;
+    if (n < rule.min || n > rule.max) return null;   // 越界＝不合法，别悄悄夹到边界就执行
+    return Math.round(n);
+  }
+  if (rule.kind === "bool") {
+    if (v === true || v === 1 || v === "1" || v === "true" || v === "开" || v === "on") return true;
+    if (v === false || v === 0 || v === "0" || v === "false" || v === "关" || v === "off") return false;
+    return null;
+  }
+  if (rule.kind === "enum") return rule.values.indexOf(String(v)) >= 0 ? String(v) : null;
+  return null;
+}
+
+/**
+ * 把模型的 args 变成真正能执行的一份。
+ * · 模型给了合法参数 → 用模型的（这才叫「经过模型」）
+ * · 模型没给参数     → 本地 match(text) / fallbackArgs() 兜底
+ * · 模型给了但全非法 → 返回 null，直接拒绝（不拿 fallback 偷偷执行）
+ */
+function deckArgsFor(action, modelArgs, text) {
+  if (action.id === "nav.page" && modelArgs && typeof modelArgs === "object" && modelArgs.page) {
+    const want = String(modelArgs.page);
+    const pages = deckPagesForRole();
+    for (let i = 0; i < pages.length; i++) {
+      if (pages[i].page === want) return { page: pages[i].page, label: pages[i].label };
+    }
+    return null;                                   // 页面不在白名单 / 当前身份去不了
+  }
+
+  const rules = DECK_ARG_RULES[action.id];
+  if (rules && modelArgs && typeof modelArgs === "object") {
+    const out = {};
+    let given = false, bad = false;
+    Object.keys(rules).forEach(function (k) {
+      if (!(k in modelArgs)) return;
+      given = true;
+      const val = deckArgValue(rules[k], modelArgs[k]);
+      if (val === null) { bad = true; return; }
+      out[k] = val;
+    });
+    if (given) {
+      if (Object.keys(out).length) return out;
+      if (bad) return null;
+    }
+  }
+
+  let args = null;
+  if (typeof action.match === "function") {
+    try { args = action.match(text); } catch (_) { args = null; }
+  }
+  if (!args && typeof action.fallbackArgs === "function") args = action.fallbackArgs();
+  if (!args && typeof action.match !== "function" && typeof action.fallbackArgs !== "function") return {};
+  return args || null;
+}
+
+/** 给模型的清单：id / 说明 / 例子 / 允许的参数 */
+function deckCatalog() {
+  const pages = deckPagesForRole().map(function (p) { return p.page; }).join("|");
+  return deckAllActions().map(function (a) {
+    const r = DECK_ARG_RULES[a.id];
+    let p = "无参数";
+    if (a.id === "nav.page") {
+      p = "page=" + pages;
+    } else if (r) {
+      p = Object.keys(r).map(function (k) {
+        const x = r[k];
+        if (x.kind === "int") return k + "=整数(" + x.min + "~" + x.max + ")";
+        if (x.kind === "bool") return k + "=true 或 false";
+        if (x.kind === "enum") return k + "=" + x.values.join("|");
+        return k;
+      }).join("；");
+    }
+    return a.id + " ｜ " + a.label + " ｜ 例：" + a.sample + " ｜ 参数：" + p;
+  }).join("\n");
+}
+
+/** 问模型：返回 {kind: ok|none|unknown|badargs|badjson|error|aborted|nomodel} */
 function deckAskModel(text) {
   return new Promise(function (resolve) {
-    let ready = false;
-    try { ready = (typeof llmReady === "function") && llmReady(); } catch (_) {}
-    if (!ready || typeof llmChat !== "function") { resolve(null); return; }
+    if (!deckModelReady() || typeof llmChat !== "function") { resolve({ kind: "nomodel" }); return; }
 
-    const catalog = deckAllActions().map(function (a) {
-      return a.id + " = " + a.label + "（例：" + a.sample + "）";
-    }).join("\n");
+    const sys = [
+      "你是「智课助教」应用内的指令解析器。用户说一句中文，你把它对到下面某个动作上。",
+      "只输出一行 JSON，不要解释、不要代码块、不要多余文字：",
+      '{"id":"动作 id","args":{}}',
+      "规则：",
+      "1) id 必须原样取自清单；没有合适的就输出 {\"id\":\"none\"}。",
+      "2) args 只能出现该动作声明的参数；拿不准就省略，绝不要编。",
+      "3) 不要输出代码、命令、网址；你只能选动作，不能发明动作。",
+      "",
+      "可选动作（id ｜ 说明 ｜ 例子 ｜ 参数）：",
+      deckCatalog(),
+    ].join("\n");
 
-    const sys = "你是应用内的指令解析器。只能从给定的动作里挑一个，" +
-      "输出一行 JSON：{\"id\":\"动作 id\",\"say\":\"一句 20 字内的确认\"}。" +
-      "没有合适的或不确定，输出 {\"id\":\"none\"}。" +
-      "不要输出解释、不要代码块、不要编造动作 id。";
+    const ctrl = (typeof AbortController === "function") ? new AbortController() : null;
+    deckAbort = ctrl;
 
-    llmChat(sys, "可选动作：\n" + catalog + "\n\n用户说：" + text, { maxTokens: 160, temperature: 0 })
-      .then(function (r) {
-        if (!r || !r.ok) { resolve(null); return; }
-        const j = deckJson(r.raw);
-        resolve(deckFromModel(j, text));
-      })
-      .catch(function () { resolve(null); });
+    llmChat(sys, "用户说：" + text, {
+      maxTokens: 200,
+      temperature: 0,
+      persona: false,                       // 指令解析不需要「讲法偏好」，省 token 也更稳
+      timeoutMs: 15000,
+      signal: ctrl ? ctrl.signal : undefined,
+    }).then(function (r) {
+      if (deckAbort === ctrl) deckAbort = null;
+      if (!r || !r.ok) {
+        if (r && r.aborted) { resolve({ kind: "aborted" }); return; }
+        resolve({ kind: "error", error: (r && r.error) || "模型没有返回内容", hint: (r && r.hint) || "" });
+        return;
+      }
+      resolve(deckFromModel(deckJson(r.raw), text));
+    }).catch(function (e) {
+      if (deckAbort === ctrl) deckAbort = null;
+      resolve({ kind: "error", error: String((e && e.message) || e) });
+    });
   });
 }
 
+/** 纯函数：模型给的 JSON → 要执行的动作（可直接被验证器调用） */
 function deckFromModel(obj, text) {
-  if (!obj || !obj.id) return null;
-  if (String(obj.id) === "none") return { none: true };
+  if (!obj || typeof obj !== "object" || Array.isArray(obj) || !obj.id) return { kind: "badjson" };
+  if (String(obj.id) === "none") return { kind: "none" };
 
-  const list = deckAllActions();
-  let hit = null;
-  for (let i = 0; i < list.length; i++) if (list[i].id === String(obj.id)) hit = list[i];
-  if (!hit) return null;                       // 未知 id 一律拒
+  const hit = deckFindAction(obj.id);
+  if (!hit) return { kind: "unknown", id: String(obj.id) };   // 未知 id 一律拒
 
-  // 参数不信模型：导航看本地关键词，其余用本地解析或动作自带的保守默认值
-  let args = null;
-  if (hit.id === "nav.page") {
-    args = deckNavMatch(text);
-  } else if (hit.match) {
-    try { args = hit.match(text); } catch (_) { args = null; }
-    if (!args && hit.fallbackArgs) args = hit.fallbackArgs();
-  } else if (hit.fallbackArgs) {
-    args = hit.fallbackArgs();
-  }
-  if (!args) return null;
-  return { action: hit, args: args };
+  const args = deckArgsFor(hit, obj.args, text);
+  if (!args) return { kind: "badargs" };
+  return { kind: "ok", action: hit, args: args };
 }
 
 /* ---------------- 长按 Alt ---------------- */

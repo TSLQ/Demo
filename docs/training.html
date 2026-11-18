@@ -137,6 +137,11 @@
 
   /* ---------- 发布弹窗里的骨架预览 ---------- */
   .mk-preview { border: 1px solid var(--border); border-radius: 10px; padding: 11px; margin-top: 4px; }
+  /* 校验没过时输入框也标红（只靠一行小字容易被漏看） */
+  .textarea.input-err {
+    border-color: var(--destructive);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--destructive) 16%, transparent);
+  }
   .mk-src { font-size: 12.5px; line-height: 1.7; color: var(--muted-foreground); margin-bottom: 8px; }
   .mk-src b { color: var(--foreground); font-weight: 500; }
   .mk-steps { display: flex; flex-direction: column; gap: 6px; }
@@ -780,6 +785,8 @@ function openNewAct() {
           <label for="mkGoal">一句话目标 <span class="req">*</span></label>
           <textarea class="textarea" id="mkGoal" rows="3"
                     placeholder="例：圆的面积公式是怎么创造出来的？"></textarea>
+          <!-- 校验提示贴着输入框：放预览块下面的话，窗口一矮就被挤进滚动区外 -->
+          <p class="login-error" id="mkErr" role="alert" hidden></p>
         </div>
 
         <div class="field">
@@ -791,8 +798,6 @@ function openNewAct() {
           <div class="mk-src" id="mkSrc"></div>
           <div class="mk-steps" id="mkStages"></div>
         </div>
-
-        <p class="login-error" id="mkErr" role="alert" hidden></p>
       </div>
 
       <div class="modal-foot">
@@ -811,22 +816,43 @@ function openNewAct() {
   renderPreview();
   setTimeout(() => $("#mkGoal")?.focus?.(), 0);
 
+  /* 校验失败必须**当场看见**：文字贴输入框 + 输入框标红 + 滚进视野。
+     🔴 以前提示在弹窗最底部，窗口一矮就落在滚动区外 → 用户以为「点了没反应」。 */
+  const showErr = (msg) => {
+    const err = $("#mkErr"), g = $("#mkGoal");
+    if (!err) return;
+    err.textContent = msg;
+    err.hidden = false;
+    if (g) { g.classList.add("input-err"); g.focus?.(); }
+    try { err.scrollIntoView({ block: "nearest" }); } catch (_) {}
+  };
+  const clearErr = () => {
+    const err = $("#mkErr"), g = $("#mkGoal");
+    if (err) { err.hidden = true; err.textContent = ""; }
+    if (g) g.classList.remove("input-err");
+  };
+  $("#mkGoal").addEventListener("input", clearErr);
+
   $("#mkCreate").addEventListener("click", () => {
-    const goal = ($("#mkGoal").value || "").trim();
-    const err = $("#mkErr");
-    const r = createActivity({ goal: goal, title: goal, courseId: $("#mkCourse").value });
-    if (!r.ok) {
-      err.textContent = r.error;
-      err.hidden = false;
-      $("#mkGoal")?.focus?.();
-      return;
+    try {
+      const goal = ($("#mkGoal").value || "").trim();
+      if (!goal) {
+        showErr("先写一句实训目标 —— 比如「圆的面积公式是怎么被创造出来的」");
+        return;
+      }
+      const r = createActivity({ goal: goal, title: goal, courseId: $("#mkCourse").value });
+      if (!r.ok) { showErr(r.error); return; }
+
+      clearErr();
+      closeNewAct();
+      VIEW.filter = "all";
+      VIEW.currentId = r.activity.id;              // 建完直接选中它去改骨架
+      afterStructureChange();
+      flash(`已创建草案，来源：${skeletonSourceText(r.activity.skeleton)}`, "ok");
+    } catch (e) {
+      showErr("创建时出了点问题：" + ((e && e.message) || "未知错误") + "。刷新页面再试一次。");
+      if (window.console && console.error) console.error(e);
     }
-    err.hidden = true;
-    closeNewAct();
-    VIEW.filter = "all";
-    VIEW.currentId = r.activity.id;              // 建完直接选中它去改骨架
-    afterStructureChange();
-    flash(`已创建草案，来源：${skeletonSourceText(r.activity.skeleton)}`, "ok");
   });
 }
 
