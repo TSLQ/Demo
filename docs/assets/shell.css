@@ -446,7 +446,10 @@ body.shell-body { overflow: hidden; }
    ============================================================ */
 body.modal-open { overflow: hidden; }
 
-#modalHost { position: relative; z-index: 60; }
+/* 🔴 层级必须高于「阅读工具条」(.reader-bar, z-index 90)：
+   否则弹窗底部的「确认 / 发起」按钮会被工具条压住，看起来像点不动。
+   同时要低于首访显示模式弹窗(120)与 AI 指令条(125)。 */
+#modalHost { position: relative; z-index: 100; }
 
 .modal-scrim {
   position: fixed; inset: 0;

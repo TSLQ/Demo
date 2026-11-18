@@ -570,7 +570,10 @@ function handle(text) {
   const steps = planFromChain(runChain, { role: "student", chain: runChain });
   // 🔴 先跑技能，再落动作链（打勾只认真实结果）
   const flow = runSteps(steps);
-  Promise.resolve(runSkills(ids, { ask: t }, ctx)).then(function (runs) {
+  // 输入框里的原话既当问题（ask），也当可能的材料（material，见 agentMaterial）
+  const payload = { ask: t };
+  if (typeof agentMaterial === "function") payload.material = agentMaterial(t);
+  Promise.resolve(runSkills(ids, payload, ctx)).then(function (runs) {
     flow.settle(runs, function () {
       addResult(runs, null,
         { input: t, fromId: primarySkillId(route, ids), courseId: ctx.courseId });

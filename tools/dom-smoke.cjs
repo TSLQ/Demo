@@ -1101,25 +1101,37 @@ console.log("\n=== 3c-4. class.html（课程成员）：真实的「谁在课里
   }
 
   /* ---------- ① 名单只有真加入的人 ---------- */
+  /* 期望：张三（自己选了 ds）+ 4 位预置学生（SEED_ACCOUNTS 里都算在 ds 课）。
+     🔴 预置同学要算进来：他们是真账号、真在课里，不列反而和「下发/拉人」的名单对不上。 */
   const rows = [...d.querySelectorAll("#stuRows tr")];
   const rowText = (tr) => tr.textContent.replace(/\s+/g, " ").trim();
-  rows.length === 1 && /张三/.test(rowText(rows[0]))
-    ? P("在课名单只有真加入了这门课的人（张三）") : F("名单不对: " + rows.map(rowText).join(" | "));
+  const seedStudents = w.eval("SEED_ACCOUNTS.filter(function(a){return a.role==='student'}).length");
+  rows.length === 1 + seedStudents && /张三/.test(rowText(rows[0]))
+    ? P("在课名单 = 真加入了这门课的人（张三 + " + seedStudents + " 位预置同学）")
+    : F("名单不对（期望 " + (1 + seedStudents) + " 行）: " + rows.map(rowText).join(" | "));
   !/李四|王五/.test(d.getElementById("stuRows").textContent)
     ? P("没加入的学生不会出现在名单里（李四去的是编译原理）") : F("把没加入的学生也列进来了");
   // ⚠️ 只能扫 .page（可见区域）：`body.textContent` **包含 <script> 的文本**，
   //    页内注释里提到旧实现就会被误判成"还在展示"。
-  !/其余 \d+ 名同学|平均掌握度|李同学|张同学/.test(d.querySelector(".page").textContent)
-    ? P("旧版那套编造的学生（李同学/张同学/其余 N 名）已彻底消失")
+  // ⚠️ 不能再用「李同学」当黑名单 —— 那是预置学生账号的真名（见 SEED_ACCOUNTS）。
+  !/其余 \d+ 名同学|平均掌握度|掌握度分布/.test(d.querySelector(".page").textContent)
+    ? P("旧版那套编造的学生（其余 N 名 / 平均掌握度）已彻底消失")
     : F("还能看到旧的编造名单");
 
   /* ---------- ② 统计卡都是真实数字 ---------- */
-  d.getElementById("stIn").textContent === "1"
-    ? P("在课学生 = 1（真实）") : F("在课学生不对: " + d.getElementById("stIn").textContent);
-  d.getElementById("stTotal").textContent === "3"
-    ? P("本机学生账号 = 3（真实，来自账号库）") : F("学生账号数不对: " + d.getElementById("stTotal").textContent);
+  const nIn = 1 + seedStudents;
+  const nTotal = 3 + seedStudents;            // zhangsan/lisi/wangwu + 预置同学
+  d.getElementById("stIn").textContent === String(nIn)
+    ? P("在课学生 = " + nIn + "（真实）") : F("在课学生不对: " + d.getElementById("stIn").textContent);
+  d.getElementById("stTotal").textContent === String(nTotal)
+    ? P("本机学生账号 = " + nTotal + "（真实，含预置同学）") : F("学生账号数不对: " + d.getElementById("stTotal").textContent);
   d.getElementById("stMissing").textContent === "2"
     ? P("还没加入本课 = 2（李四 + 王五）") : F("未加入数不对: " + d.getElementById("stMissing").textContent);
+  Number(d.getElementById("stIn").textContent) + Number(d.getElementById("stMissing").textContent) ===
+    Number(d.getElementById("stTotal").textContent)
+    ? P("在课 + 未加入 = 本机学生总数（三个数自洽）")
+    : F("统计自相矛盾：" + d.getElementById("stIn").textContent + " + " +
+        d.getElementById("stMissing").textContent + " ≠ " + d.getElementById("stTotal").textContent);
   !/^—$/.test(d.getElementById("stLast").textContent)
     ? P("最近加入有值: " + d.getElementById("stLast").textContent) : F("最近加入没算出来");
 
@@ -5377,6 +5389,12 @@ console.log("\n=== 4z. AI 指令条（长按 Alt）：说话必过模型，没�
       /打不开|参数不合法/.test(say())
         ? P("学生端不会被指令条带去教师页（越权被拦）") : F("越权导航没被拦: " + say());
 
+      const navOk = w.deckArgsFor(w.deckFindAction("nav.page"), { page: "chat.html" }, "");
+      navOk && navOk.page === "chat.html"
+        ? P("模型给的合法页面照样采纳（学生端 chat.html）") : F("合法页面被误杀: " + JSON.stringify(navOk));
+      const navBad = w.deckArgsFor(w.deckFindAction("nav.page"), { page: "https://evil.example.com" }, "");
+      navBad === null ? P("不在白名单的地址（外链）直接拒") : F("外链竟然通过了: " + JSON.stringify(navBad));
+
       // 接口报错 → 如实报错，不执行
       reply = "";
       w.fetch = () => Promise.resolve({ ok: false, status: 401, text: () => Promise.resolve("bad key") });
@@ -5409,6 +5427,182 @@ console.log("\n=== 4z. AI 指令条（长按 Alt）：说话必过模型，没�
   d.getElementById("deckHost")
     ? P("收到壳的 st-open-deck 也能打开（界面只有这一份）") : F("壳发消息打不开指令条");
   dom.window.close();
+}
+
+console.log("\n=== 4aa. AI 助手：普通问题必须真的问模型（第 68 轮）===");
+/* 为什么要有这一段：`sys-chat` 之前不存在 —— 问一句「什么是快速排序」，
+   一条技能都没命中，`runnableIds` 就把全部系统技能兜底跑一遍，
+   于是回了「应用地图 + 数据边界」两段与问题无关的说明，**一个请求都没发**。
+   页面标题写着「AI 助手」，实际不会说话。这条链以前一条断言都没有。 */
+{
+  const mkLs = (who) => ({
+    st_current_user: who,
+    st_a11y: JSON.stringify({ profile: "standard" }),
+  });
+  const cfg = {
+    st_provider: "custom",
+    st_custom_endpoint: "https://llm.example.com/v1",
+    st_custom_model: "agent-model",
+  };
+  const modelReply = "**快速排序**是分治排序：先选基准划分，再递归两边。平均 O(n log n)，最坏 O(n²)。";
+
+  /** 发一句 → 等到 (seen 变多 或 超时) → 再等一拍让渲染落定 */
+  const ask = async (w, d, text, ms) => {
+    d.getElementById("input").value = text;
+    d.getElementById("sendBtn").dispatchEvent(new w.Event("click", { bubbles: true }));
+    const t0 = Date.now();
+    while (Date.now() - t0 < (ms || 4000)) {
+      if (!/■/.test(d.getElementById("sendBtn").textContent || "")) break;
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    await new Promise((r) => setTimeout(r, 120));
+  };
+  /** 出题是 write 类技能：动作链会在「等待确认」停下来 —— 点掉它才算走完（用户也是这么走的） */
+  const confirmWait = async (w, d) => {
+    const btn = d.querySelector("#chatLog .tc-step.wait .btn-primary");
+    if (!btn) return false;
+    btn.dispatchEvent(new w.Event("click", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 400));
+    return true;
+  };
+  const logText = (d) => String((d.getElementById("chatLog") || {}).textContent || "");
+
+  /* ---------- ① 教师端：普通知识问题 → 真发请求、真显示模型回答 ---------- */
+  {
+    const dom = load("agent.html", { role: "teacher", restore: { ls: Object.assign(mkLs("teacher:lily"), cfg) } });
+    await settle(dom);
+    const w = dom.window, d = w.document;
+    if (typeof w.llmReady !== "function" || !w.llmReady()) {
+      F("沙箱里没认出「已接模型」—— 后面几条都会假失败");
+    } else {
+      const seen = [];
+      w.fetch = (url, opt) => {
+        seen.push({ url: String(url), body: String((opt && opt.body) || "") });
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ choices: [{ message: { content: modelReply } }] }) });
+      };
+
+      await ask(w, d, "什么是快速排序？");
+      seen.length === 1
+        ? P("教师端问普通问题 → 真的发了一个请求（以前是 0 个）")
+        : F("请求数不对: " + seen.length + "（0 = 助手根本不会说话）");
+      seen[0] && seen[0].body.indexOf("什么是快速排序") >= 0
+        ? P("请求体里带着原话") : F("请求体没带原话");
+      /快速排序/.test(logText(d)) && /O\(n log n\)/.test(logText(d))
+        ? P("模型回答真的显示在对话区（不是只发请求不渲染）")
+        : F("回答没上屏: " + logText(d).slice(-160));
+      /直接回答/.test(logText(d))
+        ? P("技能链里如实写出这次挂的是「直接回答」") : F("技能链没写「直接回答」");
+      !/应用地图[\s\S]{0,40}应用有哪些页/.test(logText(d).slice(-600))
+        ? P("不再拿「应用地图 / 数据边界」凑一段与问题无关的说明")
+        : F("还是回了应用地图那套模板");
+      !/应用地图/.test(logText(d))
+        ? P("技能链里不再列「应用地图」充数（挂了 = 真会跑）") : F("链里还摆着没跑的技能");
+
+      /* ---------- ② 本地能确定答的，不许白花一次请求 ---------- */
+      const before = seen.length;
+      await ask(w, d, "你能做什么");
+      seen.length === before
+        ? P("「你能做什么」仍然走本地应用地图（不白烧一次请求）")
+        : F("「你能做什么」也去问模型了（" + (seen.length - before) + " 个请求）");
+      /应用地图/.test(logText(d)) ? P("应用地图真的出了结果") : F("应用地图没出结果");
+
+      /* ---------- ③ 点了具体技能，不许再叠一遍通用对话 ---------- */
+      const n3 = seen.length;
+      await ask(w, d, "帮我校对这段：快排和快速排序都出现了。。这里还有多余     空格");
+      /重复标点/.test(logText(d))
+        ? P("输入框里的材料真的进了「校对」（扫出「。。」）") : F("校对没拿到材料: " + logText(d).slice(-160));
+      /快排.*快速排序.*都出现/.test(logText(d))
+        ? P("校对按「同一份里两种叫法并存」报了出来") : F("术语不统一没报");
+      seen.length > n3
+        ? P("接了模型后校对还会逐句过一遍（真有这条调用，不再只是空头承诺）")
+        : F("校对没有调用模型 —— 「配了 Key 可以逐句过一遍」还是空话");
+
+      // 技能链里不该出现「直接回答」抢话
+      const tail = logText(d);
+      const seg = tail.slice(tail.lastIndexOf("帮我校对这段"));
+      !/直接回答/.test(seg) ? P("点名了具体技能时不再叠「直接回答」") : F("点名技能时「直接回答」还在抢");
+    }
+    w.close();
+  }
+
+  /* ---------- ④ 未接模型：不发请求、不编答案 ---------- */
+  {
+    const dom = load("agent.html", { role: "teacher", restore: { ls: mkLs("teacher:lily") } });
+    await settle(dom);
+    const w = dom.window, d = w.document;
+    let n = 0;
+    w.fetch = () => { n++; return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }); };
+    await ask(w, d, "什么是快速排序？");
+    n === 0 ? P("未接模型 → 一个请求都不发") : F("未接模型却发了 " + n + " 个请求");
+    /没有接入模型/.test(logText(d)) ? P("如实说「没有接入模型」") : F("没说清没接模型: " + logText(d).slice(-160));
+    !/分治排序/.test(logText(d)) ? P("没有拿预置句子冒充回答") : F("没接模型却吐了答案");
+    /设置/.test(logText(d)) && /模型接入/.test(logText(d))
+      ? P("给出了下一步（去设置接模型）") : F("没告诉用户下一步");
+    w.close();
+  }
+
+  /* ---------- ⑤ 学生端：普通问题 → 真调模型，且带本课课件 ---------- */
+  {
+    const dom = load("agent-student.html", {
+      role: "student",
+      restore: { ls: Object.assign(mkLs("student:zhangsan"), cfg, {
+        st_courses: JSON.stringify([{ id: "ds", name: "数据结构与算法", code: "CS201", page: "class.html" }]),
+        "st_enroll:student:zhangsan": JSON.stringify([
+          { courseId: "ds", name: "数据结构与算法", code: "CS201", joinCode: "CS201-22DT", at: Date.now() - 3 * 86400000 },
+        ]),
+      }) },
+    });
+    await settle(dom);
+    const w = dom.window, d = w.document;
+    if (typeof w.llmReady !== "function" || !w.llmReady()) {
+      F("学生端沙箱没认出「已接模型」");
+    } else {
+      const seen = [];
+      w.fetch = (url, opt) => {
+        seen.push({ url: String(url), body: String((opt && opt.body) || "") });
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ choices: [{ message: { content: "从你已经会的内容往下推：先讲清楚比较与交换。" } }] }) });
+      };
+      await ask(w, d, "快速排序和归并排序怎么选？");
+      seen.length === 1
+        ? P("学生端普通问题 → 真的发了一个请求") : F("学生端请求数不对: " + seen.length);
+      /归并排序/.test(logText(d)) ? P("学生端的模型回答上屏") : F("学生端没渲染回答");
+      w.close();
+    }
+  }
+
+  /* ---------- ⑥ 出题：接了模型要真写正文；没接要明说「没替你编」 ---------- */
+  {
+    // 出题是 write 类技能：授权关着时**只会给建议、不出正文**（这是设计，不是 bug）→ 先打开发布授权
+    const dom = load("agent.html", { role: "teacher", restore: { ls: Object.assign(mkLs("teacher:lily"), cfg, { st_agent_perm: JSON.stringify({ read: true, push: true, publish: true }) }) } });
+    await settle(dom);
+    const w = dom.window, d = w.document;
+    let seen = [];
+    w.fetch = (url, opt) => {
+      seen.push({ body: String((opt && opt.body) || "") });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ choices: [{ message: { content: "### 第 1 题（单选）\n栈的特点是？\nA. 先进先出 B. 后进先出\n**答案：** B" } }] }) });
+    };
+    await ask(w, d, "给我出三道数据结构题", 6000);
+    await confirmWait(w, d);
+    seen.length >= 1 ? P("「出题」接了模型真的写正文（以前只排一张题位表就说「要么你自己出」）")
+      : F("出题没调模型");
+    /后进先出/.test(logText(d)) ? P("题目正文上屏") : F("题目正文没上屏");
+    /还没进任何卷子/.test(logText(d))
+      ? P("明说「还没进任何卷子」（不自动成卷、不自动发布）") : F("没说清题目还没进卷子");
+    w.close();
+  }
+  {
+    const dom = load("agent.html", { role: "teacher", restore: { ls: Object.assign(mkLs("teacher:lily"), { st_agent_perm: JSON.stringify({ read: true, push: true, publish: true }) }) } });
+    await settle(dom);
+    const w = dom.window, d = w.document;
+    let n = 0;
+    w.fetch = () => { n++; return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }); };
+    await ask(w, d, "给我出三道数据结构题", 3000);
+    await confirmWait(w, d);
+    n === 0 ? P("未接模型出题 → 不发请求") : F("未接模型却发了 " + n + " 个请求");
+    /没有替你编/.test(logText(d))
+      ? P("未接模型时明说「题目正文没有替你编」（不塞假题）") : F("没交代题目是怎么来的: " + logText(d).slice(-160));
+    w.close();
+  }
 }
 
 console.log("\n=== 5. 各内容页独立打开 ===");

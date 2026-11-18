@@ -535,7 +535,8 @@
       collab = '<div class="blk"><div class="blk-head"><h3>一起探究的人</h3>' +
         '<span class="hint">一起探究这门课的同学</span></div>' +
         '<div class="collab">' + a.participants.map(function (n) {
-          return '<span class="tag">' + esc(n) + "</span>";
+          var label = (typeof participantLabel === "function") ? participantLabel(n) : n;
+          return '<span class="tag">' + esc(label) + "</span>";
         }).join("") + "</div></div>";
     }
 
@@ -651,14 +652,16 @@
    * 协作者候选：本机的**同学**（排除自己）。
    * 🔴 不列老师 —— 学生自发的探究不进教师端（2026-11-17 用户定），
    *    列个拉不进来的老师等于骗人。
+   * 🔴 用 `allStudentAccounts()`（含预置同学），不能用 `localStudentAccounts()`
+   *    —— 后者只认账号库里已落盘的账号，直开内容页时是空的 → 「拉人」区块整块消失。
    */
   function collaboratorOptions() {
     var u = (me() || "").toLowerCase();
     var rows = [];
-    var students = (typeof localStudentAccounts === "function") ? localStudentAccounts() : [];
+    var students = (typeof allStudentAccounts === "function") ? allStudentAccounts() : [];
     students.forEach(function (s) {
-      if (s.key.toLowerCase() === u) return;
-      rows.push({ key: s.key, label: s.name + "（同学）" });
+      if (String(s.key).toLowerCase() === u) return;
+      rows.push({ key: s.key, label: s.name });
     });
     return rows;
   }
@@ -694,7 +697,13 @@
                   return '<label><input type="checkbox" value="' + esc(c.key) + '">' + esc(c.label) + "</label>";
                 }).join("") + "</div>" +
               "</div>"
-            : "") +
+            /* 一个同学都没有时别让整块消失 —— 那样看起来就是「这个功能没做」。
+               说清为什么空、怎么才会有。 */
+            : '<div class="field">' +
+                "<label>拉上同学一起</label>" +
+                '<p class="mk-hint" style="margin:0">本机还没有其他同学账号。' +
+                  "退出登录后切到「注册账号」建一个学生账号，再回来就能拉他一起探究。</p>" +
+              "</div>") +
           '<p class="mk-hint" style="margin:0">发起后就能直接参与：把猜想记成灵感、把想通的事记成推导，' +
             "卡住了就让 AI 帮你验一个猜想。走哪条路、按什么顺序，由你决定 —— 这里没有要跟着走的步骤。</p>" +
         "</div>" +
@@ -744,19 +753,20 @@
           return;
         }
 
+        /* 🔴 存**账号键**（`student:wangxm`）而不是姓名：
+           存姓名的话两个人同名会互相串进来，同学改个名字就再也匹配不上。
+           老存档里是姓名的照旧能认（`activitiesForStudent` 两种都比）。 */
         var picked = [];
-        var names = [];
         var checked = host.querySelectorAll(".pick-list input:checked");
         Array.prototype.forEach.call(checked, function (c) {
-          var key = c.value;
-          picked.push(key);
-          names.push((typeof accountDisplayName === "function") ? accountDisplayName(key) : key.split(":")[1]);
+          var key = String(c.value || "").trim();
+          if (key && picked.indexOf(key) < 0) picked.push(key);
         });
 
         var r = createStudentActivity({
           goal: goal,
           courseId: $("mkCourse").value,
-          participants: names.filter(function (n, i) { return n && names.indexOf(n) === i; }),
+          participants: picked,
         });
         if (!r.ok) { showErr(r.error); return; }
 

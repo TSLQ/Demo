@@ -3581,9 +3581,19 @@ function verifyTrainingData() {
   /没有可自动执行的具体对象/.test(navSrc)
     ? pass("缺具体对象时**如实拒绝**（不假装执行成功）")
     : fail("缺对象时没说清为什么做不了");
-  probe("runAgentStep({ arg: 'action=publish_exam', skill: 'atom-gen-quiz' }, { role: 'teacher' }).ok") === false
+  /* ⚠️ 不能直接拿「默认环境」断言「没卷子」—— 预置同学已经在课里了，
+     环境一旦有「已采纳的卷子」就会真发出去（那是**正确**行为）。
+     要测「空卷不发」必须自己把卷子清空。 */
+  probe("(function(){var bak=EXAMS.slice();EXAMS.length=0;"
+    + "var r=runAgentStep({arg:'action=publish_exam',skill:'atom-gen-quiz'},{role:'teacher'});"
+    + "bak.forEach(function(e){EXAMS.push(e)});return r&&r.ok===false&&!!r.reason})()")
     ? pass("没有可发的卷子时，执行层返回 ok:false（不硬发一份空卷）")
     : fail("执行层在没有卷子时仍然说成功");
+  probe("(function(){var bak=JSON.stringify(EXAMS);"
+    + "var r=runAgentStep({arg:'action=publish_exam',skill:'atom-gen-quiz'},{role:'teacher'});"
+    + "EXAMS.length=0;JSON.parse(bak).forEach(function(e){EXAMS.push(e)});return r&&r.ok===true&&/\\d+ 位学生/.test(r.detail||'')})()")
+    ? pass("有已采纳的卷子 + 本课有学生时，执行层真发出去并报出人数")
+    : fail("有卷子有学生却发不出去（或没说清发给了几个人）");
 
   /* --- ⑫ 第 57 轮：agent 把「需要模型成文」的技能真的接到模型上 --- */
   const agSrc57 = fs.readFileSync(path.join(SITE, "agent.html"), "utf8");

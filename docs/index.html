@@ -181,26 +181,50 @@ function saveAccounts(list) {
   LS.set(ACCOUNTS_KEY, list);
 }
 
-/** 首次打开自动预置账号（只在账号库为空时执行一次） */
+/**
+ * 补齐预置账号（**缺哪个补哪个**，不动用户自己注册的账号）。
+ * 🔴 早先的写法是「账号库为空才写入」，于是老存档（只存过 teacher/student）
+ *    永远拿不到后加的预置同学 → 学生发起实训时「拉上同学一起」一个人都没有。
+ *    改成补缺后，老存档刷新一次登录页也能看到这几位。
+ */
 function seedAccounts() {
   const list = loadAccounts();
-  if (list.length) return list;
+  const have = Object.create(null);
+  list.forEach((a) => {
+    if (a && a.role && a.user) have[`${a.role}:${String(a.user).toLowerCase()}`] = 1;
+  });
   const now = Date.now();
-  const seeded = SEED.map((a, i) => ({ ...a, createdAt: now + i }));
-  saveAccounts(seeded);
-  return seeded;
+  let added = 0;
+  SEED.forEach((a, i) => {
+    const k = `${a.role}:${String(a.user).toLowerCase()}`;
+    if (have[k]) return;
+    list.push({ ...a, createdAt: now + i });
+    added += 1;
+  });
+  if (added) saveAccounts(list);
+  return list;
 }
 
+/**
+ * 找账号。账号库还没落盘时也认预置账号（`SEED`）——
+ * 否则直接打开内容页再回登录页、或跳过了 `seedAccounts()` 的人会「账号不存在」。
+ */
 function findAccount(roleId, user) {
   const key = String(user || "").trim().toLowerCase();
-  return loadAccounts().find(
+  const hit = loadAccounts().find(
     (a) => a.role === roleId && String(a.user).toLowerCase() === key
   );
+  if (hit) return hit;
+  const seed = SEED.find(
+    (a) => a.role === roleId && String(a.user).toLowerCase() === key
+  );
+  return seed ? { ...seed, createdAt: 0 } : undefined;
 }
 
 function userTaken(user) {
   const key = String(user || "").trim().toLowerCase();
-  return loadAccounts().some((a) => String(a.user).toLowerCase() === key);
+  return loadAccounts().some((a) => String(a.user).toLowerCase() === key) ||
+    SEED.some((a) => String(a.user).toLowerCase() === key);
 }
 
 /** 该身份在本机已注册的账号数 */
@@ -209,14 +233,27 @@ function countByRole(roleId) {
 }
 
 /* ---------- 提示条 ---------- */
+/**
+ * 🔴 账号不止一个时要**把账号名列出来**：学生要能切换成另一位同学，
+ *    才验证得了「实训里被拉进来」这类协同（只报「例如 student」等于没提示）。
+ */
 function hintFor(next) {
   const list = loadAccounts().filter((a) => a.role === next);
   const who = ROLE_META[next].label;
   if (!list.length) {
     return `还没有${who}账号 —— 切到「注册账号」建一个即可。`;
   }
-  const a = list[0];
-  return `已有${who}账号 ${list.length} 个 —— 例如 <code>${a.user}</code> / <code>${a.pass}</code>`;
+  if (list.length === 1) {
+    const a = list[0];
+    return `已有${who}账号 1 个 —— <code>${a.user}</code> / <code>${a.pass}</code>`;
+  }
+  const names = list.map((a) => `<code>${a.user}</code>`).join("、");
+  const allSeed = list.every((a) =>
+    SEED.some((s) => s.role === a.role && String(s.user).toLowerCase() === String(a.user).toLowerCase())
+  );
+  return allSeed && list[0].pass
+    ? `已有${who}账号 ${list.length} 个 —— ${names}，密码都是 <code>${list[0].pass}</code>`
+    : `已有${who}账号 ${list.length} 个 —— ${names}（密码各是自己设的）`;
 }
 
 function syncAccountForm(next) {
@@ -226,6 +263,10 @@ function syncAccountForm(next) {
   const first = loadAccounts().find((a) => a.role === next);
   const acc = $("#account");
   if (acc) acc.placeholder = first ? first.user : "请输入账号";
+  /* 🔴 密码框的占位符要跟着身份走：写死 `cdut@2026` 的话，
+     切到学生身份仍提示教师密码 → 照着输必然「密码不对」。 */
+  const pwd = $("#password");
+  if (pwd) pwd.placeholder = first ? first.pass : "请输入密码";
   hideError();
 }
 

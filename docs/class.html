@@ -366,7 +366,9 @@ function renderCourseLinks() {
 
 function render() {
   const students = COURSE ? enrolledStudentsOf(COURSE.id) : [];
-  const all = localStudentAccounts();
+  /* 🔴 与 `enrolledStudentsOf` / `studentsNotInCourse` 同一口径（含预置同学），
+     否则会出现「在课 5 人 > 本机学生 3 个」这种自相矛盾的统计。 */
+  const all = allStudentAccounts();
   const missing = COURSE ? studentsNotInCourse(COURSE.id) : all;
   renderHead();
   renderStats(students, all, missing);
@@ -500,7 +502,7 @@ function stuBehaviorBlock(roleUser) {
 
 /* ---------------- 点学生姓名 → 个人详情 ---------------- */
 function openStudent(user) {
-  const s = localStudentAccounts().find((x) => x.user === user);
+  const s = allStudentAccounts().find((x) => x.user === user);
   if (!s) return;
   const list = coursesOfStudent(s.key);
   const mine = COURSE ? list.find((x) => x.courseId === COURSE.id) : null;
@@ -518,7 +520,7 @@ function openStudent(user) {
       <div class="modal-body">
         <dl class="kv">
           <dt>账号</dt><dd>${escHtml(s.user)} · 学生</dd>
-          <dt>注册时间</dt><dd>${escHtml(fmtTime(s.createdAt))}</dd>
+          <dt>注册时间</dt><dd>${s.createdAt ? escHtml(fmtTime(s.createdAt)) : "预置账号"}</dd>
           ${mine ? `<dt>加入本课</dt><dd>${mine.at
             ? escHtml(fmtTime(mine.at)) + " · " + escHtml(agoText(mine.at, Date.now()))
             : "时间未记录（这条预置选课没带时间）"}</dd>` : ""}

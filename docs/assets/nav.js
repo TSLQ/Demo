@@ -50,10 +50,20 @@ var SCHOOL = "cdut";                             // 成都理工大学
 
 var ACCOUNT_KEY = "st_accounts";                 // 本地账号库
 
-/** 首次打开时自动写入的预置账号（让观众不必先注册就能进） */
+/**
+ * 首次打开时自动写入的预置账号（让观众不必先注册就能进）。
+ * 🔴 学生**不止一个**：学生发起实训要能「拉上同学一起」，
+ *    只有一个人时那块 UI 是空的（2026-11-18 用户报「实训不能拉人」）。
+ *    这几位同属 `ds` 课（`SEED_ENROLLMENTS`），所以彼此是同学。
+ * ⚠️ 账号库只在「缺这个账号」时补写（见 index.html 的 seedAccounts），
+ *    老存档也能拿到这几位，不会覆盖用户自己注册的账号。
+ */
 var SEED_ACCOUNTS = [
   { role: "teacher", user: "teacher", pass: "cdut@2026", name: "李老师" },
   { role: "student", user: "student", pass: "cs@2026",   name: "李同学" },
+  { role: "student", user: "wangxm",  pass: "cs@2026",   name: "王小明" },
+  { role: "student", user: "zhaom",   pass: "cs@2026",   name: "赵敏" },
+  { role: "student", user: "liuyang", pass: "cs@2026",   name: "刘洋" },
 ];
 
 /** 角色的默认展示名（注册新账号时若未填姓名，用它兜底） */
@@ -2751,11 +2761,19 @@ function accountNameOf(accKey) {
   try {
     const raw = JSON.parse(window.localStorage.getItem(ACCOUNT_KEY) || "[]");
     list = Array.isArray(raw) ? raw : [];
-  } catch (_) { return want; }
+  } catch (_) { list = []; }
   const hit = list.filter(function (a) {
     return a && (String(a.role || "") + ":" + String(a.user || "")).toLowerCase() === want;
   })[0];
-  return hit ? String(hit.name || hit.user).trim() : want;
+  if (hit) return String(hit.name || hit.user).trim();
+  /* 刚打开、账号库还没落盘（或用户跳过登录页直接进内容页）时，
+     预置账号只在 SEED_ACCOUNTS 里 —— 不回落的话会返回 `student:xxx` 这种键，
+     拿它去跟「一起探究的人」里的姓名比，永远比不中（被拉的人看不到）。 */
+  const seed = (SEED_ACCOUNTS || []).filter(function (a) {
+    return (String(a.role || "") + ":" + String(a.user || "")).toLowerCase() === want;
+  })[0];
+  if (seed) return String(seed.name || seed.user).trim();
+  return want;
 }
 
 /** 桶键 → 账号 key（`st_training_progress:student:zhangsan` → `student:zhangsan`） */
@@ -2852,10 +2870,17 @@ function activitiesForStudent(who) {
   const isMine = function (a) {
     return a.origin === "student" && String(a.createdBy || "").toLowerCase() === w;
   };
+  /* 「一起探究的人」里存两种写法都要认：
+       - `student:wangxm`（新写法，按账号 —— 重名、改名字都不会认错人）
+       - `王小明`（老存档，按姓名）
+     只认姓名的话，两个人同名就会互相串进来；只认账号的话，老数据全部失效。 */
   const isInvited = function (a) {
-    if (!myName) return false;
     return (a.participants || []).some(function (n) {
-      return String(n || "").trim().toLowerCase() === myName;
+      const v = String(n || "").trim().toLowerCase();
+      if (!v) return false;
+      if (v === w) return true;
+      if (v.indexOf(":") > 0) return false;          // 是别的账号的键，不按姓名比
+      return !!myName && v === myName;
     });
   };
   return Object.keys(merged).map(function (id) { return merged[id]; })
@@ -2993,7 +3018,17 @@ function createStudentActivity(data) {
   if (!opened.ok) return opened;
 
   if (Array.isArray(d.participants)) {
-    r.activity.participants = d.participants.map(function (x) { return String(x || "").trim(); }).filter(Boolean);
+    /* 项可能是账号键（`student:wangxm`）或老写法里的姓名 —— 原样保留，
+       去重按**小写比对**（`Student:WangXM` 与 `student:wangxm` 是同一个人）。 */
+    const seen = {};
+    r.activity.participants = d.participants.map(function (x) { return String(x || "").trim(); })
+      .filter(function (x) {
+        if (!x) return false;
+        const k = x.toLowerCase();
+        if (seen[k]) return false;
+        seen[k] = 1;
+        return true;
+      });
     saveActivities();
   }
 
@@ -3319,6 +3354,50 @@ function localStudentAccounts() {
 }
 
 /**
+ * 本机**所有**学生（账号库里的 + 预置里还没落盘的），去重、账号库优先。
+ * 与 `localStudentAccounts()` 的区别：
+ *   · `localStudentAccounts()` = 账号库里**真实存在**的账号（成员名单、选课口径用它）
+ *   · `allStudentAccounts()`   = 还包含预置同学 —— **「可以拉上谁」用它**
+ * 为什么要有后者：账号库只在登录页首次打开时落盘；直接进内容页 / 老存档里
+ * 可能没有预置同学，于是「拉上同学一起」一个人都列不出来（看起来就是坏的）。
+ */
+function allStudentAccounts() {
+  const seen = {};
+  const rows = [];
+  const push = function (user, name, createdAt) {
+    const u = String(user || "").trim();
+    if (!u) return;
+    const key = "student:" + u.toLowerCase();
+    if (seen[key]) return;
+    seen[key] = 1;
+    rows.push({ user: u, name: String(name || u).trim(), key: key, createdAt: Number(createdAt) || 0 });
+  };
+  localStudentAccounts().forEach(function (s) { push(s.user, s.name, s.createdAt); });
+  (SEED_ACCOUNTS || []).forEach(function (a) {
+    if (!a || a.role !== "student") return;
+    push(a.user, a.name, 0);
+  });
+  /* 账号库里已有的名字更可信（用户可能改过名）→ 先按 createdAt 排，预置的排后面 */
+  return rows.sort(function (a, b) {
+    if (a.createdAt && b.createdAt) return a.createdAt - b.createdAt;
+    if (a.createdAt) return -1;
+    if (b.createdAt) return 1;
+    return 0;
+  });
+}
+
+/**
+ * 「一起探究的人」里的项 → 给人看的名字。
+ * 兼容两种写法：`student:wangxm`（账号）与 `王小明`（老存档里的姓名）。
+ */
+function participantLabel(x) {
+  const v = String(x || "").trim();
+  if (!v) return "";
+  if (v.indexOf(":") > 0) return accountNameOf(v) || v;
+  return v;
+}
+
+/**
  * 某个**学生账号**的选课表（按账号分桶读）。
  * ⚠️ 预置账号没写过存档（种子只在内存里）→ 回落 `SEED_ENROLLMENTS`，
  *    否则教师端会看到"李同学不在数据结构课里"，与学生的实际界面自相矛盾。
@@ -3340,7 +3419,7 @@ function enrolledStudentsOf(courseId) {
   const id = String(courseId || "").trim();
   if (!id) return [];
   const out = [];
-  localStudentAccounts().forEach(function (s) {
+  allStudentAccounts().forEach(function (s) {
     const hit = enrollmentsOfStudent(s.key).filter(function (e) { return e.courseId === id; })[0];
     if (hit) {
       out.push({
@@ -3356,7 +3435,7 @@ function enrolledStudentsOf(courseId) {
 function studentsNotInCourse(courseId) {
   const inIt = {};
   enrolledStudentsOf(courseId).forEach(function (s) { inIt[s.user.toLowerCase()] = 1; });
-  return localStudentAccounts().filter(function (s) { return !inIt[s.user.toLowerCase()]; });
+  return allStudentAccounts().filter(function (s) { return !inIt[s.user.toLowerCase()]; });
 }
 
 /** 某个学生在本机加入的全部课堂（点学生看详情时用） */
@@ -3913,6 +3992,140 @@ var SKILL_KIND = {
 };
 
 /* ------------------------------------------------------------
+   ①b 通用对话的「地面」（第 68 轮）
+   ------------------------------------------------------------
+   🔴 为什么要有这一层：`sys-chat` 之前**根本不存在** —— 用户问一句普通问题
+      （「什么是快速排序」），一条技能都没命中，`runnableIds` 就把全部系统技能
+      兜底跑一遍，于是回了「应用地图 + 数据边界」两段与问题无关的说明，
+      而且**一个请求都没发**。页面标题写着「AI 助手」，实际不会说话。
+   · 这里只负责「给模型多少真材料」：本课课件段落、我的画像、教师端的课程规模。
+   · 材料一律来自存档，**不编**；找不到就返回空串，让模型自己说「课件里没写」。
+   ============================================================ */
+
+/** 按问题挑课件段落：命中关键词的排前面，全不命中给开头几段（与答疑页同一套口径） */
+function chatPickSections(cws, q, maxSeg, cap) {
+  const segs = [];
+  (cws || []).forEach(function (cw) {
+    (cwSections(cw) || []).forEach(function (body, i) {
+      segs.push({ cw: String(cw.title || "课件"), idx: i + 1, body: body });
+    });
+  });
+  if (!segs.length) return [];
+  const keys = String(q || "").split(/[\s，。？！、,.?!:：;；()（）]+/)
+    .filter(function (w) { return w.length >= 2; });
+  const scored = segs.map(function (s) {
+    let n = 0;
+    keys.forEach(function (k) { if (s.body.indexOf(k) >= 0) n += k.length; });
+    return { s: s, n: n };
+  });
+  const hit = scored.filter(function (x) { return x.n > 0; })
+    .sort(function (a, b) { return b.n - a.n; });
+  const list = (hit.length ? hit : scored.slice(0, maxSeg)).slice(0, maxSeg);
+  let used = 0;
+  const out = [];
+  list.forEach(function (x) {
+    if (used >= cap) return;
+    const room = cap - used;
+    const body = x.s.body.length > room ? x.s.body.slice(0, room) + "…" : x.s.body;
+    used += body.length;
+    out.push("〔" + x.s.cw + " · 第 " + x.s.idx + " 段〕\n" + body);
+  });
+  return out;
+}
+
+/** 通用对话的上下文块：只有真材料，没有真材料就空着 */
+function chatGrounding(role, q, ctx) {
+  const o = ctx || {};
+  const isStudent = role === "student";
+  const parts = [];
+
+  if (isStudent) {
+    const mine = (typeof ENROLLED !== "undefined" && ENROLLED) ? ENROLLED : [];
+    parts.push("【我（学生）在学的课】" +
+      (mine.length ? mine.map(function (c) { return c.name || c.courseId; }).join("、") : "还没加入任何课堂"));
+
+    const who = (typeof currentUserKey === "function") ? currentUserKey() : "";
+    let cws = [];
+    try { cws = (typeof cwsForStudent === "function") ? cwsForStudent(who) : []; } catch (_) { cws = []; }
+    parts.push("【老师发给我的课件】" + (cws.length ? cws.length + " 份" : "还没有"));
+
+    const segs = chatPickSections(cws, q, 6, 2600);
+    if (segs.length) parts.push("【课件原文（可以引用，但别大段抄）】\n" + segs.join("\n\n"));
+
+    let prof = null;
+    try {
+      prof = behaviorProfile((typeof BEHAVIOR !== "undefined") ? BEHAVIOR : [], Date.now());
+    } catch (_) { prof = null; }
+    if (prof && prof.total) {
+      parts.push("【我的学习记录】共 " + prof.total + " 条；已标「懂了」的：" +
+        (prof.known.length ? prof.known.slice(0, 6).map(function (k) { return k.topic; }).join("、") : "还没有") +
+        "；反复卡住的：" +
+        (prof.gaps.length ? prof.gaps.slice(0, 6).map(function (g) { return g.topic; }).join("、") : "没有"));
+    }
+  } else {
+    const cs = (typeof COURSES !== "undefined" && COURSES) ? COURSES : [];
+    parts.push("【我（教师）的课程】" + (cs.length
+      ? cs.map(function (c) { return c.name + (c.code ? "（" + c.code + "）" : ""); }).join("、")
+      : "还没有建课程"));
+    let sylN = 0, lesN = 0;
+    try {
+      cs.forEach(function (c) {
+        const syl = (typeof syllabusOf === "function") ? syllabusOf(c.id) : null;
+        const chs = (syl && typeof syllabusChapters === "function") ? syllabusChapters(syl) : [];
+        sylN += chs.length;
+        chs.forEach(function (ch) { lesN += (lessonsOfChapter(ch) || []).length; });
+      });
+    } catch (_) { /* 数不出来就不写这一行，别猜 */ }
+    if (cs.length) parts.push("【规模】大纲共 " + sylN + " 章、" + lesN + " 份课时教案（这两项是数出来的）");
+    let stuN = 0;
+    try { stuN = (typeof localStudentAccounts === "function") ? localStudentAccounts().length : 0; } catch (_) { stuN = 0; }
+    parts.push("【学生账号】" + stuN + " 个");
+  }
+  if (o.courseId) parts.push("【当前正在看的课程 ID】" + o.courseId);
+  return parts.filter(Boolean).join("\n\n");
+}
+
+/** 通用对话的系统提示词：按角色分，口径与「AI 答疑」一致（不确定就说不确定） */
+function sysChatPrompt(role) {
+  const common = "回答用中文 Markdown：结论先说，再给理由或步骤；能用一个小例子就用。" +
+    "不要写「作为 AI」「很高兴为您服务」这类客套。不要复述我给你的材料原文。";
+  if (role === "student") {
+    return "你是这位计算机专业学生的学习助手。你能看到 TA 在学的课、老师发下来的课件原文、" +
+      "以及 TA 自己的提问与「懂了」记录（都在下面）。\n" +
+      "规则：\n" +
+      "1. 课件里写了的，按课件的口径讲（与老师保持一致）；课件里没写的，直接说「课件里没有」再按通用知识补，**别假装课件里有**。\n" +
+      "2. 不要替 TA 把作业/考试题直接做出来当答案 —— 给思路、给下一步，让 TA 自己写。\n" +
+      "3. 涉及 TA 的学习进度、薄弱点，只用下面给的真实记录，不要编数字。\n" +
+      common;
+  }
+  return "你是这位高校教师的助教，熟悉 TA 自己的课程、大纲与教案规模（都在下面）。\n" +
+    "规则：\n" +
+    "1. 只依据下面给的真实数据说事；数据里没有的（学生成绩、到课率、往年通过率等）直接说「这个数据本版没有」。\n" +
+    "2. 需要成文的重活（写教案、出题、评分）提醒 TA 用对应的技能页 —— 那里会走专门的提示词与审核流程。\n" +
+    "3. 不要编造课程名、章节名、人名。\n" +
+    common;
+}
+
+/**
+ * 这次「有没有被点名」—— 决定要不要走通用对话（`sys-chat`）。
+ * ------------------------------------------------------------
+ * · 原子层 / 群组层命中一条就算点名（它们是具体的活，关键词本来就很窄）
+ * · 系统层要求**分数 ≥ 4**：`数据`、`在哪儿`、`功能` 这种两字泛词太容易误伤 ——
+ *   「给我出三道数据结构题」会因为「数据」两个字命中「数据边界」，
+ *   于是回一段「这些数是怎么来的」，而「出题」根本没被挂上。
+ * 🔴 这条判据只影响"该不该说话"，不改任何技能自己的命中结果。
+ */
+function chatShouldAnswer(chain) {
+  return !(chain || []).some(function (s) {
+    if (!(s.hit || []).length) return false;
+    // 只有「流程说明」没有执行器的技能（多数群组场景项）不产结果 —— 它不算有人接话
+    if (typeof s.run !== "function" && !(typeof SKILL_RUNNERS !== "undefined" && SKILL_RUNNERS[s.id])) return false;
+    if (s.layer !== "system") return true;
+    return (s.score || 0) >= 4;
+  });
+}
+
+/* ------------------------------------------------------------
    ① 系统层：怎么用这个应用（always）
    ============================================================ */
 
@@ -3923,7 +4136,9 @@ var SYSTEM_SKILLS = [
     name: "应用地图",
     desc: "这个应用有哪些页、切页是怎么发生的、当前角色能走到哪儿",
     when: "用户问「这个功能在哪」「去哪儿做 X」「你能做什么」时",
-    keys: ["怎么用", "在哪", "哪个页", "哪个页面", "功能", "能做", "不能做", "导航", "干什么", "帮忙", "助手"],
+    // ⚠️ 「能做什么」「做什么」是**四字键**：通用对话的判据要求系统层得分 ≥ 4，
+    //    只写「能做」(2 分) 的话，「你能做什么」会被当成普通问题交给模型 —— 而这张地图是现成的。
+    keys: ["怎么用", "在哪", "哪个页", "哪个页面", "功能", "能做什么", "做什么", "不能做", "导航", "干什么", "帮忙", "助手"],
     steps: [{ name: "读取当前角色的菜单", arg: "source=NAV[角色]" }],
     run: function (p, ctx) {
       const role = ctx.role === "student" ? "student" : "teacher";
@@ -4034,6 +4249,54 @@ var SYSTEM_SKILLS = [
         ok: true, title: "画像跟进", lines: lines,
         note: "它勾着的时候每次对话都跑一次（这就是「勾选 = 100% 触发」）；改了什么都写在这里，右栏的磨合记录里也留一份。" +
           "只动讲法（开口 / 步子 / 常用 / 避免 / 已知与卡点），**不动技能本身的定义** —— 自动改技能比不改危险。",
+      };
+    },
+  },
+  {
+    /* 🔴 这条是「AI 助手」会说话的地方，别删。`fallbackOnly` = 只在**没有任何技能被点名**
+       时才跑（见 runnableIds）—— 点了「校对」就不该再让通用对话抢一遍。 */
+    id: "sys-chat", layer: "system", always: true, fallbackOnly: true, kind: "read",
+    role: ["teacher", "student"],
+    name: "直接回答",
+    desc: "问题不属于任何一条具体技能时，读着本课课件与我的记录现场作答",
+    when: "问知识、问概念、问「为什么」这类没有对应技能的普通问题时（它不看关键词，是兜底）",
+    keys: [],
+    steps: [
+      { name: "读当前课程与我的记录", arg: "source=ENROLLED+BEHAVIOR+CWS" },
+      { name: "按问题挑课件段落", arg: "pick=关键词命中优先" },
+      { name: "组织回答", arg: "model=当前配置" },
+    ],
+    run: function (p, ctx) {
+      const o = ctx || {};
+      const role = o.role === "student" ? "student" : "teacher";
+      const q = String(p.ask || p.text || "").trim();
+      if (!q) return { ok: true, title: "直接回答", lines: ["说一句你想问的。"] };
+
+      const ground = chatGrounding(role, q, o);
+      const userBlock = (ground ? ground + "\n\n" : "") + "【我的问题】\n" + q;
+
+      const ai = aiRunner(sysChatPrompt(role), userBlock, function (raw) {
+        return {
+          ok: true, title: "回答", lines: mdLines(raw),
+          note: "这是按你当前的课程与本课课件答的。",
+        };
+      }, { maxTokens: 1800, temperature: 0.5 });
+
+      if (ai) return ai;
+
+      /* 没接模型：如实说，并且**不编答案**（与答疑页同一条红线） */
+      return {
+        ok: true, title: "还没接模型，这问我答不了",
+        lines: [
+          "这句话不属于下面任何一条具体技能，得靠模型现场想 —— 而现在**没有接入模型**。",
+          "",
+          "去「设置 → 模型接入」选一个服务商（DeepSeek / 通义 / 智谱）填上自己的 API Key，" +
+            "或者选「自定义接口」填地址与模型名（本地 Ollama 这类不填 Key 也能用），回来再问一次。",
+          "",
+          "**接了之后我能做的**：按你本课的课件讲概念、顺着你已经懂的往下推、指出你反复卡住的地方该补什么。",
+          "现在也可以直接点左栏里那些**不需要模型**的技能（技能树里标着「只读」的），它们会立刻出结果。",
+        ],
+        note: "我没有拿预置的句子糊弄你 —— 这条提示就是全部内容。",
       };
     },
   },
@@ -4336,7 +4599,10 @@ var ATOMIC_SKILLS = [
     name: "出题",
     desc: "按范围列题位与难度分布，成卷与发布仍在「出题与组卷」页审核",
     when: "用户说「出题」「来几道题」时",
-    keys: ["出题", "道题", "一道题", "几道题", "来几道", "题目", "自测题", "练习题", "做题", "考考"],
+    // ⚠️ 数字量词要单列：「给我出三道数据结构题」里**没有**连续的「道题」两个字
+    //    （是「三道」+「数据结构」+「题」），只写「道题」就漏了最常见的说法。
+    keys: ["出题", "道题", "一道题", "几道题", "来几道", "出一道", "出几道", "三道", "两道", "四道", "五道", "几道",
+      "题目", "自测题", "练习题", "做题", "考考"],
     steps: [
       { name: "圈定范围与题量", arg: "source=你说的话" },
       { name: "列题位与考点来源", arg: "mode=题位表" },
@@ -4499,8 +4765,23 @@ function routeSkills(text, opts) {
   }).map(function (s) { return { id: s.id, name: s.name, layer: s.layer }; });
 
   const chain = system.concat(groups, atomic);
+  /* 🔴 让「挂了哪些」等于「真会跑哪些」：
+     · `fallbackOnly`（目前只有 sys-chat）：只在一条都没点名时才算挂上。被点名了还列着，
+       界面会写着「直接回答」却没回答 —— 那是假的。
+     · 走通用对话时，「应用地图 / 数据边界」不跑（它们只答"这个应用怎么用/数据哪来的"），
+       就别再摆在链里充数；`alwaysRun` 的（画像跟进）本来就每次都跑，留着。 */
+  const wantChat = chatShouldAnswer(chain);
+  const keep = chain.filter(function (s) {
+    if (s.fallbackOnly) return wantChat;
+    if (wantChat && s.layer === "system" && !s.alwaysRun) return false;
+    return true;
+  });
   return {
-    role: role, query: q, system: system, group: groups, atomic: atomic, chain: chain,
+    role: role, query: q,
+    system: keep.filter(function (s) { return s.layer === "system"; }),
+    group: keep.filter(function (s) { return s.layer === "group"; }),
+    atomic: keep.filter(function (s) { return s.layer === "atomic"; }),
+    chain: keep,
     offHit: offHit, offCount: disabledSkillCount(role),
   };
 }
@@ -4694,6 +4975,28 @@ function noKeyNote() {
 /** 把模型返回的 Markdown 拆成行数组 —— 与 `renderLines()` 的输入形状一致 */
 function mdLines(raw) {
   return String(raw == null ? "" : raw).replace(/\r\n?/g, "\n").split("\n");
+}
+
+/**
+ * 用户**直接打在输入框里**的材料（第 68 轮）。
+ * ------------------------------------------------------------
+ * 为什么会缺这一块：两个助手页只把原话放进 `payload.ask`（给「画图」看原话用），
+ * 从来不动 `payload.text` —— 于是「帮我校对这段：……」路由到「校对」之后，
+ * 校对拿到的是空串，回一句「没有拿到要校对的内容」，用户刚粘的那段被丢掉。
+ * 🔴 不能直接把原话塞进 `text`：`text` 是"材料"的口径（来自卡片 / 任务交接），
+ *    塞进「帮我校对这段」这几个字会被当成正文去查错别字。
+ * 所以这里只做一件事：**指令前缀 → 材料**。取不到像样的材料就返回空串，
+ * 让技能继续走原来那条「没拿到内容」的如实提示，而不是拿一句指令当正文。
+ */
+function agentMaterial(t) {
+  const s = String(t == null ? "" : t).trim();
+  if (!s) return "";
+  // 「帮我校对这段：<材料>」/「自查一下：<材料>」→ 冒号后面才是材料
+  const m = /^[^：:\n]{0,24}[：:]\s*([\s\S]+)$/.exec(s);
+  const body = m ? m[1].trim() : "";
+  if (body.length >= 12) return body;
+  // 没写指令、直接把一整段粘进来（够长就当材料，太短多半只是问句）
+  return s.length >= 40 ? s : "";
 }
 
 /**
@@ -5010,7 +5313,7 @@ var SKILL_RUNNERS = {
 
   /* ---------- 课表：文本转标准格式 ---------- */
   "atom-text-to-table": function (p, ctx) {
-    const parsed = parseScheduleText(p.text || "");
+    const parsed = parseScheduleText(p.text || p.material || "");
     const lines = [];
     if (!parsed.total) {
       return { ok: true, title: "文本转表格", lines: ["你还没有粘课表内容 —— 把教务系统里那段课表原样贴进来就行，什么排版都行。"] };
@@ -5054,7 +5357,7 @@ var SKILL_RUNNERS = {
     if (parsed.bad.length || (!parsed.rows.length && !parsed.grid.length)) {
       const ai = aiRunner(
         (p.prompt && String(p.prompt).trim()) || AI_SYS["schedule-parse"],
-        String(p.text || "") + (parsed.bad.length
+        String(p.text || p.material || "") + (parsed.bad.length
           ? "\n\n（以下几行规则没认出来，请重点处理）\n" + parsed.bad.join("\n") : ""),
         function (raw) {
           return {
@@ -5070,28 +5373,58 @@ var SKILL_RUNNERS = {
 
   /* ---------- 校对 ---------- */
   "atom-proofread": function (p) {
-    const text = p.text || p.lesson || "";
+    const text = p.text || p.material || p.lesson || "";
     const hits = lintText(text);
     const lines = [];
     if (!String(text).trim()) return { ok: true, title: "校对", lines: ["没有拿到要校对的内容。"] };
     const nWarn = hits.filter(function (h) { return h.level === "warn"; }).length;
     lines.push("扫了 " + String(text).split("\n").length + " 行，发现 **" + hits.length + " 处**" +
       (nWarn ? "（其中 " + nWarn + " 处建议改）" : "") + "。");
-    if (!hits.length) return { ok: true, title: "校对", lines: lines.concat(["标点、空格、术语都没查出问题。"]) };
-    lines.push("");
-    hits.slice(0, 14).forEach(function (h) {
-      lines.push("- " + (h.line ? "第 " + h.line + " 行：" : "全文：") + h.text);
-    });
-    if (hits.length > 14) lines.push("- …还有 " + (hits.length - 14) + " 处");
-    return {
+    if (!hits.length) lines.push("标点、空格、术语都没查出问题。");
+    else {
+      lines.push("");
+      hits.slice(0, 14).forEach(function (h) {
+        lines.push("- " + (h.line ? "第 " + h.line + " 行：" : "全文：") + h.text);
+      });
+      if (hits.length > 14) lines.push("- …还有 " + (hits.length - 14) + " 处");
+    }
+    const rule = {
       ok: true, title: "校对", lines: lines,
-      note: "规则只能查形式问题（标点、空格、术语一致）。**语句是否通顺、表达是否准确**要看内容，配了 Key 我可以逐句过一遍。",
+      note: "规则只能查**形式**问题（标点、空格、术语一致）。语句通不通、表达准不准它看不出来。",
     };
+
+    /* 第 68 轮：这句「配了 Key 我可以逐句过一遍」以前是**空头承诺** —— 根本没有这条调用。
+       现在真有：接了模型就把原文交给它逐句看，规则结果留在上面，模型结果接在下面。 */
+    const ai = aiRunner(
+      "你是中文技术文档的校对员。逐句看下面的文字，只挑**真问题**：语句不通、用词不当、" +
+      "指代不清、逻辑跳跃、术语前后不一致、明显的知识性错误。\n" +
+      "输出 Markdown 列表，每条写成 `- 「原句」→ 问题是什么 → 怎么改`。\n" +
+      "最多 8 条，按严重程度排；**没有真问题就直说「没发现语句层面的问题」**，不要凑数、不要改文风。",
+      String(text),
+      function (raw) {
+        return {
+          ok: true, title: "逐句校对（模型）", lines: mdLines(raw),
+          note: "上面这几条是模型逐句读出来的 —— 改不改你定，它只挑问题不动原文。",
+        };
+      }, { maxTokens: 1400, temperature: 0.2 });
+
+    if (!ai) return rule;
+    return ai.then(function (res) {
+      if (!res || !res.ok) {
+        rule.lines.push("", "**逐句校对没跑起来**：" + ((res && res.error) || "未知原因") + " —— 上面的规则检查仍然有效。");
+        return rule;
+      }
+      return {
+        ok: true, title: "校对（规则 + 逐句）",
+        lines: rule.lines.concat(["", "---", ""], res.lines),
+        note: "上半段是规则查出来的**形式**问题（确定性判断）；下半段是模型逐句读出来的**表达**问题（仅供参考）。",
+      };
+    });
   },
 
   /* ---------- 教案自查：规则先查能确定的，量表评分交给模型 ---------- */
   "atom-lesson-check": function (p) {
-    const text = String(p.text || "").trim();
+    const text = String(p.text || p.material || "").trim();
     const les = parseLessonText(text);
     const r = lintLesson(les);
     const lines = ["解析出 " + (les.sections.length || 0) + " 个小节：" +
@@ -5218,7 +5551,7 @@ var SKILL_RUNNERS = {
       : "";
     const ai = aiRunner(
       (p.prompt && String(p.prompt).trim()) || AI_SYS["lesson-improve"],
-      String(p.text || "") + reflBlock,
+      String(p.text || p.material || "") + reflBlock,
       function (raw) {
         return {
           ok: true, title: "教案改进（模型建议）", lines: mdLines(raw),
@@ -5230,7 +5563,7 @@ var SKILL_RUNNERS = {
 
   /* ---------- 版本差异解读 ---------- */
   "atom-diff-explain": function (p) {
-    const groups = parseDiffText(p.text || "");
+    const groups = parseDiffText(p.text || p.material || "");
     const lines = [];
     if (!groups.length) {
       return { ok: true, title: "版本差异解读", lines: ["这两版之间**没有实质性差异**（看到的都是相同的行）。"] };
@@ -5310,7 +5643,7 @@ var SKILL_RUNNERS = {
     const quizTypes = (typeof EXAM_QTYPES !== "undefined" && EXAM_QTYPES.length)
       ? EXAM_QTYPES.map(function (t) { return t.label; })
       : ["单选", "多选", "填空", "简答"];
-    const lines = ["按你说的量（**" + n + " 题**）先排一张**题位表** —— 题目正文要么你自己出，要么配 Key 让我出：",
+    const lines = ["按你说的量（**" + n + " 题**）排一张**题位表**：",
       "", "| # | 题型 | 考点来源 | 难度 |", "|---|---|---|---|"];
     for (let i = 1; i <= Math.min(n, 12); i++) {
       const src = points.length ? points[(i - 1) % points.length] : "（先圈章节，我才能定考点）";
@@ -5319,16 +5652,56 @@ var SKILL_RUNNERS = {
       lines.push("| " + i + " | " + type + " | " + src + " | " + diff + " |");
     }
     lines.push("", "难度按「基础 40% / 中等 40% / 综合 20%」铺 —— 这个配比是我按常见教学节奏给的默认值，你可以直接让我改。");
-    return {
+    const rule = {
       ok: true, title: "出题", lines: lines,
-      note: "🔴 我**不会**直接把卷子发出去：成卷与发布都在「出题与组卷」页，那里要你逐题审核。" +
-        (hasApiKey() ? "" : " " + noKeyNote()),
+      note: "🔴 上面只是**题位表**（题号 / 题型 / 考点 / 难度），正文一个字都没有。" +
+        "我**不会**直接把卷子发出去：成卷与发布都在「出题与组卷」页，那里要你逐题审核。",
     };
+
+    /* 第 68 轮：note 里以前写着「配 Key 让我出」，但根本没有这条调用 —— 又一处空头承诺。
+       现在真有：接了模型就按这张题位表把题目正文写出来，但仍然**不落库、不发布**。 */
+    const ai = aiRunner(
+      "你是高校计算机课程的出题老师。按我给的范围与题位表，写出题目正文。\n" +
+      "输出 Markdown，每题一个小节，严格照这个形状：\n" +
+      "### 第 N 题（题型）\n题干\nA. … B. … C. … D. …（选择题才写选项）\n**答案：** …\n**解析：** 一到两句\n\n" +
+      "要求：紧扣我给的考点，**不要超纲**；单选题四个选项只能有一个正确；填空的答案用 `||` 分隔多个可接受写法；" +
+      "简答题给出评分要点（2–3 点）。不要编号乱序，不要输出题目以外的说明。",
+      [
+        "题量：" + Math.min(n, 12) + " 道",
+        "考点：" + (points.length ? points.join("、") : "（没给，按通用计算机基础课的重点出）"),
+        "难度配比：基础 40% / 中等 40% / 综合 20%",
+        "可用题型：" + quizTypes.join(" / ") + "（按这个顺序轮换）",
+      ].join("\n"),
+      function (raw) {
+        return {
+          ok: true, title: "题目正文（模型）", lines: mdLines(raw),
+          note: "⚠️ 上面是模型写的题，**还没进任何卷子**。要采用：去「出题与组卷」页逐题审核，" +
+            "没采纳的题不会进卷，发布的动作也在那里。",
+        };
+      }, { maxTokens: 4000, temperature: 0.6 });
+
+    if (!ai) {
+      rule.note = "题目正文我**没有替你编** —— 要么你自己出，要么接一个模型让我出。" +
+        " 设置 → 模型接入，填上 Key 回来再说一次「出几道题」，正文就在这里写出来。" + noKeyNote();
+      return rule;
+    }
+    return ai.then(function (res) {
+      if (!res || !res.ok) {
+        rule.lines.push("", "**题目正文没写出来**：" + ((res && res.error) || "未知原因") + " —— 题位表仍然可以用。");
+        return rule;
+      }
+      return {
+        ok: true, title: "出题（题位表 + 正文）",
+        lines: rule.lines.concat(["", "---", ""], res.lines),
+        note: res.note,
+      };
+    });
   },
 
   /* ---------- 评分标准 ---------- */
   "atom-rubric": function (p) {
-    const les = parseLessonText(p.text || "");
+    const raw = String(p.text || p.material || "");
+    const les = parseLessonText(raw);
     const dims = [];
     (les.keyPoints || []).slice(0, 3).forEach(function (k) { dims.push(k); });
     (les.hardPoints || []).slice(0, 2).forEach(function (h) { dims.push(h); });
@@ -5338,8 +5711,42 @@ var SKILL_RUNNERS = {
     dims.forEach(function (d) {
       lines.push("| " + d + " | 能自己说清并能举例 | 照着板书能复述 | 说不清，需要重讲 |");
     });
-    lines.push("", "分档的**措辞**是通用模板 —— 我可以按你的课改成更具体的判分点。");
-    return { ok: true, title: "评分标准", lines: lines, note: hasApiKey() ? "" : noKeyNote() };
+    const rule = {
+      ok: true, title: "评分标准", lines: lines,
+      note: "「优秀 / 合格 / 待改进」的**措辞是通用模板** —— 它没读过你的课，只能给到这个粒度。",
+    };
+
+    /* 第 68 轮：这句「我可以按你的课改成更具体的判分点」以前也是空头承诺。 */
+    const ai = aiRunner(
+      "你是这门课的任课教师，正在写评分标准（rubric）。按我给的教学重点与难点，" +
+      "写出**能直接用来判分**的四档描述。\n" +
+      "输出 Markdown：一条 4 列表格 `| 维度 | 优秀(2) | 合格(1) | 待改进(0) |`，3–5 个维度。" +
+      "每格的描述必须落到**可观察的行为**（能自己推出什么 / 能写出什么 / 会漏掉哪一步），" +
+      "不要写「掌握较好」「理解不深」这类无法判分的空话。",
+      (raw || dims.join("、")),
+      function (raw) {
+        return {
+          ok: true, title: "评分标准（模型）", lines: mdLines(raw),
+          note: "上面是按这节课的重点难点写的四档判分点 —— 比通用模板具体，但发之前自己再核一遍。",
+        };
+      }, { maxTokens: 1400, temperature: 0.3 });
+
+    if (!ai) {
+      rule.note = "要按**你自己这门课**写具体判分点，得接一个模型（它得读教案）。" +
+        " 设置 → 模型接入，填上 Key 回来说「按这节课出评分标准」，我再按四档重写。" + noKeyNote();
+      return rule;
+    }
+    return ai.then(function (res) {
+      if (!res || !res.ok) {
+        rule.lines.push("", "**按课定制没跑起来**：" + ((res && res.error) || "未知原因") + " —— 上面的通用模板仍然能用。");
+        return rule;
+      }
+      return {
+        ok: true, title: "评分标准（按本课定制）",
+        lines: rule.lines.concat(["", "---", ""], res.lines),
+        note: res.note,
+      };
+    });
   },
 
   /* ---------- 定位薄弱（学生端） ---------- */
@@ -6558,8 +6965,20 @@ function runnableIds(route) {
   const runnable = ((route && route.chain) || []).filter(function (s) {
     return typeof s.run === "function" || !!SKILL_RUNNERS[s.id];
   });
+
+  /* 🔴 第 68 轮：`sys-chat` 只在**没有任何技能被点名**时才跑。
+     判据是「有没有真命中」（`hit` 非空），不是「有没有挂」——
+     群组层那条"按当前课堂选中"的兜底项 hit 是空的，它不算被点名。
+     以前这里没有 sys-chat，于是普通问题会掉进 `if (!ids.length)` 的全量兜底，
+     结果回了「应用地图 + 数据边界」，一个请求都没发。 */
+  const wantChat = chatShouldAnswer(runnable) && runnable.some(function (s) { return s.id === "sys-chat"; });
+
   let ids = runnable.filter(function (s) {
-    return s.layer !== "system" || s.alwaysRun || (s.hit || []).length > 0;
+    if (s.id === "sys-chat") return wantChat;
+    if (s.layer !== "system") return true;
+    // 走通用对话时不再顺带跑「应用地图 / 数据边界」—— 那两段与问题无关，只会稀释回答
+    if (wantChat) return !!s.alwaysRun;
+    return s.alwaysRun || (s.hit || []).length > 0;
   }).map(function (s) { return s.id; });
   if (!ids.length) ids = runnable.map(function (s) { return s.id; });
   return ids;
@@ -7800,18 +8219,26 @@ function sendSimTo(id, whoList) {
  */
 function bucketKeys(baseKey, currentKey) {
   var keys = [baseKey];
+  var seen = {}, out = [];
+  var add = function (role, user) {
+    if (!role || !user) return;
+    var base = role + ":" + String(user);
+    keys.push(baseKey + ":" + base);
+    keys.push(baseKey + ":" + base.toLowerCase());
+  };
   try {
     var list = JSON.parse(window.localStorage.getItem(ACCOUNT_KEY) || "[]");
     (Array.isArray(list) ? list : []).forEach(function (a) {
-      if (a && a.role && a.user) {
-        var base = a.role + ":" + String(a.user);
-        keys.push(baseKey + ":" + base);
-        keys.push(baseKey + ":" + base.toLowerCase());
-      }
+      if (a && a.role && a.user) add(a.role, a.user);
     });
   } catch (_) { /* 账号库读不出来 → 至少还有全局桶 */ }
+  /* 🔴 预置账号也要推：跳过登录页直接进内容页时，`st_accounts` 可能是空的，
+     而「被拉进一起探究的同学」正是预置账号 —— 不推就读不到他的桶，
+     看起来就是「拉了他却一直看不到」。 */
+  (SEED_ACCOUNTS || []).forEach(function (a) {
+    if (a && a.role && a.user) add(a.role, a.user);
+  });
   if (currentKey) keys.push(currentKey);
-  var seen = {}, out = [];
   keys.forEach(function (k) { if (k && !seen[k]) { seen[k] = 1; out.push(k); } });
   return out;
 }

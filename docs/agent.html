@@ -861,6 +861,10 @@ function handle(text, forced) {
   const payload = Object.assign({}, (forced && forced.payload) || {});
   // 画图这类技能要看原话；用 `ask` 单独给，**不复用 `text`**（会改掉「校对」的取数口径）
   payload.ask = t;
+  // 🔴 但「帮我校对这段：……」里冒号后面那段**是材料** —— 只进 ask 的话，
+  //    校对/教案自查这些读 `text` 的技能会回「没拿到内容」，用户刚粘的那段白粘了。
+  //    交给 nav.js 的 agentMaterial() 判（取不到像样的材料就返回空串，保持原行为）。
+  if (typeof agentMaterial === "function") payload.material = agentMaterial(t);
   const steps = planFromChain(runChain, Object.assign({}, ctx, { chain: runChain }));
 
   // 🔴 顺序（第 62 轮）：**先跑技能，再落动作链**。

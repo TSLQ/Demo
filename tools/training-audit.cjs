@@ -712,6 +712,59 @@ sec("【D】跨账号数据完整性 · 活动 id 唯一 + 学生自发不外泄
     ? P("D8 被拉进「一起探究」的同学看得到这条（拉人是真的）")
     : F("D8 被拉进来的同学也看不到，拉人等于摆设");
 
+  /* ⑦ 「拉上同学一起」在默认存档下必须真的有人可选 —— 用户 2026-11-18 报「实训不能拉人」：
+        预置只有一个学生 → 排除自己后是空 → 整块 UI 都不渲染。 */
+  const pool = JSON.parse(ws.eval("JSON.stringify(allStudentAccounts())"));
+  pool.length >= 4
+    ? P("D9 本机学生池不止自己一个（可拉的同学 " + (pool.length - 1) + " 位）")
+    : F("D9 学生池只有 " + pool.length + " 个，发起实训时没人可拉");
+
+  /* ⑧ 按**账号键**拉人：被拉的人看得到、自己看得到、没被拉的人看不到 */
+  const inv = JSON.parse(ws.eval("JSON.stringify(createStudentActivity({goal:'一起看归并的分治',participants:['student:wangxm']}))"));
+  inv.ok ? P("D10 能带上同学发起（participants 存账号键）") : F("D10 带同学发起失败: " + inv.error);
+  ws.localStorage.setItem("st_accounts", JSON.stringify(
+    JSON.parse(ws.localStorage.getItem("st_accounts")).concat([{ role: "student", user: "wangxm", pass: "x", name: "王小明", createdAt: 4 }])
+  ));
+  ws.eval("activitiesForStudent('student:wangxm').some(function(a){return a.id==='" + inv.activity.id + "';})") === true
+    ? P("D10 被拉进来的王小明看得到这条（按账号键认人）")
+    : F("D10 按账号键拉人失效 —— 被拉的看不到");
+  ws.eval("activitiesForStudent('student:zhangsan').some(function(a){return a.id==='" + inv.activity.id + "';})") === false
+    ? P("D10 没被拉的人看不到（不串班）")
+    : F("D10 没被拉的人也看到了");
+  ws.eval("activitiesForStudent('student:student').some(function(a){return a.id==='" + inv.activity.id + "';})") === true
+    ? P("D10 发起人自己看得到")
+    : F("D10 发起人自己反而看不到");
+
+  /* ⑨ 账号键要能显示成姓名（不能把 student:wangxm 直接贴给人看） */
+  ws.eval("participantLabel('student:wangxm')") === "王小明" &&
+  ws.eval("participantLabel('李同学')") === "李同学"
+    ? P("D11 「一起探究的人」显示姓名，老存档里的姓名也照旧")
+    : F("D11 参与者显示不对: " + ws.eval("participantLabel('student:wangxm')"));
+
+  /* ⑩ 弹窗里真有这块 UI（不是只有数据层能拉人） */
+  {
+    const dsUi = load("training-student.html", {
+      role: "student",
+      ls: { st_accounts: ACC2, st_current_user: "student:student" },
+    });
+    await settle(dsUi);
+    const wUi = dsUi.window, dUi = wUi.document;
+    click(wUi, dUi.getElementById("btnNewAct"));
+    await settle(dsUi);
+    const picks = dUi.querySelectorAll(".pick-list input[type=checkbox]");
+    picks.length >= 3
+      ? P("D12 发起弹窗里列出了可拉的同学（" + picks.length + " 位）")
+      : F("D12 弹窗里没有可拉的同学（只有 " + picks.length + " 个）");
+    const firstVal = picks.length ? String(picks[0].value) : "";
+    /^student:/.test(firstVal)
+      ? P("D12 勾选项带的是账号键（重名也不会认错人）")
+      : F("D12 勾选项的值不是账号键: " + firstVal);
+    !/（同学）/.test(dUi.body.textContent)
+      ? P("D12 名字不再缀「（同学）」（区块标题已经说过了）")
+      : W("D12 名字后面还缀着「（同学）」");
+    dsUi.window.close();
+  }
+
   ds.window.close();
   dt.window.close();
 }
