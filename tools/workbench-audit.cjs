@@ -8,7 +8,8 @@
  *   教师端：首屏 → 示例 → 未接模型如实拒绝 → 接模型真生成 → 打开 → 看代码 → 改名 → 删除
  *   产出物：把生成/预置的 HTML 单独跑起来，验「打开就能用」「数据存得住」
  *   下发：选人 → 发 → 学生跨账号桶收到 → 打开 → 老师删除后收回
- *   学生端：自己造 → 只能打开，不能改名/删除（对照理想判是否够用）
+ *   学生端：自己造 → 能改名/删除；老师发来的 → 只能打开/删除（删除只清自己列表，老师那份不动）
+ *   数据归属：生成物写在 `wstool@<账号>::` 前缀下，同一浏览器换账号看不到别人的数据
  *
  * 用法：node tools/workbench-audit.cjs
  */
@@ -623,8 +624,9 @@ dom.window.close();
   const card = [...dS.querySelectorAll("#appGrid .sm-card")].find((c) => /要发下去的工作台/.test(c.textContent));
   const acts = card ? [...card.querySelectorAll("[data-a]")].map((b) => b.getAttribute("data-a")) : [];
   acts.indexOf("app-send") < 0 ? P("E3 学生端没有「下发给学生」") : F("E3 学生端有下发按钮");
-  acts.indexOf("app-del") < 0 ? P("E3 学生端没有「删除」（不是他的东西）") : F("E3 学生端能删老师的");
   acts.indexOf("app-rename") < 0 ? P("E3 学生端不能给老师发的改名") : F("E3 学生端能改老师的名字");
+  acts.indexOf("app-del") >= 0
+    ? P("E3 学生端有「删除」（能把自己列表里的清掉）") : F("E3 学生端删不掉，列表只能越堆越多");
   /由 李老师 发来/.test(card ? card.textContent : "")
     ? P("E3 卡片说清是谁发来的") : F("E3 没标发送人");
 
@@ -641,6 +643,77 @@ dom.window.close();
     await settle(domS);
   }
   domS.window.close();
+}
+
+/* ---- E3b 学生删掉「老师发来的」：只删自己列表，老师那份不动，重发还能回来 ---- */
+{
+  const recBefore = JSON.parse(teacherSnap).find((x) => x.id === "app-share-1") || {};
+  const atBefore = ((recBefore.sentTo || []).find((x) => x.who === studentWho) || {}).at || 0;
+
+  const domS2 = load("workbench.html", {
+    role: "student",
+    ls: { st_accounts: ACCOUNTS, st_current_user: "student:student", "st_sim:teacher:teacher": teacherSnap },
+  });
+  await settle(domS2);
+  const dS2 = domS2.window.document, wS2 = domS2.window;
+  const findCard = () => [...dS2.querySelectorAll("#appGrid .sm-card")].find((c) => /要发下去的工作台/.test(c.textContent));
+  const card2 = findCard();
+  click(wS2, card2.querySelector('[data-a="app-del"]'));
+  await settle(domS2);
+  const host2 = dS2.getElementById("modalHost");
+  /对方那份不受影响/.test(host2 ? host2.textContent : "")
+    ? P("E3b 删之前说清「只删自己这份」") : F("E3b 没说清删的是什么");
+  click(wS2, dS2.querySelector('#modalHost [data-mc="no"]'));
+  await settle(domS2);
+  !!dS2.querySelector('#appGrid [data-app="app-share-1"]') ? P("E3b 取消删除，卡片还在") : F("E3b 取消也删了");
+
+  click(wS2, findCard().querySelector('[data-a="app-del"]'));
+  await settle(domS2);
+  click(wS2, dS2.querySelector('#modalHost [data-mc="ok"]'));
+  await settle(domS2);
+  !dS2.querySelector('#appGrid [data-app="app-share-1"]') ? P("E3b 确认后从学生列表消失") : F("E3b 确认后还在");
+  const hid = JSON.parse(wS2.localStorage.getItem("st_sim_hidden:student:student") || "{}");
+  Number(hid["app-share-1"]) >= atBefore
+    ? P("E3b 删除记在自己的隐藏表里（不是删老师记录）") : F("E3b 隐藏表没记: " + JSON.stringify(hid));
+  String(wS2.localStorage.getItem("st_sim:teacher:teacher")).indexOf("要发下去的工作台") >= 0
+    ? P("E3b 老师那份记录一个字没动") : F("E3b 把老师的记录删了");
+  /还没有工作台/.test(dS2.getElementById("appGrid").textContent)
+    ? P("E3b 删完落到空态，不是空白一片") : F("E3b 空态没出来");
+  domS2.window.close();
+}
+
+/* ---- E3c 删除落盘：刷新还是空的；老师重发后能回来 ---- */
+{
+  const at = ((JSON.parse(teacherSnap).find((x) => x.id === "app-share-1") || {}).sentTo || [])
+    .find((x) => x.who === studentWho) || {};
+  const hid = JSON.stringify({ "app-share-1": (Number(at.at) || Date.now() - 1000) + 1000 });
+  const domS3 = load("workbench.html", {
+    role: "student",
+    ls: {
+      st_accounts: ACCOUNTS, st_current_user: "student:student",
+      "st_sim:teacher:teacher": teacherSnap, "st_sim_hidden:student:student": hid,
+    },
+  });
+  await settle(domS3);
+  !/要发下去的工作台/.test(domS3.window.document.getElementById("appGrid").textContent)
+    ? P("E3c 刷新后仍是删掉的状态（不是只从界面拿掉）") : F("E3c 刷新又冒出来了");
+  domS3.window.close();
+
+  const resent = JSON.parse(teacherSnap).map((s) => {
+    (s.sentTo || []).forEach((x) => { if (x.who === studentWho) x.at = Date.now() + 60000; });
+    return s;
+  });
+  const domS4 = load("workbench.html", {
+    role: "student",
+    ls: {
+      st_accounts: ACCOUNTS, st_current_user: "student:student",
+      "st_sim:teacher:teacher": JSON.stringify(resent), "st_sim_hidden:student:student": hid,
+    },
+  });
+  await settle(domS4);
+  /要发下去的工作台/.test(domS4.window.document.getElementById("appGrid").textContent)
+    ? P("E3c 老师重新下发后它又出现了（删除没把下发废掉）") : F("E3c 重发也看不到，下发被删除废掉了");
+  domS4.window.close();
 }
 
 /* ---- E4 没被发的人看不到 ---- */
@@ -806,23 +879,83 @@ sec("【F】诚实口径");
 }
 
 /* ============================================================
-   G. 生成物的数据归属（设计取舍，如实报告）
+   G. 生成物的数据归属（按账号隔离）
    ============================================================ */
 sec("【G】生成物的数据归属");
 
+/** 用一段完整 HTML 起一个文档（生成物的 srcdoc 单独跑，别混进页面） */
+function runHtml(html, preset) {
+  return new JSDOM(String(html), {
+    url: "http://localhost/workbench.html",
+    runScripts: "dangerously",
+    beforeParse(win) {
+      Object.keys(preset || {}).forEach((k) => { try { win.localStorage.setItem(k, preset[k]); } catch (_) {} });
+    },
+  });
+}
+
+/* ---- G1 沙箱里塞了垫片，键名带账号 ---- */
+let teacherSrcdoc = "";
 {
   const domG = load("workbench.html", {
     role: "teacher",
     ls: { st_accounts: ACCOUNTS, st_current_user: "teacher:teacher" },
   });
   await settle(domG);
-  const seeds = JSON.parse(domG.window.eval("JSON.stringify(seedApps())"));
-  const html = String((seeds[0] || {}).html || "");
-  /wstool:/.test(html) ? P("G1 生成物的数据键用 wstool: 前缀（隔离在工具自己名下）") : F("G1 数据键没有前缀");
-  !/st_current_user|student:|teacher:/.test(html)
-    ? W("G1 生成物不知道「当前是谁」→ 同一浏览器里换账号打开同一份，看到的是同一份数据（纯静态单机的取舍）")
-    : P("G1 生成物按账号区分数据");
+  const dG = domG.window.document, wG = domG.window;
+  click(wG, dG.querySelector('#appGrid [data-app="wb-seed-1"] [data-a="app-open"]'));
+  await settle(domG);
+  const fr = dG.querySelector("iframe.sm-frame");
+  teacherSrcdoc = fr ? String(fr.getAttribute("srcdoc") || "") : "";
+
+  /wstool@teacher:teacher::/.test(teacherSrcdoc)
+    ? P("G1 打开时给生成物注入了「按账号命名」的数据前缀") : F("G1 没注入前缀（师生会共用一份数据）");
+  /<head[^>]*>\s*<script>[\s\S]*Object\.defineProperty\(window,'localStorage'/.test(teacherSrcdoc)
+    ? P("G1 垫片插在 <head> 之后（不会把文档打成怪异模式）") : F("G1 垫片位置不对");
+  !/^<script>/.test(teacherSrcdoc)
+    ? P("G1 没插到 <!DOCTYPE 前面") : F("G1 插到了文档最前面");
+  teacherSrcdoc.indexOf("wstool:") > 0
+    ? P("G1 还保留了生成物自己的 wstool: 键（只是外面再套一层账号）") : W("G1 生成物没用 wstool: 键");
   domG.window.close();
+}
+
+/* ---- G2 真的隔离：老师读得到、学生读不到 ---- */
+if (teacherSrcdoc) {
+  const tDom = runHtml(teacherSrcdoc, { "wstool@teacher:teacher::probe": "TEACHER" });
+  await settle(tDom);
+  /* 🔴 示例页的脚本必须真的跑起来 —— 曾经把闭合标签写成 `<\/script>`，
+     整个脚本被当成 HTML 文本吞掉，打开是一张死图（页面看着正常，其实点不动）。 */
+  const sAll = tDom.window.document.getElementById("sAll");
+  sAll && sAll.textContent === "4"
+    ? P("G0 预置示例打开就能用（脚本真跑了，统计出 4 人）")
+    : F("G0 示例页脚本没执行: " + (sAll ? "人数=" + sAll.textContent : "缺 sAll 节点"));
+  const tGet = tDom.window.eval('localStorage.getItem("probe")');
+  tGet === "TEACHER"
+    ? P("G2 老师打开时读得到自己那份数据") : F("G2 老师读不到自己的数据: " + tGet);
+  const tLen = tDom.window.eval("localStorage.length");
+  typeof tLen === "number" && tLen >= 1
+    ? P("G2 localStorage.length 只数自己的键（" + tLen + "）") : F("G2 length 不对: " + tLen);
+  tDom.window.close();
+
+  // 同一段 HTML（换成学生前缀）—— 老师那份数据看不见
+  const studentSrcdoc = teacherSrcdoc.split("wstool@teacher:teacher::").join("wstool@student:student::");
+  const sDom = runHtml(studentSrcdoc, { "wstool@teacher:teacher::probe": "TEACHER" });
+  await settle(sDom);
+  const sGet = sDom.window.eval('localStorage.getItem("probe")');
+  sGet === null
+    ? P("G2 学生打开同一份生成物，看不到老师的数据") : F("G2 学生看到了老师的数据: " + sGet);
+  sDom.window.eval('localStorage.setItem("only","mine")');
+  const sOnly = sDom.window.eval('localStorage.getItem("only")');
+  sOnly === "mine" ? P("G2 学生自己写的能读回来（不是把存储写坏）") : F("G2 学生写不进去: " + sOnly);
+  sDom.window.close();
+
+  // 方括号写法也要走前缀（模型常写 localStorage.foo = 1）
+  const bDom = runHtml(studentSrcdoc, {});
+  await settle(bDom);
+  bDom.window.eval('localStorage.foo = "bar"');
+  bDom.window.eval('localStorage.foo') === "bar"
+    ? P("G2 localStorage.foo 这种写法也能用（垫片盖住了）") : F("G2 方括号写法没盖住");
+  bDom.window.close();
 }
 
 /* ============================================================
@@ -833,4 +966,6 @@ console.log("工作台审计：" + ok + " 项通过 / " + fail + " 项失败 / "
 console.log("运行时错误：" + (ERR.length ? ERR.length + " 条" : "0 条"));
 if (ERR.length) ERR.slice(0, 6).forEach((x) => console.log("  ! " + x));
 console.log("=".repeat(60));
-process.exit(fa
+process.exit(fail ? 1 : 0);
+
+})().catch((e) => { console.error("脚本异常：", e); process.exit(1); });

@@ -2417,6 +2417,10 @@ function deckParse(text) {
   return null;
 }
 
+function deckModelReady() {
+  try { return (typeof llmReady === "function") && llmReady(); } catch (_) { return false; }
+}
+
 function deckSubmit(text) {
   const t = String(text || "").trim();
   if (!t) { deckSay("先说一句你要做什么。"); return; }
@@ -2424,10 +2428,19 @@ function deckSubmit(text) {
   const hit = deckParse(t);
   if (hit) { deckRun(hit.action, hit.args); return; }
 
+  /* 🔴 没接模型就如实说（和答疑页同一条红线）：别先报「正在问模型」——
+     根本没问；也别回「没听懂」——那听着像它听懂了但做不到，实际是没人接话。 */
+  if (!deckModelReady()) {
+    deckRenderHelp(true);
+    deckSay("这句本地规则认不出来，而现在没有接入模型，所以只能认下面列的这几句。" +
+      "接上模型才能听懂更多说法：设置 → 模型接入。");
+    return;
+  }
+
   deckSay("本地规则没匹配到，正在问模型…");
   deckAskModel(t).then(function (r) {
     if (!r) {
-      deckSay("没听懂「" + t + "」。可以说：把字放大一点 / 去我的作业 / 朗读这一页 / 你能做什么。");
+      deckSay("模型没给出能执行的动作 —— 换个说法，或点下面一条现成的试试。");
       return;
     }
     if (r.none) { deckSay("模型也没把握该做哪一件，换个说法试试。"); return; }
@@ -2764,7 +2777,8 @@ function deckAltCancel() {
 }
 
 function deckAltKeyDown(e) {
-  if (e.key !== "Alt") {
+  // ⚠️ 右 Alt 在部分键盘布局下报的是 "AltGraph"，只认 "Alt" 会导致「右 Alt 按了没反应」
+  if (e.key !== "Alt" && e.key !== "AltGraph") {
     // Alt + 别的键 = 组合键，别把长按判定留下来
     deckAltCancel();
     return;
@@ -2774,7 +2788,7 @@ function deckAltKeyDown(e) {
 }
 
 function deckAltKeyUp(e) {
-  if (e.key === "Alt") deckAltCancel();
+  if (e.key === "Alt" || e.key === "AltGraph") deckAltCancel();
 }
 
 document.addEventListener("keydown", deckAltKeyDown, true);

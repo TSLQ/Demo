@@ -605,7 +605,8 @@ async function main() {
   const cardsS = gridS.querySelectorAll(".sm-card");
   ck(cardsS.length >= 1, "学生端看到「老师发来的工作台」（种子已转发），实际=" + cardsS.length);
   ck(!gridS.querySelector('[data-a="app-send"]'), "🔴 学生端没有「下发给学生」（那是教师的动作）");
-  ck(!gridS.querySelector('[data-a="app-del"]'), "🔴 学生端没有「删除」老师发来的（不是他的东西）");
+  ck(!!gridS.querySelector('[data-a="app-del"]'), "学生端能删掉列表里的卡片（只清自己这份）");
+  ck(!gridS.querySelector('[data-a="app-rename"]'), "🔴 学生端不能给老师发来的改名（那份标题是老师的）");
 
   // 打开老师发来的那份：记录不在学生桶里 → 必须走跨桶取数
   gridS.querySelector('[data-a="app-open"]').click();

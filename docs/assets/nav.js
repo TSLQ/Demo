@@ -7441,6 +7441,62 @@ function nextSimId() {
   return "sim-" + Date.now().toString(36) + "-" + SIM_SEQ;
 }
 
+/* ---------------- 「我从自己列表里删掉的」下发记录 ---------------- */
+
+/**
+ * 学生把「老师发来的」卡片从**自己列表**里清掉时，只记在这里 —— 不碰老师那份记录。
+ * 键：`st_sim_hidden:<角色>:<账号>`（按账号分开，甲删了不影响乙）
+ * 值：`{ <simId>: <删掉时那份的下发时间> }`
+ * 🔴 记时间的理由：老师**重新下发**（`sentTo[].at` 变新）后它应该重新出现；
+ *    只记 id 的话，重发也永远看不见，等于把下发废掉了。
+ */
+var SIM_HIDDEN_KEY = "st_sim_hidden";
+
+function simHiddenKey() {
+  var u = "";
+  try { u = (typeof currentUserKey === "function") ? String(currentUserKey() || "").toLowerCase() : ""; } catch (_) {}
+  return u ? SIM_HIDDEN_KEY + ":" + u : SIM_HIDDEN_KEY;
+}
+
+/** 我删掉过的：`{ simId: 时间戳 }`。读坏了一律当空表（不因为一条脏数据把列表清空） */
+function hiddenSimMap() {
+  try {
+    var raw = window.localStorage.getItem(simHiddenKey());
+    if (!raw) return {};
+    var v = JSON.parse(raw);
+    if (typeof v === "string") v = JSON.parse(v);      // 兼容老档的双重编码
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    return v;
+  } catch (_) { return {}; }
+}
+
+function saveHiddenSimMap(map) {
+  try { window.localStorage.setItem(simHiddenKey(), JSON.stringify(map || {})); } catch (_) {}
+}
+
+/** 这份记录是什么时候发给我的（0 = 没发给我） */
+function mySentAt(sim, who) {
+  var w = String(who || "").toLowerCase(), at = 0;
+  ((sim && sim.sentTo) || []).forEach(function (x) {
+    if (String((x && x.who) || "").toLowerCase() === w) at = Math.max(at, Number(x.at) || 0);
+  });
+  return at;
+}
+
+/**
+ * 学生：把「老师发来的」一份从自己列表里删掉。
+ * 🔴 只删**我看到的那一份**，老师桶里的记录一个字都不动（不是他的东西，改不得）。
+ * 🔴 删除是不可撤销的：列表里不再出现，直到老师重新下发。
+ */
+function hideSimForMe(id, sentAt) {
+  var key = String(id || "").trim();
+  if (!key) return { ok: false, error: "找不到这个工作台" };
+  var map = hiddenSimMap();
+  map[key] = Number(sentAt) || Date.now();
+  saveHiddenSimMap(map);
+  return { ok: true };
+}
+
 /** 形状归一 —— 存档可能被手改，缺什么补什么，枚举字段一律兜底 */
 function normalizeSims(raw) {
   if (!Array.isArray(raw)) return [];
@@ -7552,7 +7608,10 @@ var SEED_WORKBENCH_HW = {
     '};',
     'document.getElementById("nm").addEventListener("keydown",function(e){if(e.key==="Enter")document.getElementById("add").click()});',
     'render();',
-    '<\\/script></body></html>',
+    // ⚠️ 这里拼的是**生成的 HTML 文本**，必须是真正的闭合标签；
+    //    写成 `<\/script>` 会让示例页的脚本永远执行不了（浏览器把后面的 </body></html> 也当脚本）。
+    //    源码里拆开拼，既拿到真标签，又不会把这个 .js 内联进页面时提前截断。
+    '</' + 'script></body></html>',
   ].join(""),
 };
 
@@ -7787,19 +7846,35 @@ function simsForStudent(who) {
   var w = String(who || "").trim().toLowerCase();
   if (!w) return [];
 
-  var seen = {}, out = [];
+  var hidden = hiddenSimMap();
+  var seen = {}, out = [], sentAtOf = {};
   var take = function (arr) {
     (arr || []).forEach(function (s) {
-      if (!s || !s.id || seen[s.id]) return;
+      if (!s || !s.id) return;
       var hit = (s.sentTo || []).some(function (x) {
         return String((x && x.who) || "").toLowerCase() === w;
       });
-      if (hit) { seen[s.id] = 1; out.push(s); }
+      if (!hit) return;
+      var at = mySentAt(s, w);
+      if (seen[s.id]) {                       // 同一个 id 可能在多个桶里，取最新的下发时间
+        if (at > (sentAtOf[s.id] || 0)) sentAtOf[s.id] = at;
+        return;
+      }
+      seen[s.id] = 1;
+      sentAtOf[s.id] = at;
+      out.push(s);
     });
   };
   take(SIMS);                                  // 先看内存里最新的（可能刚发完还没落盘到别的键）
   simBucketKeys().forEach(function (k) { take(readSimBucket(k)); });
-  return out;
+
+  /* 🔴 我自己从列表里删掉的 → 不出现；但老师**重新下发**（时间变新）后要重新出现，
+     否则「删除」会把下发永久废掉，老师重发也救不回来。 */
+  return out.filter(function (s) {
+    var h = hidden[s.id];
+    if (h == null) return true;
+    return Number(h) < Number(sentAtOf[s.id] || 0);
+  });
 }
 
 /**

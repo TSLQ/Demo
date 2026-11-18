@@ -1331,8 +1331,9 @@ console.log("\n=== 3c-5. 学情：学生自己看到的 == 老师点开学生看
   parseInt(dd.getElementById("stAsk").textContent, 10) === 4
     ? P("学生自己的学情只算本课（他在编译原理里的 2 次提问没混进来）")
     : F("跨课堂串数: " + dd.getElementById("stAsk").textContent);
-  /另有 2 条记录属于其它课堂/.test(dd.getElementById("srcNote").textContent)
-    ? P("并如实说明「另有 N 条记录属于其它课堂」") : F("没有交代被排除的记录");
+  /共 8 条记录/.test(dd.getElementById("kindSub").textContent)
+    ? P("其它课堂的 2 条没混进本课统计（本课仍是 8 条）")
+    : F("跨课堂串数: " + dd.getElementById("kindSub").textContent);
   domD.window.close();
 
   const domE = load("class.html", {
@@ -1390,15 +1391,29 @@ console.log("\n=== 3c-6. 行为日志是「真记」的：答疑页 / 课件页�
   const D = 86400000;
   const now = Date.now();
 
-  /* ---------- ① 答疑页：问一句 → 进日志 ---------- */
+  /* ---------- ① 答疑页：问一句 → 真打模型（打桩）→ 回答 → 进日志 ---------- */
+  /* 老师真发来的一份课件 —— 验「答疑真的把它当参考资料喂给模型」 */
+  const cwForAsk = {
+    id: "cw-ask0", title: "7.2 快速排序的复杂度分析", courseId: "ds", courseName: "数据结构与算法",
+    chapters: [{ id: "ds-c7", title: "第 7 章 · 排序" }],
+    body: "快速排序的平均时间复杂度为 O(n log n)。\n\n最坏情况下退化为 O(n²)，原因是划分不平衡。",
+    source: "write", status: "published", createdBy: "teacher:teacher",
+    publishedTo: [{ who: "student:zhangsan", at: now - 2 * D }],
+  };
   const dom = load("chat.html", {
     role: "student", query: "?course=ds",
     restore: { ls: {
       st_current_user: "student:zhangsan",
+      /* 自定义接口：不填 Key 也算可用（本地服务 / 自建网关），
+         这样验「真链路」不需要任何真凭据。 */
+      st_provider: "custom",
+      st_custom_endpoint: "http://127.0.0.1:11434/v1",
+      st_custom_model: "qwen2.5:7b",
       st_courses: JSON.stringify([{ id: "ds", name: "数据结构与算法", code: "CS201", page: "class.html" }]),
       "st_enroll:student:zhangsan": JSON.stringify([
         { courseId: "ds", name: "数据结构与算法", code: "CS201", joinCode: "CS201-22DT", at: now - 3 * D },
       ]),
+      "st_courseware:student:zhangsan": JSON.stringify([cwForAsk]),
       "st_behavior:student:zhangsan": "[]",
     } },
   });
@@ -1406,12 +1421,55 @@ console.log("\n=== 3c-6. 行为日志是「真记」的：答疑页 / 课件页�
   const w = dom.window, d = w.document;
   w.prompt = () => "这个问题不该被忽略";
 
+  /* 🔴 打桩 fetch —— 这一段验的就是「答题这条链真的通」。
+     以前这里没接模型：点发送回的是写死的句子，链路断了也照样"有回答"。
+     现在链路一断就没有 .bubble-foot（操作栏只挂在真回答下面）。 */
+  const seen = [];
+  w.fetch = (url, opt) => {
+    seen.push({ url: String(url), body: String((opt && opt.body) || "") });
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve("{}"),
+      json: () => Promise.resolve({
+        choices: [{ message: { content: "**划分不平衡**才是退化原因。\n\n- 每次只减掉 1 个元素\n- 递归就退化成 n 层" } }],
+      }),
+    });
+  };
+
   const emptyShown = /还没有任何学习记录/.test(d.getElementById("traits").textContent);
   emptyShown ? P("没有记录时右栏画像如实说「还没有记录」") : F("空画像提示缺失");
 
   d.getElementById("input").value = "为什么快速排序最坏是 O(n²)？";
   d.getElementById("sendBtn").dispatchEvent(new w.Event("click", { bubbles: true }));
-  await new Promise((r) => setTimeout(r, 900));            // 等那 700ms 的"正在输入"
+
+  /* 等「回答 + 操作栏」出现 —— ⚠️ 等的是**数据变化**（.bubble-foot 只有真回答才挂），
+     不是等按钮文案：文案本来就有「发送」，等它会立刻满足、断言跑在 Promise 之前。 */
+  for (let i = 0; i < 140 && !d.querySelector("#chatLog .bubble-foot"); i++) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  seen.length === 1
+    ? P("🔴 点发送真的发出了模型请求（不再是写死答案）") : F("没有发出模型请求: " + seen.length);
+  seen[0] && seen[0].url === "http://127.0.0.1:11434/v1/chat/completions"
+    ? P("请求打到配置的服务商地址") : F("请求地址不对: " + (seen[0] && seen[0].url));
+  seen[0] && /数据结构与算法/.test(seen[0].body)
+    ? P("请求体里带上了当前课程（模型知道在答哪门课）") : F("请求体没带课程上下文");
+  seen[0] && /划分不平衡/.test(seen[0].body)
+    ? P("🔴 请求体里带上了本课课件正文（参考资料真的喂进去了）") : F("课件正文没进请求体");
+  seen[0] && !/论文|Lorem ipsum/i.test(seen[0].body)
+    ? P("请求体里没有无关内容（不是把所有页面文本一股脑塞进去）") : F("请求体混进了无关内容");
+  seen[0] && /max_tokens/.test(seen[0].body)
+    ? P("请求体是标准 OpenAI 兼容格式（model / messages / max_tokens）") : F("请求体格式不对");
+
+  const aiBubbles = d.querySelectorAll("#chatLog .msg.ai");
+  aiBubbles.length >= 2
+    ? P("对话里有一问一答（助教气泡真的渲染出来）") : F("没看到 AI 回答: " + aiBubbles.length);
+  d.querySelector("#chatLog .msg.ai .bubble strong")
+    ? P("回答按 Markdown 渲染（粗体真的生效，不是一堆星号）") : F("回答没有渲染 Markdown");
+  !d.querySelector("#chatLog #typing")
+    ? P("回答回来后「正在输入」气泡撤掉了（不会永远转圈）") : F("typing 气泡没撤");
+  d.getElementById("sendBtn").textContent.trim() === "↑"
+    ? P("发送按钮回到「↑」（没有卡在「停止」）") : F("按钮状态没复位: " + d.getElementById("sendBtn").textContent);
 
   const logged = String(w.localStorage.getItem("st_behavior:student:zhangsan") || "");
   /为什么快速排序最坏/.test(logged)
@@ -1426,13 +1484,52 @@ console.log("\n=== 3c-6. 行为日志是「真记」的：答疑页 / 课件页�
 
   const foot = d.querySelector(".bubble-foot a[data-act='got']");
   foot ? P("AI 回答下方有操作栏") : F("操作栏缺失");
-  foot.dispatchEvent(new w.Event("click", { bubbles: true }));
-  await settle(dom);
-  /"kind":"got"/.test(String(w.localStorage.getItem("st_behavior:student:zhangsan") || ""))
-    ? P("点「懂了」真的记一条 got（以前这些链接点了没反应）") : F("「懂了」没有记录");
-  /已标记懂了/.test(foot.textContent)
-    ? P("点过之后按钮给出状态反馈") : F("点了没有视觉反馈");
+  if (foot) {
+    foot.dispatchEvent(new w.Event("click", { bubbles: true }));
+    await settle(dom);
+    /"kind":"got"/.test(String(w.localStorage.getItem("st_behavior:student:zhangsan") || ""))
+      ? P("点「懂了」真的记一条 got（以前这些链接点了没反应）") : F("「懂了」没有记录");
+    /已标记懂了/.test(foot.textContent)
+      ? P("点过之后按钮给出状态反馈") : F("点了没有视觉反馈");
+  }
   dom.window.close();
+
+  /* ---------- ①b 没接模型：如实说，不发请求、不编答案 ---------- */
+  {
+    /* 🔴 这是用户最直接的一条要求：没接模型就**别装**。
+       以前这一幕会给出「划分不平衡…」那段写死的话，看起来像模型答的。 */
+    const domNo = load("chat.html", {
+      role: "student", query: "?course=ds",
+      restore: { ls: {
+        st_current_user: "student:zhangsan",
+        st_courses: JSON.stringify([{ id: "ds", name: "数据结构与算法", code: "CS201", page: "class.html" }]),
+        "st_enroll:student:zhangsan": JSON.stringify([
+          { courseId: "ds", name: "数据结构与算法", code: "CS201", joinCode: "CS201-22DT", at: now - 3 * D },
+        ]),
+        "st_behavior:student:zhangsan": "[]",
+      } },
+    });
+    await settle(domNo);
+    const w2 = domNo.window, d2 = w2.document;
+    let called = 0;
+    w2.fetch = () => { called++; return Promise.resolve({ ok: true, json: () => Promise.resolve({}), text: () => Promise.resolve("") }); };
+
+    d2.getElementById("input").value = "为什么快速排序最坏是 O(n²)？";
+    d2.getElementById("sendBtn").dispatchEvent(new w2.Event("click", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 60));
+
+    called === 0
+      ? P("🔴 没接模型时不发请求（不瞎打一次必失败的调用）") : F("没接模型也发了请求");
+    /还没接模型/.test(d2.getElementById("chatLog").textContent)
+      ? P("🔴 没接模型时如实说明，并指路去设置页") : F("没接模型时没有如实说明");
+    !d2.querySelector("#chatLog .bubble-foot")
+      ? P("🔴 没接模型时不挂操作栏（没有假回答可供「懂了」）") : F("假回答上还挂着操作栏");
+    !/划分不平衡/.test(d2.getElementById("chatLog").textContent)
+      ? P("🔴 不再吐那段写死的「划分不平衡」（那是假答疑）") : F("还在吐写死的答案");
+    d2.querySelector('#chatLog [data-goto="settings.html"]')
+      ? P("提示里有可点的「去设置」按钮") : F("提示里没有下一步入口");
+    domNo.window.close();
+  }
 
   /* ---------- ② 课件页：正文来自数据层，阅读 / 批注都进同一份日志 ---------- */
   const cwForZhangsan = {
@@ -4331,10 +4428,49 @@ console.log("\n=== 3q. 教师端「查看邀请码」与课堂页课程名（真
   const d2 = dom2.window.document;
   d2.getElementById("courseName").textContent === "数据结构与算法"
     ? P("?course=ds → 页头显示当前课堂名") : F("课程名没跟着走: " + d2.getElementById("courseName").textContent);
-  /第 7 章/.test(d2.getElementById("crumbText").textContent)
-    ? P("面包屑带上章节（演示课程才有章节）") : F("面包屑不对");
-  /已加载 4 个知识点/.test(d2.getElementById("chatSub").textContent)
-    ? P("副标题与课程匹配") : F("副标题不对");
+  /* 🔴 第 65 轮：没有课件就如实说没有 ——
+     老版这里写死「已加载 4 个知识点」、面包屑写死「第 7 章 排序」，
+     那 4 条其实就是被删掉的内置问答库，跟课程无关。 */
+  /还没有课件/.test(d2.getElementById("chatSub").textContent)
+    ? P("🔴 本课没有课件时副标题如实说（不再写死「已加载 4 个知识点」）")
+    : F("副标题不对: " + d2.getElementById("chatSub").textContent);
+  d2.getElementById("crumbText").textContent === "数据结构与算法"
+    ? P("🔴 面包屑不硬编章节（没有课件就没有章节）")
+    : F("面包屑不对: " + d2.getElementById("crumbText").textContent);
+
+  /* 有课件时：副标题 / 面包屑 / 推荐问题都跟着课件走 */
+  const cwForAsk = {
+    id: "cw-ask1", title: "7.2 快速排序的复杂度分析", courseId: "ds", courseName: "数据结构与算法",
+    chapters: [{ id: "ds-c7", title: "第 7 章 · 排序" }],
+    body: "快速排序的平均时间复杂度为 O(n log n)。\n\n最坏情况下退化为 O(n²)，原因是划分不平衡。",
+    source: "write", status: "published", createdBy: "teacher:teacher",
+    publishedTo: [{ who: "student:zhangsan", at: Date.now() - 86400000 }],
+  };
+  const dom2b = load("chat.html", {
+    role: "student", query: "?course=ds",
+    restore: { ls: {
+      st_current_user: "student:zhangsan",
+      st_courses: JSON.stringify([{ id: "ds", name: "数据结构与算法", code: "CS201", page: "class.html" }]),
+      "st_enroll:student:zhangsan": JSON.stringify([
+        { courseId: "ds", name: "数据结构与算法", code: "CS201", joinCode: "CS201-22DT", at: Date.now() - 3 * 86400000 },
+      ]),
+      "st_courseware:student:zhangsan": JSON.stringify([cwForAsk]),
+    } },
+  });
+  await settle(dom2b);
+  const d2b = dom2b.window.document;
+  /已加载 1 份课件 · 2 段正文/.test(d2b.getElementById("chatSub").textContent)
+    ? P("🔴 有课件时副标题报真实份数与段数")
+    : F("副标题没跟着课件走: " + d2b.getElementById("chatSub").textContent);
+  /第 7 章/.test(d2b.getElementById("crumbText").textContent)
+    ? P("面包屑取课件里的章节名")
+    : F("面包屑没取章节: " + d2b.getElementById("crumbText").textContent);
+  /再讲讲/.test(d2b.getElementById("suggests").textContent)
+    ? P("🔴 推荐问题从本课课件正文长出来（不再是写死的数据结构三问）")
+    : F("推荐问题没跟着课件走: " + d2b.getElementById("suggests").textContent);
+  !/哈希表冲突怎么解决/.test(d2b.getElementById("suggests").textContent)
+    ? P("🔴 不再给写死的推荐问题") : F("还挂着写死的推荐问题");
+  dom2b.window.close();
   dom2.window.close();
 
   /* 没加入任何课堂 → 如实说，不硬撑 */
@@ -4524,8 +4660,8 @@ console.log("\n=== 3s. 工作台（第 43 轮）：AI 工作台 —— 说需求
     ? P("学生端分区显示「老师发来的」") : F("学生端没分区");
   !dS.querySelector('#appGrid [data-a="app-send"]')
     ? P("🔴 学生端卡片没有「下发给学生」（那是教师的动作）") : F("学生端有下发");
-  !dS.querySelector('#appGrid [data-a="app-del"]')
-    ? P("🔴 学生端不能删老师发来的（不是他的东西）") : F("学生端有删除");
+  dS.querySelector('#appGrid [data-a="app-del"]')
+    ? P("🔴 学生端能删掉列表里的卡片（只清自己那份，老师那份不动）") : F("学生端删不掉");
   !dS.querySelector('#appGrid [data-a="app-rename"]')
     ? P("🔴 学生端不能给老师发来的改名") : F("学生端有改名");
   /* 打开「老师发来的」那份：记录不在学生桶里 → 必须走跨桶取数 */
@@ -5084,6 +5220,104 @@ console.log("\n=== 4y. 课件「AI 重讲」：接了模型就现场重讲（真
       ? P("重讲面板里是模型现场生成的内容（不是预置示例）")
       : F("重讲结果没渲染: " + body.slice(0, 90));
   }
+  dom.window.close();
+}
+
+console.log("\n=== 4z. AI 指令条（长按 Alt）：真的会做，没接模型不乱说 ===");
+/* 这一段之前完全没有覆盖 —— Alt 那条链路断了，前六步照样全绿。
+   验四件事：① 长按能开、轻点不开 ② 改设置先出 diff、取消真不生效
+             ③ 应用 → 落库 → 撤销回原样 ④ 没接模型时不假装问过模型 */
+{
+  const dom = load("homework.html", {
+    role: "student",
+    restore: { ls: { st_current_user: "student:zhangsan", st_a11y: JSON.stringify({ profile: "standard" }) } },
+  });
+  await settle(dom);
+  const w = dom.window, d = w.document;
+  const a11y = () => { try { return JSON.parse(w.localStorage.getItem("st_a11y") || "{}"); } catch (_) { return {}; } };
+  const hold = async (ms) => {
+    d.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Alt", bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, ms));
+    d.dispatchEvent(new w.KeyboardEvent("keyup", { key: "Alt", bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 60));
+  };
+
+  if (typeof w.deckOpen !== "function") {
+    F("页面里没有 deckOpen —— 指令条没加载");
+  } else {
+    // ① 轻点（<550ms）不开；长按才开
+    await hold(120);
+    d.getElementById("deckHost") ? F("只按一下就弹出来了（应该是长按）") : P("轻点 Alt 不会误触（要按住 550ms）");
+
+    await hold(700);
+    const host = d.getElementById("deckHost");
+    host ? P("长按 Alt 能呼出指令条") : F("长按 Alt 没反应 —— 指令条没出现");
+
+    if (host) {
+      const say = () => (d.getElementById("deckStatus") || {}).textContent || "";
+      /未接模型/.test((d.getElementById("deckModel") || {}).textContent || "")
+        ? P("底栏如实写「未接模型 · 只按本地规则匹配」") : F("底栏没交代模型状态");
+
+      const submit = async (text) => {
+        d.getElementById("deckInput").value = text;
+        d.getElementById("deckForm").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+        await new Promise((r) => setTimeout(r, 80));
+      };
+
+      // ② 写操作：先出 diff，取消＝什么都没改
+      await submit("把字放大一点");
+      const review = d.getElementById("deckReview");
+      const diffText = review ? review.textContent : "";
+      !review.hidden && /正文字号/.test(diffText) && /15px/.test(diffText) && /17px/.test(diffText)
+        ? P("「把字放大一点」先列出「项目 / 现在 / 将改为」三列") : F("改动预览不对: " + diffText.slice(0, 80));
+      a11y().size === undefined
+        ? P("出 diff 的时候还没落库（确认前什么都没变）") : F("还没确认就改了存档: " + a11y().size);
+
+      d.getElementById("deckCancel").click();
+      await new Promise((r) => setTimeout(r, 60));
+      a11y().size === undefined && review.hidden === true
+        ? P("点「取消」之后设置原样没变") : F("取消之后设置被改了 / 预览没收起");
+
+      // ③ 应用 → 落库 → 撤销
+      await submit("把字放大一点");
+      d.getElementById("deckApply").click();
+      await new Promise((r) => setTimeout(r, 80));
+      a11y().size === 17
+        ? P("点「应用变更」才真的写进存档（15 → 17）") : F("应用后存档不对: " + JSON.stringify(a11y()));
+      const undoBar = d.getElementById("deckUndoBar");
+      undoBar && !undoBar.hidden ? P("应用后出现「撤销这次改动」") : F("没有撤销入口");
+
+      d.getElementById("deckUndoBtn").click();
+      await new Promise((r) => setTimeout(r, 80));
+      a11y().size === undefined
+        ? P("撤销把设置恢复到应用之前") : F("撤销没生效: " + JSON.stringify(a11y()));
+
+      // ④ 没接模型：不假装「在问模型」，如实说 + 展开能做的事
+      let fetched = 0;
+      w.fetch = () => { fetched++; return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }); };
+      await submit("帮我写一份三千字的课程论文");
+      /没有接入模型/.test(say())
+        ? P("接不了的说法如实说「没有接入模型」，不编动作") : F("没接模型时说了什么: " + say());
+      !/正在问模型/.test(say())
+        ? P("没接模型时不会假装「正在问模型」") : F("没接模型却报「正在问模型」");
+      fetched === 0
+        ? P("没接模型时一个请求都没发") : F("没接模型却发了 " + fetched + " 个请求");
+      d.getElementById("deckReview").hidden === true
+        ? P("没听懂时不乱执行动作") : F("没听懂却弹出了改动预览");
+
+      // ⑤ Esc 收起
+      d.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      await new Promise((r) => setTimeout(r, 60));
+      !d.getElementById("deckHost")
+        ? P("Esc 能收起指令条") : F("Esc 收不起来");
+    }
+  }
+
+  // ⑥ 壳发消息（顶栏「指令」/ 壳内长按）→ 内容页打开同一份
+  w.postMessage({ type: "st-open-deck" }, "*");
+  await new Promise((r) => setTimeout(r, 80));
+  d.getElementById("deckHost")
+    ? P("收到壳的 st-open-deck 也能打开（界面只有这一份）") : F("壳发消息打不开指令条");
   dom.window.close();
 }
 

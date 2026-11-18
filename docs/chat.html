@@ -6,6 +6,29 @@
 <title>AI 答疑 — 智课助教</title>
 <link rel="stylesheet" href="assets/design.css">
 <link rel="stylesheet" href="assets/shell.css">
+<!--
+  ============================================================
+  课程 AI 答疑
+  ------------------------------------------------------------
+  🔴 这里**不再有任何预置问答库**（第 65 轮）。
+     之前那套 KB + pickReply 是按关键词命中、回 4 段背下来的文字：
+     不管学生真问什么，答的都是同一批句子 —— 那不是答疑，是假装答疑。
+
+  现在的规矩（与 reader.html 的「重讲」同一条）：
+     · 接了模型 → `llmChat` 现场作答，上下文 = **本课课件正文** + 多轮对话历史
+     · 没接模型 → **如实说没接、不给任何假答案**，并给出可点的下一步（去设置页）
+     · 超时 / Key 失效 / 内容被拦 → 如实报错，不退回假内容
+
+  数据从哪来：
+     · 课程：URL `?course=` → 否则 ENROLLED 第一门
+     · 课件：`cwsForStudent(currentUserKey(), courseId)` —— 跨账号桶读老师发的那份
+     · 段落：`cwSections(cw)` —— 与教师端、课件阅读页**同一份切段规则**
+     · 讲法偏好：`personaPromptBlock()`（由 llmChat 自动拼进 system，来源是行为记录）
+
+  🔴 行为日志（`rec` → `logBehavior`）是「我的学情」与教师端看到的**唯一数据源**：
+     提问 / 懂了 / 要了推导·代码·自测 都要记，且**只在真实动作发生时**记。
+  ============================================================
+-->
 <style>
   :root { --font-sans: "Inter", system-ui; }
   /* 气泡操作栏：点过之后给个"已经记下了"的状态（不是装饰，是真的记进了行为日志） */
@@ -14,6 +37,31 @@
   .bubble-foot .foot-hint { color: var(--muted-foreground); }
   /* 右栏画像的脚注：说清数字是从哪儿来的 */
   .profile-meta b { font-weight: 500; color: var(--foreground); }
+
+  /* 🔴 「系统说话」—— 没接模型 / 这次没答上来 / 已停止。
+     它不是助教的回答，样式上必须一眼分得清，免得被当成模型输出。 */
+  .msg.sys { max-width: 92%; }
+  .msg.sys .msg-avatar {
+    background: var(--warning-surface); color: var(--warning);
+    font-size: 13px; font-weight: 600;
+  }
+  .msg.sys .bubble {
+    background: var(--warning-surface);
+    border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+    color: var(--foreground);
+  }
+  .msg.sys .bubble .btn { margin-top: 9px; }
+
+  /* 底栏的模型状态可点（点了去设置页），所以做成按钮而不是一行灰字 */
+  .composer-foot button.model-hint {
+    border: 0; background: none; padding: 0; font: inherit; cursor: pointer;
+    color: var(--primary); text-decoration: underline; text-underline-offset: 2px;
+  }
+  .composer-foot button.model-hint.off { color: var(--warning); }
+  .composer-foot button.model-hint:hover { text-decoration-thickness: 2px; }
+
+  /* 发送中：按钮变成「停止」，形状上要能看出来 */
+  .send-btn.stopping { background: var(--destructive); color: #fff; }
 </style>
 </head>
 <body>
@@ -22,9 +70,9 @@
 <div class="page-wrap">
     <div class="page" style="padding-top:0">
       <div class="page-head" style="margin-bottom:18px">
-        <div class="crumb" id="crumbText">数据结构与算法 › 第 7 章 排序</div>
+        <div class="crumb" id="crumbText">—</div>
         <h1>AI 答疑</h1>
-        <p>针对当前课程与章节提问，回答会按你的讲解偏好调整</p>
+        <p>针对当前课程与课件提问 —— 回答由你配置的模型现场生成</p>
       </div>
 
       <div class="chat-grid">
@@ -33,10 +81,10 @@
           <div class="chat-head">
             <div class="msg-avatar" style="background:var(--primary);color:var(--primary-foreground)">智</div>
             <div style="flex:1;min-width:0">
-              <h2 id="courseName">数据结构与算法</h2>
-              <p id="chatSub">已加载 4 个知识点</p>
+              <h2 id="courseName">—</h2>
+              <p id="chatSub">—</p>
             </div>
-            <span class="tag tag-success">在线</span>
+            <span class="tag" id="modelTag">—</span>
           </div>
 
           <div class="chat-log" id="chatLog" role="log" aria-live="polite" aria-label="对话记录"></div>
@@ -47,12 +95,12 @@
             <div class="composer-box">
               <label class="sr-only" for="input">输入你的问题</label>
               <textarea id="input" rows="1"
-                placeholder="输入你的问题，例如：为什么快排最坏是 O(n²)？"></textarea>
+                placeholder="输入你的问题 —— 概念、代码、题目思路都能问"></textarea>
               <button class="send-btn" id="sendBtn" title="发送" aria-label="发送">↑</button>
             </div>
             <div class="composer-foot">
               <span><span class="kbd">Enter</span> 发送　<span class="kbd">Shift</span>+<span class="kbd">Enter</span> 换行</span>
-              <span>回答来自内置示例</span>
+              <button type="button" class="model-hint" id="modelHint">—</button>
             </div>
           </div>
         </section>
@@ -79,19 +127,24 @@
    ------------------------------------------------------------
    左侧「我的课程」点进来会带 ?course=xxx（见 nav.js 的 refreshStudentCourseNav）。
    🔴 多门课共用本页：不带参数的话，侧栏所有课程项会一起高亮，
-      页头也永远显示「数据结构与算法」—— 学生加了别的课堂根本看不出来。
-   ⚠️ 本页的对话内容是**数据结构**的内置示例：只有 ds 这门课有章节与知识点，
-      别的课如实写「还没加载课件」，不拿数据结构的内容冒充它。
+      页头也永远显示同一门课 —— 学生加了别的课堂根本看不出来。
    ============================================================ */
 const QUERY_COURSE = decodeURIComponent((location.search.match(/[?&]course=([^&]+)/) || [])[1] || "");
 const CUR_COURSE_ID = QUERY_COURSE ||
   ((typeof ENROLLED !== "undefined" && ENROLLED[0]) ? ENROLLED[0].courseId : "");
 const CUR_NAME = (CUR_COURSE_ID && typeof studentCourseName === "function")
   ? studentCourseName(CUR_COURSE_ID) : "";
-const IS_DEMO_COURSE = CUR_COURSE_ID === "ds";
+
+const MY_KEY = (typeof currentUserKey === "function") ? currentUserKey() : "";
+const MY_NAME = (function () {
+  try {
+    if (typeof accountNameOf === "function" && MY_KEY) return accountNameOf(MY_KEY) || "我";
+  } catch (_) { /* 读不到账号表就退回「我」 */ }
+  return "我";
+})();
 
 /* ============================================================
-   行为记录 —— 页面在**真实动作发生的那一刻**调它（第 34 轮）
+   行为记录 —— 页面在**真实动作发生的那一刻**调它
    ------------------------------------------------------------
    这份记录就是「我的学情」和教师端点开学生姓名看到的那些图表的**唯一数据源**：
    学生自己看到的和老师看到的必须一模一样，所以两边都只读这一份。
@@ -102,212 +155,437 @@ function rec(kind, label, topic) {
   return logBehavior({ kind: kind, label: label, topic: topic, courseId: CUR_COURSE_ID });
 }
 
+/* ============================================================
+   本课课件 —— 模型的参考资料就来自这里
+   ------------------------------------------------------------
+   🔴 只读**老师真发来的**那份（cwsForStudent 跨账号桶，只认 published）。
+      没有课件就是没有 —— 页面上如实说，不拿内置内容冒充本课资料。
+   ============================================================ */
+function courseCws() {
+  if (!CUR_COURSE_ID) return [];
+  try {
+    if (typeof cwsForStudent !== "function") return [];
+    return cwsForStudent(MY_KEY, CUR_COURSE_ID) || [];
+  } catch (_) { return []; }
+}
+function sectionList(cw) {
+  try { return (typeof cwSections === "function") ? (cwSections(cw) || []) : []; }
+  catch (_) { return []; }
+}
+const CW_LIST = courseCws();
+
+function chapterTitle() {
+  for (let i = 0; i < CW_LIST.length; i++) {
+    const ch = CW_LIST[i] && CW_LIST[i].chapters;
+    if (ch && ch.length && ch[0] && ch[0].title) return String(ch[0].title);
+  }
+  return "";
+}
+function totalSections() {
+  return CW_LIST.reduce((n, cw) => n + sectionList(cw).length, 0);
+}
+
+/* ---------- 模型接入状态 ---------- */
+function modelReadyNow() {
+  try { return (typeof llmReady === "function") && !!llmReady(); } catch (_) { return false; }
+}
+function modelName() {
+  try {
+    const c = (typeof llmConfig === "function") ? llmConfig() : null;
+    if (c && c.cfg) return String(c.cfg.model || c.cfg.label || "");
+  } catch (_) { /* 读不到就当没名字 */ }
+  return "";
+}
+function goSettings() {
+  try {
+    if (typeof navigate === "function") { navigate("settings.html"); return; }
+  } catch (_) { /* 落到下面 */ }
+  try { location.href = "settings.html"; } catch (_) { /* jsdom / 受限环境 */ }
+}
+
 /* 页头三处：面包屑 / 课程名 / 副标题 —— 都要跟着当前课堂走 */
-(function () {
-  const crumb = document.getElementById("crumbText");
-  const h2 = document.getElementById("courseName");
-  const sub = document.getElementById("chatSub");
+function renderHead() {
+  const crumb = $("#crumbText");
+  const h2 = $("#courseName");
+  const sub = $("#chatSub");
+
   if (!CUR_COURSE_ID) {
     if (crumb) crumb.textContent = "还没有加入课堂";
     if (h2) h2.textContent = "（未加入课堂）";
     if (sub) sub.textContent = "点左侧「我的课程」右边的 ＋，输入邀请码就能加入课堂";
     return;
   }
-  if (crumb) crumb.textContent = IS_DEMO_COURSE ? CUR_NAME + " › 第 7 章 排序" : CUR_NAME;
+
+  const chap = chapterTitle();
+  if (crumb) crumb.textContent = chap ? CUR_NAME + " › " + chap : CUR_NAME;
   if (h2) h2.textContent = CUR_NAME;
-  if (sub) sub.textContent = IS_DEMO_COURSE
-    ? "已加载 4 个知识点"
-    : "本课还没有加载课件与知识点";
-})();
-
-/* ---------- 预置问答 ---------- */
-const KB = [
-  {
-    keys: ["快排", "快速排序", "quick", "o(n²)", "o(n^2)"],
-    a: `问题出在**划分不平衡**，而不是数据量。
-
-#### 为什么退化
-每次划分若只减掉 1 个元素，递归就退化成 n 层，每层仍要扫描 O(n)，总代价 **O(n²)**。
-
-\`\`\`text
-[1,2,3,4,5]  → pivot=1 → [] 和 [2,3,4,5]
-[2,3,4,5]    → pivot=2 → [] 和 [3,4,5]
-⋯ 共 n 层，每层扫描 O(n)
-\`\`\`
-
-#### 什么时候会触发
-- 数组**已排序或逆序**，且实现取首/末元素作 pivot
-- 恶意构造的输入
-
-#### 三种改进
-1. **随机化 pivot** —— 最坏情况概率降到可忽略
-2. **三数取中** —— 取首、中、尾的中位数
-3. **三路划分** —— 大量重复元素时优势明显
-
-> 一句话记忆：复杂度不取决于数据量，而取决于**划分是否平衡**。`,
-  },
-  {
-    keys: ["哈希", "hash", "散列", "冲突"],
-    a: `哈希冲突是指**两个不同的 key 算出了同一个桶下标**——数学上无法避免。两类解法：
-
-#### 一、开放定址法
-冲突时在表内向后探测。元素都在表本身，不需要指针。
-- **线性探测** \`(h+1) % m\` —— 简单、缓存友好，但会产生"一次聚类"
-- **二次探测** \`(h ± i²) % m\` —— 缓解聚类
-- **双重哈希** \`(h₁ + i·h₂) % m\` —— 效果最好
-
-注意：开放定址法**不能直接删除元素**，必须在探测链上留**墓碑标记**，否则后面的元素会查不到。
-
-#### 二、链地址法
-每个桶挂一条链表。Java 的 \`HashMap\` 用的就是这个。
-
-\`\`\`java
-// JDK 8 起：链表长度 > 8 且容量 >= 64 时转红黑树
-// 查询最坏从 O(n) 降到 O(log n)
-static final int TREEIFY_THRESHOLD = 8;
-\`\`\`
-
-#### 怎么选
-内存敏感、要缓存速度 → 开放定址（Python dict）。
-容忍高装载因子、删除频繁 → 链地址。`,
-  },
-  {
-    keys: ["复杂度", "大o", "时间复杂度", "big o", "判断"],
-    a: `判断复杂度有三步，不用靠感觉：
-
-#### 三步法
-1. **找基本操作** —— 执行次数最多的那句，通常在最内层循环
-2. **数它和 n 的关系** —— 写出表达式，忽略常数系数
-3. **只留最高阶** —— O(3n² + 5n + 100) → **O(n²)**
-
-#### 常见判断
-- 一层循环，变量线性增长 → O(n)
-- 两层嵌套且内层依赖外层 → O(n²)
-- **每层减半**（\`i *= 2\`、二分查找）→ O(log n)
-- 递归用主定理：T(n) = 2T(n/2) + O(n) → O(n log n)
-
-\`\`\`python
-for i in range(n):        # 外层 n 次
-    j = 1
-    while j < n:          # 内层 log n 次
-        j *= 2
-# 总次数 = n × log n  →  O(n log n)
-\`\`\`
-
-⚠️ 常见误区：**嵌套循环不一定是 O(n²)**。上面两层循环，内层却是 log n 次。关键看**内层变量怎么变**，而不是数循环层数。`,
-  },
-  {
-    keys: ["进程", "线程", "区别"],
-    a: `最本质的区别：**进程是资源分配的单位，线程是 CPU 调度的单位。**
-
-#### 三个关键差异
-1. **地址空间** —— 进程独立；线程共享所属进程的空间。所以线程通信近乎零成本，进程通信要走管道/共享内存
-2. **切换开销** —— 进程要换页表、刷 TLB；同进程内线程只需换栈和寄存器，低一个数量级
-3. **隔离性** —— 进程崩溃互不影响；一个线程段错误，整个进程所有线程一起死
-
-\`\`\`text
-     进程 A                    进程 B
- ┌──────────────┐          ┌──────────────┐
- │ 代码 / 数据   │          │ 代码 / 数据   │  ← 各自独立
- │ 堆 / 文件句柄 │          │ 堆 / 文件句柄 │
- ├──────────────┤          ├──────────────┤
- │ 线程1  线程2  │          │ 线程1        │  ← 共享本进程
- └──────────────┘          └──────────────┘
-\`\`\`
-
-#### 选择原则
-> **要隔离和保护 → 用进程；要高并发和低开销 → 用线程。**
-> 实践常组合：Nginx 用"多进程 + 每进程事件循环"兼顾两者。`,
-  },
-];
-
-const SUGGESTS = [
-  "为什么快速排序最坏是 O(n²)？",
-  "哈希表冲突怎么解决？",
-  "怎样判断算法的时间复杂度？",
-];
-
-/* ---------- 状态 ---------- */
-let history = [];
-
-function pickReply(text) {
-  const lower = text.toLowerCase();
-  let best = null, bestScore = 0;
-  for (const item of KB) {
-    const s = item.keys.reduce((n, k) => n + (lower.includes(k.toLowerCase()) ? 1 : 0), 0);
-    if (s > bestScore) { bestScore = s; best = item; }
+  if (sub) {
+    sub.textContent = CW_LIST.length
+      ? "已加载 " + CW_LIST.length + " 份课件 · " + totalSections() + " 段正文"
+      : "本课还没有课件 —— 回答只依据通用知识，涉及本课细节会如实说没有";
   }
-  return best ? best.a : `关于「${text}」，我从三个角度帮你拆一下：
+}
 
-#### 一、概念层面
-先确认题目里每个术语的准确含义——很多困惑来自定义模糊。
+/* 右上角的接入状态 + 底栏那行可点的提示 */
+function renderModelState() {
+  const ok = modelReadyNow();
+  const nm = modelName();
+  const tag = $("#modelTag");
+  const hint = $("#modelHint");
 
-#### 二、机制层面
-追问「它是怎么工作的」，而不是只记住「它是什么」。
+  if (tag) {
+    tag.className = "tag " + (ok ? "tag-success" : "tag-warning");
+    tag.textContent = ok ? ("已接入 " + (nm || "模型")) : "未接模型";
+  }
+  if (hint) {
+    hint.textContent = ok
+      ? ("回答由 " + (nm || "你的模型") + " 现场生成 · 点此更换服务商")
+      : "还没接模型 · 点这里去接入";
+    hint.className = "model-hint" + (ok ? "" : " off");
+  }
+}
 
-#### 三、对比层面
-和相似概念做对照，差异点往往就是考点。
+/* ============================================================
+   参考资料：从本课课件里挑与这一问最相关的段落
+   ------------------------------------------------------------
+   为什么不整本塞进去：一份课件几千字，三份就超预算，
+   而模型真正需要的只是「这一问相关的那几段」。
+   打分只看关键词是否出现在段落里（本地算，不发请求），
+   一条都没命中时给课件开头几段当背景 —— 至少让它知道这门课在讲什么。
+   ============================================================ */
+function pickTerms(text) {
+  return String(text || "").toLowerCase()
+    .split(/[\s，。？！、；：""''（）()《》〈〉【】,.!?;:/\\|]+/)
+    .filter((w) => w.length >= 2);
+}
+function retrievedFor(text) {
+  if (!CW_LIST.length) return "";
+  const pool = [];
+  CW_LIST.forEach((cw) => {
+    const title = String((cw && cw.title) || "课件");
+    sectionList(cw).forEach((sec, i) => pool.push({ title: title, no: i + 1, text: sec }));
+  });
+  if (!pool.length) return "";
 
----
+  const terms = pickTerms(text);
+  const scored = pool.map((p) => {
+    const body = p.text.toLowerCase();
+    let sc = 0;
+    terms.forEach((w) => { if (body.indexOf(w) >= 0) sc += 2; });
+    return { p: p, sc: sc };
+  });
+  scored.sort((a, b) => b.sc - a.sc);
 
-你可以把问题收窄一些，例如：
-- 「这个机制的时间复杂度是多少？怎么推导？」
-- 「它和 XXX 的区别是什么？什么场景用哪个？」
+  const picked = scored.filter((x) => x.sc > 0).slice(0, 8).map((x) => x.p);
+  // 关键词全没命中 → 给开头几段，而不是什么都不给
+  if (!picked.length) pool.slice(0, 6).forEach((p) => picked.push(p));
+  // 再补两段开头当背景（模型需要知道这门课讲到哪儿了）
+  pool.slice(0, 2).forEach((p) => { if (picked.indexOf(p) < 0) picked.push(p); });
 
-💡 回答来自内置示例库 —— 试试下方推荐问题。`;
+  // 🔴 自己先卡一道预算：fitContext 也会截，但截在这里能保证留下的是**相关**的段
+  let budget = 3800;
+  const out = [];
+  for (const p of picked) {
+    const line = "【《" + p.title + "》第 " + p.no + " 段】" + p.text;
+    if (line.length > budget) break;
+    out.push(line);
+    budget -= line.length;
+  }
+  return out.join("\n");
+}
+
+/* ---------- 提示词 ---------- */
+function askSystemPrompt() {
+  const lines = [
+    "你是一位大学计算机课程的答疑助教，正在回答学生关于下面这门课的问题。",
+    "",
+    "课程：" + (CUR_NAME || "（课程名未知）"),
+    CW_LIST.length
+      ? "本课共有 " + CW_LIST.length + " 份课件，其中与这一问相关的段落见「参考片段」。"
+      : "这门课**还没有课件**。只依据公认的计算机知识回答；凡是涉及本课具体进度、老师要求、考核范围、教材页码的，直接说「课件里没有，建议问老师」。",
+    "",
+    "要求：",
+    "1. 先给结论，再给推导或例子；能分点就分点。",
+    "2. **只讲你确实知道的东西**：参考片段里没有的具体事实（页码、书名、老师的规定、考试范围）不要编，不确定就写「这一点课件里没有」。",
+    "3. 代码用带语言名的代码块；复杂度用 O(·) 写清楚，别只写「很快」。",
+    "4. 用中文、Markdown 排版，控制在 450 字以内 —— 学生要更细会继续追问。",
+    "5. 不要复述问题，不要「好问题」这类客套，直接回答。",
+  ];
+  return lines.join("\n");
 }
 
 /* ---------- 渲染 ---------- */
 const logEl = $("#chatLog");
 
-function el(html) {
-  const t = document.createElement("template");
-  t.innerHTML = html.trim();
-  return t.content.firstElementChild;
-}
-
 function addMsg(who, text) {
   const isAI = who === "ai";
-  const node = el(`
-    <div class="msg ${isAI ? "ai" : "me"}">
-      <div class="msg-avatar">${isAI ? "智" : "李"}</div>
-      <div class="bubble">${isAI ? mdToHtml(text) : escapeHtml(text)}</div>
-    </div>`);
+  const avatar = isAI ? "智" : escapeHtml(String(MY_NAME).slice(0, 1) || "我");
+  const node = el(
+    '<div class="msg ' + (isAI ? "ai" : "me") + '">' +
+      '<div class="msg-avatar">' + avatar + '</div>' +
+      '<div class="bubble">' + (isAI ? mdToHtml(text) : escapeHtml(text)) + '</div>' +
+    '</div>'
+  );
+  if (!node) return null;
   logEl.appendChild(node);
   logEl.scrollTop = logEl.scrollHeight;
   return node;
 }
 
-function escapeHtml(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
-}
-
-function greet() {
-  const node = el(`
-    <div class="msg ai">
-      <div class="msg-avatar">智</div>
-      <div class="bubble">
-        <p>你好，我是你的课程助教。当前课程是 <strong>${escapeHtml(CUR_NAME)}</strong>${
-          IS_DEMO_COURSE ? "，重点覆盖第 7 章排序。" : "。这门课还没加载课件与知识点，下面的回答仍是<b>内置示例</b>的内容。"}</p>
-        <p>可以直接问概念、要代码示例，或者让我解释某道题的思路。我会按你习惯的方式来讲。</p>
-      </div>
-    </div>`);
+/** 「系统说话」：没接模型 / 失败 / 已停止 —— 与助教回答分开，别让人误当答案 */
+function addNotice(html) {
+  const node = el(
+    '<div class="msg sys">' +
+      '<div class="msg-avatar">!</div>' +
+      '<div class="bubble">' + html + '</div>' +
+    '</div>'
+  );
+  if (!node) return null;
   logEl.appendChild(node);
+  logEl.scrollTop = logEl.scrollHeight;
+  return node;
 }
 
-function renderSuggests() {
-  if (!IS_DEMO_COURSE) {
-    // 推荐问题是数据结构那一套 —— 别的课不硬套，如实说
-    $("#suggests").innerHTML =
-      `<span class="field-hint">本课还没配推荐问题 —— 直接问一句，先试试内置示例。</span>`;
+/* 开场白 —— 接了模型是**正常回答气泡**；没接才是「系统说话」（警示样式）。
+   ⚠️ 两条路的渲染不同：addMsg 走 mdToHtml（HTML 标签会被转义），
+      所以接上模型那条用 Markdown 语法写；addNotice 才拼 HTML。 */
+function greet() {
+  if (!CUR_COURSE_ID) {
+    addNotice("<b>还没有加入课堂。</b>" +
+      "<p>点左侧「我的课程」右边的 ＋，输入老师给的邀请码就能进来。</p>");
     return;
   }
-  $("#suggests").innerHTML = SUGGESTS
-    .map((s) => `<button class="suggest" type="button">${s}</button>`).join("");
-  $$(".suggest").forEach((b) => {
+  if (!modelReadyNow()) {
+    addNotice("<b>还没有接入模型</b>，所以现在提问不会得到回答 —— 我也不会拿预置的句子糊弄你。" +
+      "<p>去「设置 → 模型接入」选一个服务商、填上自己的 API Key，回来再问，" +
+      "我就能读本课课件现场作答。</p>");
+    return;
+  }
+  const nm = modelName() || "你配置的模型";
+  const md = CW_LIST.length
+    ? "已接上 **" + nm + "**。这门课我读到了 " + CW_LIST.length + " 份课件（共 " +
+      totalSections() + " 段），概念、代码、题目思路都可以问。\n\n" +
+      "课件里没写的具体细节，我会直说没有，不去编。"
+    : "已接上 **" + nm + "**，但《" + CUR_NAME + "》还没有课件 —— 我只能按通用的计算机知识回答；" +
+      "涉及本课进度、老师要求、考核范围的，会如实说课件里没有。";
+  addMsg("ai", md);
+}
+
+/* ============================================================
+   推荐问题 —— 从本课课件正文里长出来
+   ------------------------------------------------------------
+   ⚠️ 以前这里是 3 条写死的数据结构问题，换了课程还照样显示，
+      学生一看就知道跟自己的课没关系。现在有课件才给，且取的是课件里的原话。
+   ============================================================ */
+function shortSubject(sec) {
+  const s = String(sec || "").replace(/\s+/g, " ").replace(/^[#>\-*\s]+/, "").trim();
+  const first = (s.split(/[。！？；;]/)[0] || s).trim();
+  return first.length > 18 ? first.slice(0, 18) + "…" : first;
+}
+function renderSuggests() {
+  const box = $("#suggests");
+  if (!box) return;
+
+  if (!CW_LIST.length) {
+    box.innerHTML = '<span class="field-hint">还没有课件 —— 直接问一句；' +
+      '老师发课件之后，这里会按本课内容给几个能点的问法。</span>';
+    return;
+  }
+
+  const picks = [];
+  CW_LIST.forEach((cw) => {
+    sectionList(cw).forEach((sec) => {
+      if (picks.length >= 3) return;
+      const q = shortSubject(sec);
+      if (q && q.length >= 4 && picks.indexOf(q) < 0) picks.push(q);
+    });
+  });
+  if (!picks.length) picks.push("这份课件的主要内容");
+
+  box.innerHTML = picks.map((q) => {
+    const ask = "请把「" + q + "」再讲一遍，换一种更容易懂的说法，并说清它为什么重要。";
+    return '<button class="suggest" type="button" data-q="' +
+      escapeHtml(ask).replace(/"/g, "&quot;") + '">再讲讲「' + escapeHtml(q) + '」</button>';
+  }).join("");
+
+  $$(".suggest", box).forEach((b) => {
     b.addEventListener("click", () => {
-      $("#input").value = b.textContent;
+      $("#input").value = b.getAttribute("data-q") || b.textContent;
       send();
+    });
+  });
+}
+
+/* ============================================================
+   发送 —— 真调模型
+   ------------------------------------------------------------
+   🔴 三条底线：
+     1. 没接模型 → 如实说，**不生成任何答案**；
+     2. 请求挂起 45 秒（llmChat 内建）或用户点「停止」→ 立即复位，按钮不能永久卡住；
+     3. 失败把可操作的下一步写出来（Key 不对 / 额度用完 / CORS / 网络），别只说"出错了"。
+   ============================================================ */
+let turns = [];        // 交给模型的多轮历史（user / assistant）
+let busy = false;
+let aborter = null;
+
+function pushTurn(role, content) {
+  const c = String(content || "").trim();
+  if (!c) return;
+  turns.push({ role: role, content: c });
+  if (turns.length > 12) turns = turns.slice(turns.length - 12);   // 只留最近 6 轮
+}
+
+function setBusy(on) {
+  busy = !!on;
+  const b = $("#sendBtn");
+  if (!b) return;
+  b.textContent = on ? "■" : "↑";
+  b.title = on ? "停止" : "发送";
+  b.setAttribute("aria-label", on ? "停止这次回答" : "发送");
+  b.classList.toggle("stopping", !!on);
+}
+
+function showNoModel() {
+  let why = "";
+  try { why = (typeof llmStatusText === "function") ? llmStatusText() : ""; } catch (_) { /* 忽略 */ }
+  addNotice(
+    "<b>还没接模型，这一问不会生成回答。</b>" +
+    "<p>" + escapeHtml(why || "去「设置 → 模型接入」选服务商并填上 API Key。") + "</p>" +
+    "<p>接上之后我会读本课课件、按你的讲解偏好现场作答；答不出来的地方会直说，不编。</p>" +
+    '<button class="btn btn-sm btn-primary" data-goto="settings.html" type="button">去设置 · 模型接入</button>'
+  );
+}
+
+function askModel(text, label) {
+  if (!modelReadyNow()) { showNoModel(); return; }
+
+  const typing = el(
+    '<div class="msg ai" id="typing">' +
+      '<div class="msg-avatar">智</div>' +
+      '<div class="bubble"><span class="typing"><i></i><i></i><i></i></span></div>' +
+    '</div>'
+  );
+  if (typing) logEl.appendChild(typing);
+  logEl.scrollTop = logEl.scrollHeight;
+
+  setBusy(true);
+  aborter = (typeof AbortController === "function") ? new AbortController() : null;
+
+  const done = () => {
+    if (typing && typing.parentNode) typing.parentNode.removeChild(typing);
+    setBusy(false);
+    aborter = null;
+  };
+
+  let pending;
+  try {
+    pending = llmChat(askSystemPrompt(), text, {
+      retrieved: retrievedFor(text),
+      history: turns.slice(0, -1),        // 本轮已 push，别重复
+      maxTokens: 1400,
+      temperature: 0.45,
+      signal: aborter ? aborter.signal : null,
+    });
+  } catch (e) {
+    done();
+    addNotice("<b>这次没答上来。</b><p>" + escapeHtml(String((e && e.message) || e)) + "</p>");
+    return;
+  }
+
+  pending.then((r) => {
+    done();
+
+    if (r && r.ok) {
+      const node = addMsg("ai", r.raw);
+      pushTurn("assistant", r.raw);
+      attachFoot(node, label || text);
+
+      const noteText = CW_LIST.length
+        ? "按你的讲解偏好作答 · 依据本课课件"
+        : "按你的讲解偏好作答 · 本课暂无课件";
+      const bubble = node && node.querySelector ? node.querySelector(".bubble") : null;
+      const note = el('<div class="ai-note">' + noteText + '</div>');
+      if (bubble && note) bubble.insertBefore(note, bubble.firstChild);
+      return;
+    }
+
+    if (r && r.aborted) {
+      addNotice("已停止这次回答 —— 你可以接着说，或者换个问法。");
+      return;
+    }
+
+    const err = (r && r.error) || "未知错误";
+    const hint = (r && r.hint) || "";
+    addNotice(
+      "<b>这次没答上来。</b>" +
+      "<p>" + escapeHtml(err) + "</p>" +
+      (hint ? "<p>" + escapeHtml(hint) + "</p>" : "") +
+      '<button class="btn btn-sm" data-goto="settings.html" type="button">去设置检查模型</button>'
+    );
+  }).catch((e) => {
+    done();
+    addNotice("<b>这次没答上来。</b><p>" + escapeHtml(String((e && e.message) || e)) + "</p>");
+  });
+}
+
+/* 回答下方的操作栏 —— 每一栏都真的会再问一次模型（以前只是记一笔行为） */
+const FOLLOW_UP = {
+  deeper: "把刚才这回答的推导再展开讲一遍，每一步为什么成立都写出来。",
+  code: "给一个能直接跑的最小代码例子，并说清关键那几行在做什么。",
+  quiz: "就刚才这个知识点出 1 道小题来检验我懂没懂 —— 先只给题目，别给答案。",
+};
+
+function attachFoot(node, question) {
+  const bubble = node && node.querySelector ? node.querySelector(".bubble") : null;
+  if (!bubble) return;
+
+  const foot = el(
+    '<div class="bubble-foot">' +
+      '<a href="#" data-act="deeper">展开推导</a>' +
+      '<a href="#" data-act="code">看代码</a>' +
+      '<a href="#" data-act="quiz">自测一题</a>' +
+      '<a href="#" data-act="got">✓ 懂了</a>' +
+    '</div>'
+  );
+  if (!foot) return;
+  bubble.appendChild(foot);
+
+  const links = foot.querySelectorAll ? foot.querySelectorAll("a[data-act]") : [];
+  [].forEach.call(links, (a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (a.classList.contains("on")) return;      // 同一句回答不重复记 / 不重复问
+      const act = a.getAttribute("data-act");
+
+      if (act === "got") {
+        rec("got", question, topicOf(question));
+        a.classList.add("on");
+        a.textContent = "✓ 已标记懂了";
+        const t = el('<span class="foot-hint">已记入「我的学情」</span>');
+        if (t) foot.appendChild(t);
+        return;
+      }
+
+      // 🔴 上一轮还在跑时不再叠一条：两条请求会互相覆盖 aborter，
+      //    「停止」只能停掉后面那条，前一条仍在后台跑。这一步在「记行为」之前 ——
+      //    没发出去的追问不该被算成"要过推导"。
+      if (busy) {
+        addNotice("上一条还在回答 —— 等它出来，或者点发送按钮「■」停下再试。");
+        return;
+      }
+
+      rec(act, question, topicOf(question));
+      a.classList.add("on");
+
+      const prompt = FOLLOW_UP[act];
+      if (!prompt) return;
+      if (!modelReadyNow()) {
+        addNotice("这个追问要接上模型才能展开 —— 去「设置 → 模型接入」填上 Key 就行。");
+        return;
+      }
+      addMsg("me", prompt);
+      pushTurn("user", prompt);
+      askModel(prompt, question);
     });
   });
 }
@@ -315,70 +593,31 @@ function renderSuggests() {
 /* ---------- 发送 ---------- */
 function send() {
   const input = $("#input");
+  if (!input) return;
   const text = input.value.trim();
-  if (!text) return;
+  if (!text || busy) return;
 
   addMsg("me", text);
-  history.push({ who: "me", text });
+  pushTurn("user", text);
   rec("ask", text);              // 提问是最重要的一类行为：画像与学情都以它为基准
+
   input.value = "";
   input.style.height = "auto";
-  $("#sendBtn").disabled = true;
 
-  const typing = el(`
-    <div class="msg ai" id="typing">
-      <div class="msg-avatar">智</div>
-      <div class="bubble"><span class="typing"><i></i><i></i><i></i></span></div>
-    </div>`);
-  logEl.appendChild(typing);
-  logEl.scrollTop = logEl.scrollHeight;
-
-  setTimeout(() => {
-    typing.remove();
-    const reply = pickReply(text);
-    const node = addMsg("ai", reply);
-
-    // 给 AI 回答加操作栏
-    const foot = el(`
-      <div class="bubble-foot">
-        <a href="#" data-act="deeper">展开推导</a>
-        <a href="#" data-act="code">看代码</a>
-        <a href="#" data-act="quiz">自测一题</a>
-        <a href="#" data-act="got">✓ 懂了</a>
-      </div>`);
-    node.querySelector(".bubble").appendChild(foot);
-
-    // 操作栏原来只是四个 href="#" 的装饰（点了会跳到页首），现在**真能用**，
-    // 而且每次点击都会记进行为日志 —— 学生自己的画像、老师看到的学情都靠它。
-    foot.querySelectorAll("a[data-act]").forEach((a) => {
-      a.addEventListener("click", (e) => {
-        e.preventDefault();
-        if (a.classList.contains("on")) return;      // 同一句回答不重复记
-        const act = a.dataset.act;
-        if (act === "got") {
-          rec("got", text, topicOf(text));
-          a.classList.add("on");
-          a.textContent = "✓ 已标记懂了";
-          const t = el(`<span class="foot-hint">已记入「我的学情」</span>`);
-          foot.appendChild(t);
-          return;
-        }
-        rec(act, text, topicOf(text));
-        a.classList.add("on");
-        const hint = { deeper: "已展开推导并记下", code: "已给出代码示例并记下", quiz: "已生成一题并记下" }[act];
-        foot.appendChild(el(`<span class="foot-hint">${hint}</span>`));
-      });
-    });
-
-    const note = el(`<div class="ai-note">已按你的偏好调整讲解方式</div>`);
-    node.querySelector(".bubble").prepend(note);
-
-    $("#sendBtn").disabled = false;
-    $("#input").focus();
-  }, 700);
+  askModel(text, text);
+  if (input.focus) input.focus();
 }
 
-$("#sendBtn").addEventListener("click", send);
+const sendBtn = $("#sendBtn");
+if (sendBtn) {
+  sendBtn.addEventListener("click", () => {
+    if (busy) {
+      if (aborter && aborter.abort) { try { aborter.abort(); } catch (_) { /* 已经结束 */ } }
+      return;
+    }
+    send();
+  });
+}
 $("#input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
 });
@@ -386,6 +625,19 @@ $("#input").addEventListener("input", (e) => {
   e.target.style.height = "auto";
   e.target.style.height = Math.min(e.target.scrollHeight, 150) + "px";
 });
+
+/* 「去设置」「换服务商」这类按钮 —— 委托在容器上，内容换了也不用重绑 */
+if (logEl) {
+  logEl.addEventListener("click", (e) => {
+    const b = (e.target && e.target.closest) ? e.target.closest("[data-goto]") : null;
+    if (!b) return;
+    e.preventDefault();
+    goSettings();
+  });
+}
+const modelHint = $("#modelHint");
+if (modelHint) modelHint.addEventListener("click", goSettings);
+
 $("#resetProfile").addEventListener("click", () => {
   if (!confirm("清空学习记录？\n\n风格画像与「我的学情」是同一份记录，清空后两处都会归零。" +
     "\n清掉之后就找不回来了。")) return;
@@ -394,7 +646,7 @@ $("#resetProfile").addEventListener("click", () => {
 });
 
 /* ============================================================
-   右栏「学习方式画像」
+   右栏「讲解风格画像」
    ------------------------------------------------------------
    🔴 这不再是写死的四条 —— 每一项都是**行为次数的比例**，并且把原始次数摊开写出来
       （「要例子 3 次 / 提问 12 次」），让人能自己核。不是模型判断，所以文案里
@@ -408,8 +660,8 @@ function renderProfile() {
   const seeds = behaviorSeedCount(list);
 
   if (!sum.total) {
-    box.innerHTML = `<p class="field-hint">还没有任何学习记录 —— 问第一句、或者去课件页写一条批注，` +
-      `这里就会按你的真实行为统计出来。</p>`;
+    box.innerHTML = '<p class="field-hint">还没有任何学习记录 —— 问第一句、或者去课件页写一条批注，' +
+      '这里就会按你的真实行为统计出来。</p>';
     meta.textContent = "统计的是这几类行为的比例：要例子 / 要推导 / 要不要换个说法 / 听懂率 / 记笔记频率。";
     return;
   }
@@ -417,14 +669,14 @@ function renderProfile() {
   const traits = behaviorTraits(list, Date.now());
   box.innerHTML = traits.map((t) => {
     const cls = t.score >= 50 ? "" : t.score >= 25 ? "mid" : "low";
-    return `
-    <div class="trait">
-      <div class="trait-head"><b>${t.name}</b><span>${t.base ? t.label : "—"}</span></div>
-      <div class="trait-bar"><div class="trait-fill ${cls}" style="width:${Math.max(2, t.score)}%"></div></div>
-      <div style="font-size:11.5px;color:var(--muted-foreground);margin-top:5px">
-        ${t.base ? t.count + " 次 / 提问 " + t.base + " 次" : "还没有提问，暂时没有基准"}
-      </div>
-    </div>`;
+    return '' +
+    '<div class="trait">' +
+      '<div class="trait-head"><b>' + t.name + '</b><span>' + (t.base ? t.label : "—") + '</span></div>' +
+      '<div class="trait-bar"><div class="trait-fill ' + cls + '" style="width:' + Math.max(2, t.score) + '%"></div></div>' +
+      '<div style="font-size:11.5px;color:var(--muted-foreground);margin-top:5px">' +
+        (t.base ? t.count + " 次 / 提问 " + t.base + " 次" : "还没有提问，暂时没有基准") +
+      '</div>' +
+    '</div>';
   }).join("");
 
   meta.innerHTML =
@@ -436,6 +688,9 @@ function renderProfile() {
       : seeds ? "<br>其中 <b>" + seeds + "</b> 条是预置示例记录。" : "");
 }
 
+/* ---------- 启动 ---------- */
+renderHead();
+renderModelState();
 greet();
 renderSuggests();
 renderProfile();

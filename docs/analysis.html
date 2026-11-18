@@ -140,11 +140,6 @@
             <ul class="weak-list" id="weak"></ul>
           </section>
         </div>
-
-        <div class="notice notice-info">
-          <span aria-hidden="true">ℹ</span>
-          <div id="srcNote"></div>
-        </div>
       </div>
     </div>
   </div>
@@ -178,7 +173,6 @@ const CUR_NAME = (CUR_ID && typeof studentCourseName === "function") ? studentCo
 const ALL = (typeof BEHAVIOR !== "undefined") ? BEHAVIOR : [];
 /** 本页只统计**当前课堂**的记录（别的课堂的数混进来，学生自己也会看不懂） */
 const LIST = behaviorInCourse(ALL, CUR_ID);
-const OTHER = ALL.length - LIST.length;
 const NOW = Date.now();
 
 const RING_COLORS = ["var(--primary)", "var(--success)", "var(--warning)", "var(--info)", "var(--destructive)", "var(--muted-foreground)"];
@@ -312,17 +306,6 @@ function renderWeak() {
     </li>`).join("");
 }
 
-function renderSource(sum) {
-  const seeds = behaviorSeedCount(LIST);
-  $("#srcNote").innerHTML =
-    "<b>这份数据是怎么来的</b> —— 全部是你在课堂里留下的行为（提问 / 批注 / 阅读 / 重讲 / 标记懂了），" +
-    "不会发送给任何第三方；教师端「课程成员」里点开你，看到的是<b>同一份记录</b>。" +
-    (seeds === sum.total ? " 本页记录<b>全部是预置示例记录</b>（预置账号自带的历史，方便一眼看到形状）。"
-      : seeds ? " 其中 <b>" + seeds + "</b> 条是预置示例记录。" : "") +
-    (OTHER ? " 另有 <b>" + OTHER + "</b> 条记录属于其它课堂，不计入本页。" : "") +
-    " 本版<b>不记录停留时长</b>（没有可靠的测量口径），所以任何依赖它的指标都不会出现。";
-}
-
 /* ---------------- 启动 ---------------- */
 if (!LIST.length) {
   $("#dataBox").hidden = true;
@@ -338,7 +321,6 @@ if (!LIST.length) {
   renderTraits(sum);
   renderTimeline();
   renderWeak();
-  renderSource(sum);
 }
 </script>
 </body>

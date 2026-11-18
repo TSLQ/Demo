@@ -1,0 +1,12 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>seed</title></head><body>
+<script>
+localStorage.setItem("st_accounts", JSON.stringify([
+  { role: "teacher", user: "teacher", pass: "x", name: "李老师", createdAt: 1 },
+  { role: "student", user: "student", pass: "x", name: "李同学", createdAt: 2 },
+  { role: "student", user: "lisi", pass: "x", name: "李四", createdAt: 3 }
+]));
+localStorage.setItem("st_current_user", "student:student");
+localStorage.setItem("st_a11y", JSON.stringify({ profile: "standard" }));
+location.replace("training-student.html");
+</script>
+</body></html>

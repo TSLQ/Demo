@@ -915,12 +915,15 @@ function boot() {
   // AI 指令条：顶栏按钮 + 长按 Alt（壳自己的文档；内容区里由 core.js 处理）
   document.getElementById("deckOpen")?.addEventListener("click", openDeckFromShell);
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Alt") { shellAltCancel(); return; }
+    // ⚠️ 右 Alt 在部分键盘布局下报的是 "AltGraph"，只认 "Alt" 会「按了没反应」
+    if (e.key !== "Alt" && e.key !== "AltGraph") { shellAltCancel(); return; }
     if (shellAltTimer) { e.preventDefault(); return; }
     shellAltStart();
     if (shellAltTimer) e.preventDefault();
   }, true);
-  document.addEventListener("keyup", (e) => { if (e.key === "Alt") shellAltCancel(); }, true);
+  document.addEventListener("keyup", (e) => {
+    if (e.key === "Alt" || e.key === "AltGraph") shellAltCancel();
+  }, true);
   window.addEventListener("blur", shellAltCancel);
 
   // 用户菜单

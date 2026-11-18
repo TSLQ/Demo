@@ -627,28 +627,52 @@ function verifyContentPage(name) {
    ============================================================ */
 function verifyPageSpecific(name, html, inline, probe, sandbox) {
   if (name === "chat.html") {
-    if (probe("typeof pickReply") === "function") {
-      const pick = probe("pickReply");
-      const cases = [
-        ["为什么快速排序最坏是 O(n²)？", "划分"],
-        ["哈希表冲突怎么解决？", "开放定址"],
-        ["怎样判断算法的时间复杂度？", "三步法"],
-        ["进程和线程有什么区别？", "资源分配"],
-      ];
-      let ok = 0;
-      for (const [q, expect] of cases) {
-        const r = pick(q);
-        if (r.includes(expect) && r.length > 200) ok++;
-        else fail(`pickReply 未命中: "${q}" 期望含「${expect}」`);
-      }
-      ok === cases.length && pass(`问答匹配 ${ok}/${cases.length} 全部命中`);
-      const fb = pick("量子纠缠对排序有什么影响");
-      fb.length > 100 && pass("未命中时兜底回复正常");
-    } else fail("pickReply 未定义");
+    /* 🔴 第 65 轮：删掉预置问答库（KB / pickReply），改为「接模型现场答 / 没接就如实说」。
+       老版是关键词命中后回 4 段背下来的文字 —— 不管学生问什么，答的都是同一批句子。 */
+    probe("typeof pickReply") === "undefined"
+      ? pass("🔴 已删除 pickReply（不再按关键词回写死的答案）")
+      : fail("pickReply 还在 —— 应已删除");
+    probe("typeof KB") === "undefined"
+      ? pass("🔴 已删除预置问答库 KB（不再拿内置文字冒充答疑）")
+      : fail("KB 还在 —— 应已删除");
+    /* ⚠️ 只认界面上出现过的原话 —— 注释里讲「删掉了什么」是应该的，不该被这条挡住 */
+    !/回答来自内置示例|内置示例库|先试试内置示例/.test(stripComments(html))
+      ? pass("🔴 界面不再写「回答来自内置示例」（那句是假答疑的自白）")
+      : fail("界面还在写「回答来自内置示例」");
 
-    const kb = probe("KB");
-    Array.isArray(kb) && kb.length >= 4
-      ? pass(`预置问答库 ${kb.length} 组，内容充足`) : fail("问答库不足 4 组");
+    /* 接模型：判断 + 真调用 + 上下文 + 可中止 + 多轮 */
+    /llmReady/.test(html) && /llmChat\(/.test(html)
+      ? pass("🔴 答疑接模型：llmReady 判断 + llmChat 真调用")
+      : fail("答疑没接模型");
+    /llmStatusText/.test(html)
+      ? pass("未接模型时给出可操作的下一步（llmStatusText 说明缺什么）")
+      : fail("没接模型时没有可操作的说明");
+    /还没接模型/.test(html)
+      ? pass("🔴 没接模型时如实说明（不生成任何假答案）")
+      : fail("没接模型时没有如实兜底");
+    /cwsForStudent\(/.test(html) && /cwSections\(/.test(html)
+      ? pass("🔴 把本课课件正文当参考资料（cwsForStudent + cwSections，与课件页同一份切段）")
+      : fail("答疑没有课程上下文");
+    /retrieved\s*:/.test(html)
+      ? pass("参考资料经 llmChat 的 retrieved 预算装配（超长会被截断并报告）")
+      : fail("参考资料没有走上下文预算");
+    /history\s*:/.test(html)
+      ? pass("多轮对话历史交给模型（追问能接上上一句）")
+      : fail("没有多轮历史");
+    /AbortController/.test(html) && /signal/.test(html)
+      ? pass("🔴 请求可中止（发送中按钮变「停止」，不会永久卡住）")
+      : fail("没有中止机制");
+    /这次没答上来/.test(html)
+      ? pass("🔴 调用失败如实报错（不退回假内容）")
+      : fail("失败时没有如实反馈");
+
+    /* 行为日志：提问 / 懂了 / 追问都要记，且只走 rec() 一个入口 */
+    /function rec\(/.test(html) && /rec\("ask"/.test(html)
+      ? pass("提问经 rec() 落进行为日志（学情与画像的唯一数据源）")
+      : fail("提问没有记进行为日志");
+    /rec\("got"/.test(html)
+      ? pass("「懂了」记 got")
+      : fail("「懂了」没有记录");
   }
 
   if (name === "reader.html") {
@@ -802,9 +826,9 @@ function verifyPageSpecific(name, html, inline, probe, sandbox) {
     /id="emptyBox"/.test(html) && /id="dataBox"/.test(html)
       ? pass("有「还没有记录」空状态与数据区两个分支（不编一个空图表出来）")
       : fail("缺少空状态分支");
-    /没有可靠的测量口径|不记录停留时长/.test(body)
-      ? pass("如实说明「停留时长本版没有口径，所以相关指标不出现」")
-      : fail("没有交代算不出来的指标怎么处理");
+    (html.match(/class="stat-card"/g) || []).length === 4
+      ? pass("统计卡片只有 4 张（没给「停留时长」这类没口径的指标凑数）")
+      : fail("统计卡片数量不对，可能又塞了没口径的指标");
   }
 
   if (name === "schedule.html") {

@@ -24,11 +24,13 @@
   页面结构就三块：
     ① 生成区   需求输入 + 示例 chips + 「让 AI 造一个」+ 进度/如实拒绝
     ② 列表     老师：我造的工作台（打开/下发/改名/删除）
-               学生：老师发来的 + 我自己造的（只打开）
+               学生：老师发来的 + 我自己造的（打开/删除；改名只给自己造的）
     ③ 弹窗     打开（同源沙箱 iframe，数据存得住）/ 看代码 / 下发给学生
 
   🔴 数据来源：`nav.js`（`st_sim` 键 —— 名字是历史遗留，现在只存工作台）。
      生成走 `generateSimHtml(goal,{kind:"workbench"})`，页面不发请求、不写提示词。
+  🔴 生成物自己的数据按账号隔离：`simFrameEl(persist)` 会插一段垫片，键前缀 `wstool@<账号>::`。
+     别把它去掉 —— 去掉了师生在同一浏览器里就共用一份数据。
   ============================================================
 -->
 <style>
@@ -345,6 +347,65 @@
   }
 
   /**
+   * 生成物的数据按账号分开存。
+   * 🔴 为什么：同源沙箱里的 `localStorage` 是整个站点的 —— 老师造的工作台被学生打开时，
+   *    读写的是**同一份**数据（老师勾了「已交」，学生在同一浏览器里看到的是老师勾的）。
+   *    这里往里塞一层垫片：生成物自己写的键一律加 `wstool@<账号>::` 前缀。
+   * 🔴 插入位置只能是 `<head>` 之后 —— 放到 `<!DOCTYPE` 前面会把文档打成怪异模式。
+   * ⚠️ 生成物代码可能用 `localStorage.getItem()`，也可能用 `localStorage.foo`，两条路都要盖住。
+   */
+  function wbStoreShim(who) {
+    var prefix = "wstool@" + String(who || "guest").toLowerCase() + "::";
+    return [
+      "(function(){try{var P=" + JSON.stringify(prefix) + ";var R=window.localStorage;",
+      "var A={getItem:function(k){return R.getItem(P+String(k));},",
+      "setItem:function(k,v){R.setItem(P+String(k),String(v));},",
+      "removeItem:function(k){R.removeItem(P+String(k));},",
+      "clear:function(){var d=[],i,k;for(i=0;i<R.length;i++){k=R.key(i);if(k&&k.indexOf(P)===0)d.push(k);}",
+      "for(i=0;i<d.length;i++)R.removeItem(d[i]);},",
+      "key:function(n){var c=0,i,k;for(i=0;i<R.length;i++){k=R.key(i);",
+      "if(k&&k.indexOf(P)===0){if(c===n)return k.slice(P.length);c++;}}return null;}};",
+      "Object.defineProperty(A,'length',{configurable:true,get:function(){",
+      "var c=0,i,k;for(i=0;i<R.length;i++){k=R.key(i);if(k&&k.indexOf(P)===0)c++;}return c;}});",
+      // 方括号写法（localStorage.foo）也走前缀；不支持 Proxy 就退化成只有 getItem 那套
+      "if(typeof Proxy==='function'){A=new Proxy(A,{get:function(t,k){",
+      "if(k in t)return t[k];if(typeof k!=='string')return undefined;",
+      "var v=R.getItem(P+k);return v==null?undefined:v;},",
+      "set:function(t,k,v){if(k in t){t[k]=v;return true;}R.setItem(P+String(k),String(v));return true;},",
+      "deleteProperty:function(t,k){if(k in t)return delete t[k];R.removeItem(P+String(k));return true;},",
+      "has:function(t,k){return (k in t)||R.getItem(P+String(k))!=null;}});}",
+      "try{Object.defineProperty(window,'localStorage',{configurable:true,get:function(){return A;}});return;}catch(e){}",
+      // 兜底：改不了 window 属性就改这一层原型（同源文档各有一份，不会影响父页面）
+      "var S=window.Storage&&window.Storage.prototype;if(!S)return;",
+      "var g=S.getItem,s=S.setItem,r=S.removeItem,c=S.clear;",
+      "S.getItem=function(k){return g.call(this,P+String(k));};",
+      "S.setItem=function(k,v){return s.call(this,P+String(k),String(v));};",
+      "S.removeItem=function(k){return r.call(this,P+String(k));};",
+      "S.clear=function(){var d=[],i,k;for(i=0;i<this.length;i++){k=this.key(i);if(k&&k.indexOf(P)===0)d.push(k);}",
+      "for(i=0;i<d.length;i++)r.call(this,d[i]);};",
+      "}catch(e){}})();",
+    ].join("");
+  }
+
+  /** 把垫片插到 `<head>` 之后；没有 head 就退到 `<body>` 后、`<html>` 后，最后才贴开头 */
+  function injectAfterHead(html, snippet) {
+    var src = String(html || "");
+    var m = src.match(/<head[^>]*>/i);
+    if (m) return src.slice(0, m.index + m[0].length) + snippet + src.slice(m.index + m[0].length);
+    var b = src.match(/<body[^>]*>/i);
+    if (b) return src.slice(0, b.index + b[0].length) + snippet + src.slice(b.index + b[0].length);
+    var h = src.match(/<html[^>]*>/i);
+    if (h) return src.slice(0, h.index + h[0].length) + snippet + src.slice(h.index + h[0].length);
+    return snippet + src;
+  }
+
+  /** 给生成物套上「按账号存」的垫片（只有 persist 的那批才需要） */
+  function withWbStore(html, who) {
+    // ⚠️ 闭合标签要转义，否则内联脚本会被 HTML 解析器提前截断
+    return injectAfterHead(html, "<script>" + wbStoreShim(who) + "<\/script>");
+  }
+
+  /**
    * 🔴 沙箱 iframe 的公共构造 —— 多处共用，别各写一份（隔离属性容易漏）。
    * `opts.persist` 决定给不给同源：
    *   - 教学模拟（默认）：`sandbox="allow-scripts"`，**不给 allow-same-origin**
@@ -358,7 +419,9 @@
     f.className = "sm-frame";
     f.setAttribute("sandbox", o.persist ? "allow-scripts allow-same-origin" : "allow-scripts");
     f.setAttribute("referrerpolicy", "no-referrer");
-    f.setAttribute("srcdoc", String(s.html || ""));
+    f.setAttribute("srcdoc", String(o.persist
+      ? withWbStore(s.html, (typeof currentUserKey === "function") ? currentUserKey() : "")
+      : (s.html || "")));
     f.setAttribute("title", s.title || "生成的页面");
     return f;
   }
@@ -644,14 +707,13 @@
     acts.className = "sm-acts";
     acts.appendChild(simBtn("打开", "app-open", "btn-primary"));
     if (IS_T) acts.appendChild(simBtn("下发给学生", "app-send"));
-    /* 自己造的就能改名 / 删除 —— 学生自己造的那批也一样。
-       ⚠️ 老师发来的（shared）不给：「不是他的东西」这条不能破。 */
-    if (!shared) {
-      acts.appendChild(simBtn("改名", "app-rename"));
-      var del = simBtn("删除", "app-del");
-      del.className = "btn btn-sm dk-danger";
-      acts.appendChild(del);
-    }
+    /* 改名只给「自己的」——老师发来的改了名也没意义，那份标题是老师的。
+       删除人人都该有：自己造的删掉就是删掉；老师发来的只从**自己列表**里移除，
+       不碰老师那份（按钮文案在弹窗里说清楚，不让人以为把老师的东西删了）。 */
+    if (!shared) acts.appendChild(simBtn("改名", "app-rename"));
+    var del = simBtn("删除", "app-del");
+    del.className = "btn btn-sm dk-danger";
+    acts.appendChild(del);
     card.appendChild(acts);
     return card;
   }
@@ -668,7 +730,7 @@
         '<div class="modal-head"><b>' + esc(s.title) + '</b></div>' +
         '<div class="modal-body sm-modal">' +
           '<div class="sm-frame-slot"></div>' +
-          '<p class="dk-hint">这是 AI 按你的描述写的页面；数据会自己保存，刷新也不丢。</p>' +
+          '<p class="dk-hint">这是 AI 按你的描述写的页面；数据会自己保存，只有你自己看得到。</p>' +
         '</div>' +
         '<div class="modal-foot">' +
           '<button class="btn" data-app-act="reload" type="button">重载</button>' +
@@ -795,10 +857,28 @@
       return;
     }
     if (act === "app-del") {
-      confirmBox("删除这个工作台？", "「" + s.title + "」删除后无法恢复。", "删除", true).then(function (ok) {
+      /* 「自己的」和「别人发来的」删法不同：
+         · 自己的 → 真删（桶里也清掉）
+         · 别人发来的 → 只从**我的列表**里拿掉，对方那份一个字不动；对方重发会再出现 */
+      var own = IS_T || String(s.createdBy || "").toLowerCase() === String(currentUserKey()).toLowerCase();
+      if (own) {
+        confirmBox("删除这个工作台？", "「" + s.title + "」删除后无法恢复。", "删除", true).then(function (ok) {
+          if (!ok) return;
+          var r = deleteSim(id);
+          if (!r.ok) { toast(r.error); return; }
+          toast("已删除");
+          renderAppList();
+        });
+        return;
+      }
+      var from = (typeof accountDisplayName === "function") ? accountDisplayName(s.createdBy) : "老师";
+      confirmBox("从我的列表里删除？",
+        "「" + s.title + "」是 " + from + " 发来的。删除只是从你的列表里拿掉，" +
+        "对方那份不受影响；对方重新发一次，它会再出现。",
+        "删除", true).then(function (ok) {
         if (!ok) return;
-        deleteSim(id);
-        toast("已删除");
+        hideSimForMe(id, mySentAt(s, currentUserKey()));
+        toast("已从你的列表移除");
         renderAppList();
       });
       return;

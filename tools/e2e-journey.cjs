@@ -635,15 +635,25 @@ async function main() {
     p.close();
   }
 
-  step("S5", "AI 答疑：没接模型也应给得出示例回答（降级可用）");
+  step("S5", "AI 答疑：没接模型时如实说明（不再拿预置句子充当回答）");
   {
+    /* 🔴 这一步原来是「没接模型也应给得出示例回答（降级可用）」—— 那条断言本身就是问题：
+       它保证的是「哪怕没接模型，也得弹一段看着像回答的文字」。学生分不清那是模型答的还是背的。
+       现在反过来验：**没接模型就别装**，如实说、并给出下一步。 */
+    delete B.ls["st_provider"];
+    delete B.ls["st_api_key"];
+    delete B.ls["st_custom_endpoint"];
+    delete B.ls["st_custom_model"];
+
     const p = await B.open("chat.html");
     chk(p.has("#input") && p.has("#sendBtn"), "答疑页有输入框与发送", "答疑页缺交互控件");
     p.fill("#input", "为什么快排最坏是 O(n²)？");
     p.click("#sendBtn");
     let waited = 0;
-    while (p.d.querySelectorAll("#chatLog .msg").length < 2 && waited < 5000) { await sleep(80); waited += 80; }
-    chk(p.d.querySelectorAll("#chatLog .msg").length >= 2, "问了之后有回复（一问一答）", "问了没回复");
+    while (!/还没接模型/.test(p.text()) && waited < 5000) { await sleep(80); waited += 80; }
+    chk(/还没接模型/.test(p.text()), "没接模型时如实说明（并指路去设置页）", "没接模型时没有任何说明");
+    chk(!/划分不平衡/.test(p.text()), "不再吐那段写死的「划分不平衡」", "还在吐写死的答案");
+    chk(!p.$("#chatLog .bubble-foot"), "没接模型时不挂操作栏（没有假回答可供「懂了」）", "假回答上还挂着操作栏");
     p.close();
   }
 
